@@ -1,0 +1,38 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: backup-manifest.schema.yaml
+title: Full Repository Preservation Manifest
+type: object
+additionalProperties: false
+required: [schema_version, request_id, capability_id, scope, started_at, status, artifacts, reconciliation]
+properties:
+  schema_version: {const: "1.0"}
+  request_id: {type: string, minLength: 1}
+  capability_id: {type: string, minLength: 1}
+  scope: {type: object, minProperties: 1}
+  started_at: {type: string, format: date-time}
+  completed_at: {type: [string, "null"], format: date-time}
+  status:
+    enum: [IN_PROGRESS, COMPLETE, COMPLETE_WITH_EXCEPTIONS, BLOCKED, FAILED]
+  artifacts:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [path, sha256, object_class]
+      properties:
+        path: {type: string, minLength: 1}
+        sha256: {type: string, pattern: "^[a-f0-9]{64}$"}
+        object_class: {type: string, minLength: 1}
+        bytes: {type: integer, minimum: 0}
+  reconciliation:
+    type: object
+    additionalProperties: false
+    required: [preserved, equivalent, partial, non_exportable, failed, not_verified]
+    properties:
+      preserved: {type: integer, minimum: 0}
+      equivalent: {type: integer, minimum: 0}
+      partial: {type: integer, minimum: 0}
+      non_exportable: {type: integer, minimum: 0}
+      failed: {type: integer, minimum: 0}
+      not_verified: {type: integer, minimum: 0}
+  limitations: {type: array, items: {type: string}}
