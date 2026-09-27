@@ -1,0 +1,28 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: command-request.schema.yaml
+title: Governed Backup Command Request
+type: object
+additionalProperties: false
+required: [request_id, capability_id, execution_parameters, authorization, invariants]
+properties:
+  request_id: {type: string, minLength: 1}
+  capability_id: {type: string, minLength: 1}
+  execution_parameters: {type: object, minProperties: 1}
+  authorization:
+    type: object
+    additionalProperties: false
+    required: [hitl_required, decision, authorized_scope, reusable]
+    properties:
+      hitl_required: {type: boolean}
+      decision: {enum: [GO, NO-GO]}
+      authorized_scope: {const: EXACT_COMMAND_REQUEST}
+      reusable: {const: false}
+  invariants:
+    type: object
+    additionalProperties: false
+    required: [source_repository_mode, infer_missing_parameters, inherit_previous_execution_parameters, expand_authorization_scope]
+    properties:
+      source_repository_mode: {const: READ_ONLY}
+      infer_missing_parameters: {const: false}
+      inherit_previous_execution_parameters: {const: false}
+      expand_authorization_scope: {const: false}
