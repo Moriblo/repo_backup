@@ -1,0 +1,34 @@
+schema_version: "1.0"
+execution_repository: Moriblo/repo_backup
+defaults:
+  source_repository_mode: READ_ONLY
+  infer_missing_parameters: false
+  inherit_previous_execution_parameters: false
+  authorization_reusable: false
+capabilities:
+  - id: backup_repository
+    name: Backup Repository
+    class: PRESERVATION_EXECUTION
+    hitl_required: true
+    source_repository_mode: READ_ONLY
+    executor: github_actions:backup-repository.yml
+    parameters:
+      source_repository: {type: string, required: true, source: HITL}
+      destination: {type: string, required: true, source: HITL_OR_EXPLICIT_CONFIRMATION}
+      additional_parameters: {type: object, required: false, source: HITL_WHEN_APPLICABLE}
+    includes: [git, issues, pull_requests, actions, projects, environments, variables, secret_metadata, deployments, rules_and_branch_protection, collaborators, webhooks, labels, milestones, checks, actions_caches, codespaces_repository_state_delta, other_discovered_state]
+  - id: backup_projects
+    name: Backup Projects
+    class: PRESERVATION_EXECUTION
+    hitl_required: true
+    source_repository_mode: READ_ONLY
+    executor: github_actions:backup-projects.yml
+    parameters:
+      scope: {type: enum, values: [SOURCE_REPOSITORY, PROJECT, OWNER_PROJECT_SET], required: true, source: HITL}
+      scope_identifiers: {type: object, required: true, source: HITL}
+      destination: {type: string, required: true, source: HITL_OR_EXPLICIT_CONFIRMATION}
+      additional_parameters: {type: object, required: false, source: HITL_WHEN_APPLICABLE}
+  - {id: list_capabilities, name: List Capabilities, class: INFORMATIONAL, hitl_required: false}
+  - {id: show_status, name: Show Status, class: INFORMATIONAL, hitl_required: false}
+  - {id: validate_evidence, name: Validate Evidence, class: VALIDATION, hitl_required: false}
+  - {id: help, name: Help, class: INFORMATIONAL, hitl_required: false}
