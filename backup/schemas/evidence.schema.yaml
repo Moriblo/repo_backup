@@ -1,0 +1,36 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: evidence.schema.yaml
+title: Repository Preservation Evidence
+type: object
+additionalProperties: false
+required: [schema_version, request_id, capability_id, source_scope, captured_at, objects, execution]
+properties:
+  schema_version: {const: "1.0"}
+  request_id: {type: string, minLength: 1}
+  capability_id: {type: string, minLength: 1}
+  source_scope: {type: object, minProperties: 1}
+  captured_at: {type: string, format: date-time}
+  objects:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [object_class, object_id, disposition, evidence]
+      properties:
+        object_class: {type: string, minLength: 1}
+        object_id: {type: string, minLength: 1}
+        disposition:
+          enum: [PRESERVED, PRESERVED-AS-EQUIVALENT-REPRESENTATION, PARTIALLY-PRESERVED, NON-EXPORTABLE, FAILED, NOT-VERIFIED]
+        evidence: {type: array, items: {type: string}}
+        limitation: {type: [string, "null"]}
+  execution:
+    type: object
+    additionalProperties: false
+    required: [source_repository_mode, destination_validated, authorization_request_id]
+    properties:
+      source_repository_mode: {const: READ_ONLY}
+      destination_validated: {const: true}
+      authorization_request_id: {type: string, minLength: 1}
+      alerts:
+        type: array
+        items: {enum: [RETENTION_ALERT, VOLATILITY_ALERT, ACCESSIBILITY_ALERT]}
