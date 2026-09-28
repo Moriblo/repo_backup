@@ -11,6 +11,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     environment: onedrive-backup
+
     steps:
       - name: Azure login via GitHub OIDC
         uses: azure/login@v2
@@ -28,14 +29,49 @@ jobs:
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve OneDrive drive ID
+        id: drive
+        shell: bash
+        env:
+          GRAPH_TOKEN: ${{ steps.graph.outputs.token }}
+          ONEDRIVE_USER_ID: 4c330fbe76b815bb
+        run: |
+          set -euo pipefail
+
+          response="$(
+            curl --silent --show-error --fail-with-body \
+              -H "Authorization: Bearer $GRAPH_TOKEN" \
+              -H "Accept: application/json" \
+              "https://graph.microsoft.com/v1.0/users/${ONEDRIVE_USER_ID}/drive"
+          )"
+
+          drive_id="$(
+            python -c 'import json,sys; print(json.load(sys.stdin)["id"])' \
+              <<< "$response"
+          )"
+
+          echo "drive_id=$drive_id" >> "$GITHUB_OUTPUT"
+
       - name: Read OneDrive AppFolder
         shell: bash
         env:
           GRAPH_TOKEN: ${{ steps.graph.outputs.token }}
+          ONEDRIVE_DRIVE_ID: ${{ steps.drive.outputs.drive_id }}
         run: |
           set -euo pipefail
-          response="$(curl --silent --show-error --fail-with-body \
-            -H "Authorization: Bearer $GRAPH_TOKEN" \
-            -H "Accept: application/json" \
-            "https://graph.microsoft.com/v1.0/drives/4C330FBE76B815BB/special/approot")"
-          python -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({k:d.get(k) for k in ("id","name","webUrl")}, indent=2))' <<< "$response"
+
+          response="$(
+            curl --silent --show-error --fail-with-body \
+              -H "Authorization: Bearer $GRAPH_TOKEN" \
+              -H "Accept: application/json" \
+              "https://graph.microsoft.com/v1.0/drives/${ONEDRIVE_DRIVE_ID}/special/approot"
+          )"
+
+          python -c '
+          import json, sys
+          d = json.load(sys.stdin)
+          print(json.dumps({
+              k: d.get(k)
+              for k in ("id", "name", "webUrl")
+          }, indent=2))
+          ' <<< "$response"
