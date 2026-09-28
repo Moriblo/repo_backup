@@ -1,15 +1,61 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: evidence.schema.yaml
 title: Repository Preservation Evidence
+
 type: object
 additionalProperties: false
-required: [schema_version, request_id, capability_id, source_scope, captured_at, objects, execution]
+required: [schema_version, request_id, capability_id, source_scope, captured_at, capability_preflight, objects, execution]
+
 properties:
-  schema_version: {const: "1.0"}
+  schema_version: {const: "2.0"}
   request_id: {type: string, minLength: 1}
   capability_id: {type: string, minLength: 1}
   source_scope: {type: object, minProperties: 1}
   captured_at: {type: string, format: date-time}
+
+  capability_preflight:
+    type: object
+    additionalProperties: false
+    required: [status, gaps, factual_inventory_pending, hitl_decision, accepted_restrictions]
+    properties:
+      status: {enum: [PASS, GAPS_IDENTIFIED]}
+      gaps:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [object_class, gap_classification, limitation, preservation_impact, resulting_restriction]
+          properties:
+            object_class: {type: string, minLength: 1}
+            gap_classification:
+              enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
+            limitation: {type: string, minLength: 1}
+            preservation_impact: {type: string, minLength: 1}
+            resulting_restriction: {type: string, minLength: 1}
+      factual_inventory_pending:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [object_class, pending_fact]
+          properties:
+            object_class: {type: string, minLength: 1}
+            pending_fact: {type: string, minLength: 1}
+      hitl_decision:
+        enum: [NOT_REQUIRED, CONTINUE_WITH_RESTRICTIONS]
+      accepted_restrictions:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [restriction_id, object_class, restriction, source_gap_classification]
+          properties:
+            restriction_id: {type: string, minLength: 1}
+            object_class: {type: string, minLength: 1}
+            restriction: {type: string, minLength: 1}
+            source_gap_classification:
+              enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
+
   objects:
     type: array
     items:
@@ -21,16 +67,50 @@ properties:
         object_id: {type: string, minLength: 1}
         disposition:
           enum: [PRESERVED, PRESERVED-AS-EQUIVALENT-REPRESENTATION, PARTIALLY-PRESERVED, NON-EXPORTABLE, FAILED, NOT-VERIFIED]
-        evidence: {type: array, items: {type: string}}
+        evidence:
+          type: array
+          items: {type: string, minLength: 1}
         limitation: {type: [string, "null"]}
+        restriction_ids:
+          type: array
+          uniqueItems: true
+          items: {type: string, minLength: 1}
+        temporal_state:
+          enum: [AVAILABLE, EXPIRED, DELETED_UNAVAILABLE, NOT_VERIFIED]
+        alerts:
+          type: array
+          uniqueItems: true
+          items: {enum: [RETENTION_ALERT, VOLATILITY_ALERT, ACCESSIBILITY_ALERT]}
+        protected_information:
+          type: object
+          additionalProperties: false
+          properties:
+            plaintext_exposed: {const: false}
+            recoverability:
+              enum: [RECONSTRUCTIBLE, REISSUABLE, RECOVERABLE_FROM_AUTHORIZED_SOURCE, RUNTIME_ONLY_CANDIDATE, NOT_YET_DETERMINED]
+            value_preservation_status: {type: string, minLength: 1}
+            provenance: {type: array, items: {type: string, minLength: 1}}
+            reconstruction_reissuance_references:
+              type: array
+              items: {type: string, minLength: 1}
+
   execution:
     type: object
     additionalProperties: false
-    required: [source_repository_mode, destination_validated, authorization_request_id]
+    required: [source_repository_mode, destination_validated, authorization_request_id, restrictions_reconciled]
     properties:
       source_repository_mode: {const: READ_ONLY}
       destination_validated: {const: true}
       authorization_request_id: {type: string, minLength: 1}
+      restrictions_reconciled: {type: boolean}
       alerts:
         type: array
+        uniqueItems: true
         items: {enum: [RETENTION_ALERT, VOLATILITY_ALERT, ACCESSIBILITY_ALERT]}
+      temporal_preservation:
+        type: object
+        additionalProperties: false
+        properties:
+          mrbi: {type: [string, "null"]}
+          crr: {type: [string, "null"]}
+          notes: {type: array, items: {type: string, minLength: 1}}
