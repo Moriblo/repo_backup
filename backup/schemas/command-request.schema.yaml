@@ -17,6 +17,30 @@ properties:
       decision: {enum: [GO, NO-GO]}
       authorized_scope: {const: EXACT_COMMAND_REQUEST}
       reusable: {const: false}
+  capability_preflight:
+    type: object
+    additionalProperties: false
+    required: [required, status, gaps, hitl_decision, accepted_restrictions]
+    properties:
+      required: {type: boolean}
+      status: {enum: [NOT_RUN, PASS, GAPS_IDENTIFIED]}
+      gaps:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [object_class, limitation, cause, preservation_impact, resulting_restriction]
+          properties:
+            object_class: {type: string, minLength: 1}
+            limitation: {type: string, minLength: 1}
+            cause: {type: string, minLength: 1}
+            preservation_impact: {type: string, minLength: 1}
+            resulting_restriction: {type: string, minLength: 1}
+      hitl_decision:
+        enum: [NOT_REQUIRED, PENDING, STOP, CONTINUE_WITH_RESTRICTIONS]
+      accepted_restrictions:
+        type: array
+        items: {type: string, minLength: 1}
   invariants:
     type: object
     additionalProperties: false
