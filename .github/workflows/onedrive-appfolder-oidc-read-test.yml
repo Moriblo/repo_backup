@@ -1,4 +1,4 @@
-name: OneDrive AppFolder OIDC Read Test
+name: OneDrive AppFolder OIDC Diagnostic Test
 
 on:
   workflow_dispatch:
@@ -25,18 +25,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          token="$(az account get-access-token --resource-type ms-graph --query accessToken -o tsv)"
+
+          token="$(
+            az account get-access-token \
+              --resource-type ms-graph \
+              --query accessToken \
+              -o tsv
+          )"
+
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
-      - name: Set OneDrive drive ID
+      - name: Set verified OneDrive drive ID
         id: drive
         shell: bash
         run: |
           set -euo pipefail
           echo "drive_id=4C330FBE76B815BB" >> "$GITHUB_OUTPUT"
 
-      - name: Read OneDrive AppFolder
+      - name: Diagnose OneDrive AppFolder request
         shell: bash
         env:
           GRAPH_TOKEN: ${{ steps.graph.outputs.token }}
@@ -44,18 +51,52 @@ jobs:
         run: |
           set -euo pipefail
 
-          response="$(
-            curl --silent --show-error --fail-with-body \
+          response_file="$(mktemp)"
+
+          http_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --output "$response_file" \
+              --write-out "%{http_code}" \
               -H "Authorization: Bearer $GRAPH_TOKEN" \
               -H "Accept: application/json" \
               "https://graph.microsoft.com/v1.0/drives/${ONEDRIVE_DRIVE_ID}/special/approot"
           )"
 
-          python -c '
-          import json, sys
-          d = json.load(sys.stdin)
-          print(json.dumps({
-              k: d.get(k)
-              for k in ("id", "name", "webUrl")
-          }, indent=2))
-          ' <<< "$response"
+          echo "Microsoft Graph HTTP status: $http_status"
+
+          python - "$response_file" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              raw = f.read()
+
+          try:
+              data = json.loads(raw)
+          except json.JSONDecodeError:
+              print("Microsoft Graph returned a non-JSON response.")
+              print(raw[:2000])
+              sys.exit(1)
+
+          if "error" in data:
+              error = data["error"]
+
+              print("Graph error code:", error.get("code"))
+              print("Graph error message:", error.get("message"))
+
+              inner = error.get("innerError") or {}
+              if inner:
+                  print("Graph request-id:", inner.get("request-id"))
+                  print("Graph date:", inner.get("date"))
+
+              sys.exit(1)
+
+          print("AppFolder request succeeded.")
+          print("id:", data.get("id"))
+          print("name:", data.get("name"))
+          print("webUrl:", data.get("webUrl"))
+          PY
