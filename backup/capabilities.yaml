@@ -305,6 +305,7 @@ capabilities:
     hitl_required: true
     source_repository_mode: READ_ONLY
     deterministic_executor:
+      artifact_id: backup_repository_executor
       reference: github_actions:backup-repository.yml
       current_materialization: NOT_MATERIALIZED
       historical_existence: NOT_DETERMINED
@@ -332,6 +333,7 @@ capabilities:
     hitl_required: true
     source_repository_mode: READ_ONLY
     deterministic_executor:
+      artifact_id: backup_projects_executor
       reference: github_actions:backup-projects.yml
       current_materialization: NOT_MATERIALIZED
       historical_existence: NOT_DETERMINED
@@ -361,3 +363,152 @@ capabilities:
   - {id: show_status, name: Show Status, class: INFORMATIONAL, hitl_required: false}
   - {id: validate_evidence, name: Validate Evidence, class: VALIDATION, hitl_required: false}
   - {id: help, name: Help, class: INFORMATIONAL, hitl_required: false}
+
+
+artifact_traceability:
+  registry_authority: THIS_FILE
+  registry_path: backup/capabilities.yaml
+  model: CANONICAL_N_TO_M
+  relationship_types: [EXECUTES, VALIDATES, SCHEMATIZES, CONFIGURES, SUPPORTS]
+  materialization_states: [MATERIALIZED, NOT_MATERIALIZED]
+  validation_states: [VALIDATED, NOT_VALIDATED, REVALIDATION_REQUIRED]
+  integrity:
+    materialized_version_identifier: GIT_BLOB_SHA
+    change_provenance_identifier: GIT_COMMIT_SHA
+    embedded_self_hash_required: false
+    rule: >
+      Resolve and compare the current Git blob SHA during traceability validation.
+      A registry entry MUST NOT require an artifact to embed its own blob SHA.
+  referential_integrity:
+    materialized_artifact_path_must_exist: true
+    not_materialized_artifact_path_may_be_absent: true
+    broken_reference_state: BROKEN_REFERENCE
+  orphan_detection:
+    required: true
+    rule: >
+      Any implementation artifact within a managed artifact location that is
+      related to the capability system MUST have a registered artifact_id.
+  impact_analysis:
+    changed_artifact_requires_capability_lookup: true
+    affected_capabilities_derived_from_relationships: true
+    affected_capabilities_require_revalidation: true
+
+implementation_artifacts:
+  - artifact_id: capability_registry
+    artifact_type: CAPABILITY_REGISTRY
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/capabilities.yaml
+    purpose: Canonical capability, routing, policy, and implementation-artifact registry.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: CONFIGURES}
+      - {capability_id: backup_projects, relationship: CONFIGURES}
+      - {capability_id: list_capabilities, relationship: CONFIGURES}
+      - {capability_id: show_status, relationship: CONFIGURES}
+      - {capability_id: validate_evidence, relationship: CONFIGURES}
+      - {capability_id: help, relationship: CONFIGURES}
+
+  - artifact_id: backup_repository_protocol
+    artifact_type: PROTOCOL
+    location:
+      repository: Moriblo/repo_backup
+      path: BACKUP_REPOSITORY.md
+    purpose: Portable governed execution protocol for the capability system.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: REVALIDATION_REQUIRED
+    relationships:
+      - {capability_id: backup_repository, relationship: SUPPORTS}
+      - {capability_id: backup_projects, relationship: SUPPORTS}
+      - {capability_id: list_capabilities, relationship: SUPPORTS}
+      - {capability_id: show_status, relationship: SUPPORTS}
+      - {capability_id: validate_evidence, relationship: SUPPORTS}
+      - {capability_id: help, relationship: SUPPORTS}
+
+  - artifact_id: command_request_schema
+    artifact_type: SCHEMA
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/schemas/command-request.schema.yaml
+    purpose: Schema control for governed capability command requests.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: CONFIGURES}
+      - {capability_id: backup_projects, relationship: CONFIGURES}
+
+  - artifact_id: evidence_schema
+    artifact_type: SCHEMA
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/schemas/evidence.schema.yaml
+    purpose: Schema control for preservation evidence and restriction traceability.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: SCHEMATIZES}
+      - {capability_id: backup_projects, relationship: SCHEMATIZES}
+      - {capability_id: validate_evidence, relationship: SUPPORTS}
+
+  - artifact_id: backup_manifest_schema
+    artifact_type: SCHEMA
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/schemas/backup-manifest.schema.yaml
+    purpose: Schema control for preservation manifests and reconciliation outcomes.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: SCHEMATIZES}
+      - {capability_id: backup_projects, relationship: SCHEMATIZES}
+
+  - artifact_id: backup_repository_executor
+    artifact_type: GITHUB_ACTIONS_WORKFLOW
+    location:
+      repository: Moriblo/repo_backup
+      path: .github/workflows/backup-repository.yml
+    purpose: Deterministic executor referenced by backup_repository.
+    materialization:
+      status: NOT_MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: EXECUTES}
+
+  - artifact_id: backup_projects_executor
+    artifact_type: GITHUB_ACTIONS_WORKFLOW
+    location:
+      repository: Moriblo/repo_backup
+      path: .github/workflows/backup-projects.yml
+    purpose: Deterministic executor referenced by backup_projects.
+    materialization:
+      status: NOT_MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_projects, relationship: EXECUTES}
