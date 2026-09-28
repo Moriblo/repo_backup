@@ -1,0 +1,161 @@
+name: Backup Repository - Git Capability Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        description: "GitHub source repository in owner/name form (required; READ-ONLY)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate-git-capability:
+    name: Validate full Git preservation route
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+      MIRROR_DIR: source.git
+      EVIDENCE_DIR: evidence
+
+    steps:
+      - name: Validate explicit source parameter
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::source_repository must be explicitly supplied in owner/name form."
+            exit 2
+          fi
+          printf 'Validated explicit source: %s\n' "$SOURCE_REPOSITORY"
+
+      - name: Install Git LFS
+        shell: bash
+        run: |
+          set -euo pipefail
+          git --version
+          git lfs version
+
+      - name: Clone source with full mirror semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Source operation is intentionally fetch/clone-only. No push command or
+          # source mutation operation is present in this executor.
+          git clone --mirror "https://github.com/${SOURCE_REPOSITORY}.git" "$MIRROR_DIR"
+
+      - name: Validate refs and Git object database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          git -C "$MIRROR_DIR" for-each-ref             --format='%(refname)%09%(objectname)%09%(objecttype)'             | sort > "$EVIDENCE_DIR/refs.tsv"
+          git -C "$MIRROR_DIR" fsck --full --strict             > "$EVIDENCE_DIR/git-fsck.txt" 2>&1
+          git -C "$MIRROR_DIR" count-objects -vH             > "$EVIDENCE_DIR/git-count-objects.txt"
+
+      - name: Detect and validate Git LFS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          cd "$MIRROR_DIR"
+
+          git lfs ls-files --all --long > "../$EVIDENCE_DIR/lfs-files.txt" || {
+            echo "::error::Unable to enumerate Git LFS pointers across refs."
+            exit 3
+          }
+
+          if [[ -s "../$EVIDENCE_DIR/lfs-files.txt" ]]; then
+            echo "LFS_APPLICABLE=true" >> "$GITHUB_ENV"
+            git lfs fetch --all 2>&1 | tee "../$EVIDENCE_DIR/lfs-fetch.txt"
+
+            awk '{print $1}' "../$EVIDENCE_DIR/lfs-files.txt" | sort -u               > "../$EVIDENCE_DIR/lfs-oids.txt"
+
+            : > "../$EVIDENCE_DIR/lfs-verification.tsv"
+            while IFS= read -r oid; do
+              [[ "$oid" =~ ^[0-9a-fA-F]{64}$ ]] || {
+                printf '%s\tINVALID_OID\n' "$oid" >> "../$EVIDENCE_DIR/lfs-verification.tsv"
+                exit 4
+              }
+              object=".git/lfs/objects/${oid:0:2}/${oid:2:2}/$oid"
+              # Bare repositories may use either <mirror>/lfs or <mirror>/.git/lfs
+              # depending on Git LFS version/configuration.
+              [[ -f "$object" ]] || object="lfs/objects/${oid:0:2}/${oid:2:2}/$oid"
+              if [[ ! -f "$object" ]]; then
+                printf '%s\tMISSING\n' "$oid" >> "../$EVIDENCE_DIR/lfs-verification.tsv"
+                exit 5
+              fi
+              actual="$(sha256sum "$object" | awk '{print $1}')"
+              if [[ "$actual" != "$oid" ]]; then
+                printf '%s\tHASH_MISMATCH\t%s\n' "$oid" "$actual"                   >> "../$EVIDENCE_DIR/lfs-verification.tsv"
+                exit 6
+              fi
+              size="$(stat -c '%s' "$object")"
+              printf '%s\tVERIFIED\t%s\n' "$oid" "$size"                 >> "../$EVIDENCE_DIR/lfs-verification.tsv"
+            done < "../$EVIDENCE_DIR/lfs-oids.txt"
+          else
+            echo "LFS_APPLICABLE=false" >> "$GITHUB_ENV"
+            printf 'No Git LFS pointers discovered across reachable refs.\n'               > "../$EVIDENCE_DIR/lfs-fetch.txt"
+            : > "../$EVIDENCE_DIR/lfs-oids.txt"
+            : > "../$EVIDENCE_DIR/lfs-verification.tsv"
+          fi
+
+      - name: Detect submodules across reachable history
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          : > "$EVIDENCE_DIR/gitmodules-history.tsv"
+          : > "$EVIDENCE_DIR/gitlinks-history.tsv"
+
+          while IFS= read -r commit; do
+            if git -C "$MIRROR_DIR" cat-file -e "$commit:.gitmodules" 2>/dev/null; then
+              printf '%s\t.gitmodules\n' "$commit"                 >> "$EVIDENCE_DIR/gitmodules-history.tsv"
+            fi
+            git -C "$MIRROR_DIR" ls-tree -r "$commit"               | awk -v c="$commit" '$1=="160000" {print c "\t" $0}'               >> "$EVIDENCE_DIR/gitlinks-history.tsv"
+          done < <(git -C "$MIRROR_DIR" rev-list --all)
+
+          sort -u -o "$EVIDENCE_DIR/gitmodules-history.tsv"             "$EVIDENCE_DIR/gitmodules-history.tsv"
+          sort -u -o "$EVIDENCE_DIR/gitlinks-history.tsv"             "$EVIDENCE_DIR/gitlinks-history.tsv"
+
+      - name: Produce diagnostic evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          evidence = pathlib.Path(os.environ["EVIDENCE_DIR"])
+          mirror = pathlib.Path(os.environ["MIRROR_DIR"])
+          def lines(name):
+              p = evidence / name
+              return p.read_text(errors="replace").splitlines() if p.exists() else []
+          payload = {
+              "mode": "CAPABILITY_VALIDATION",
+              "source_repository": os.environ["SOURCE_REPOSITORY"],
+              "source_mode": "READ_ONLY",
+              "mirror_created": mirror.is_dir(),
+              "refs_count": len(lines("refs.tsv")),
+              "lfs_applicable": os.environ.get("LFS_APPLICABLE", "NOT_DETERMINED"),
+              "lfs_oid_count": len(lines("lfs-oids.txt")),
+              "lfs_verified_count": sum("\tVERIFIED\t" in x for x in lines("lfs-verification.tsv")),
+              "gitmodules_history_entries": len(lines("gitmodules-history.tsv")),
+              "gitlink_history_entries": len(lines("gitlinks-history.tsv")),
+          }
+          (evidence / "capability-validation.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+
+      - name: Publish diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-capability-validation
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 7
