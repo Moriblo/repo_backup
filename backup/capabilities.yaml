@@ -1,24 +1,323 @@
-schema_version: "1.0"
+schema_version: "2.0"
+
 execution_repository: Moriblo/repo_backup
+
 defaults:
   source_repository_mode: READ_ONLY
   infer_missing_parameters: false
   inherit_previous_execution_parameters: false
   authorization_reusable: false
+  connector_limitation_reduces_scope: false
+  inability_to_read_means_absent: false
+
+route_types:
+  - ENGINE_NATIVE
+  - CONNECTOR
+  - GIT
+  - REST_API
+  - GRAPHQL_API
+  - AUTHORIZED_API_IDENTITY
+  - SPECIALIZED_CAPABILITY
+  - DETERMINISTIC_EXECUTOR
+
+historical_route_mechanisms:
+  - WORKFLOW
+
+route_states:
+  - AVAILABLE
+  - PARTIAL
+  - UNAVAILABLE
+  - NOT_APPLICABLE
+  - NOT_VERIFIED
+
+gap_classifications:
+  blocking_or_restricting:
+    - ARCHITECTURAL_GAP
+    - EXECUTION_CAPABILITY_GAP
+    - ACCESS_PERMISSION_GAP
+  non_gap:
+    - FACTUAL_INVENTORY_PENDING
+
+routing_outcomes:
+  - DIRECT
+  - ROUTED
+  - PARTIAL
+  - LIMITATION
+
+routing_model:
+  direct_sufficient: DIRECT
+  alternate_route_sufficient: ROUTED
+  combined_routes_partial: PARTIAL
+  unresolved: LIMITATION
+  historical_workflow_rule: >
+    WORKFLOW is preserved as a historical/specialized route mechanism
+    and is not a synonym for the generalized ROUTED outcome.
+
+preservation_states:
+  - PRESERVED
+  - PRESERVED-AS-EQUIVALENT-REPRESENTATION
+  - PARTIALLY-PRESERVED
+  - NON-EXPORTABLE
+  - FAILED
+  - NOT-VERIFIED
+
+temporal_states:
+  - AVAILABLE
+  - EXPIRED
+  - DELETED_UNAVAILABLE
+  - NOT_VERIFIED
+
+alerts:
+  RETENTION_ALERT:
+    class: TEMPORAL
+    rule: >
+      Emit when accepted deterministic-retention conditions indicate
+      temporal-loss risk, including the governed MRBI/CRR control.
+  VOLATILITY_ALERT:
+    class: TEMPORAL
+    rule: >
+      Emit when a material NON-TIME-BOUND EVICTION RISK exists.
+  ACCESSIBILITY_ALERT:
+    class: ACCESSIBILITY
+    rule: >
+      Emit when a current access constraint may prevent Codespaces
+      repository-state delta verification or preservation.
+
+temporal_preservation:
+  priority: BEFORE_STABLE_OBJECTS_WHEN_BACKUP_AUTHORIZED
+  mrbi:
+    name: Maximum Recommended Backup Interval
+    rule: >
+      MIN of applicable deterministic retention windows across all
+      discovered temporal preservation classes.
+    shorter_window_reduces_mrbi: true
+    non_time_bound_eviction_is_numeric_mrbi: false
+  crr:
+    name: Current Repository Retention
+    rule: >
+      Read and preserve the effective repository/applicable retention
+      as evidence when applicable; never infer it from a default.
+  classes:
+    - workflow_runs
+    - workflow_attempts
+    - jobs
+    - steps
+    - workflow_logs
+    - actions_artifacts
+    - check_suites
+    - check_runs
+    - commit_statuses
+    - actions_caches
+    - webhook_deliveries
+    - other_discovered_temporal_state
+  failed_semantics: >
+    FAILED applies when preservation fails for material that was
+    available during the authorized capture window.
+
+protected_information:
+  plaintext_required_for_architectural_completeness: false
+  expose_plaintext_in_chat_logs_or_plaintext_evidence: false
+  operation_specific_hitl_for_unapproved_plaintext_recovery: true
+  preserve_when_evidenced:
+    - identity
+    - class
+    - scope
+    - owner
+    - repository
+    - environment
+    - visibility_access_policy
+    - consumers
+    - repository_references
+    - functional_destination
+    - external_origin
+    - external_object_identifier
+    - authoritative_source
+    - recoverability
+    - value_preservation_status
+    - provenance
+    - reconstruction_reissuance_references
+    - evidence
+  recoverability:
+    - RECONSTRUCTIBLE
+    - REISSUABLE
+    - RECOVERABLE_FROM_AUTHORIZED_SOURCE
+    - RUNTIME_ONLY_CANDIDATE
+    - NOT_YET_DETERMINED
+
+object_classes:
+  git:
+    architectural_status: ROUTE_DEFINED
+    required_read_capabilities:
+      - enumerate_default_branch_branches_tags_and_material_refs
+      - read_complete_git_object_graph
+      - detect_git_lfs
+      - detect_submodules
+    approved_route_types: [GIT, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+    preservation_requirements:
+      - full_git_mirror
+      - all_material_refs_including_pr_refs
+      - detect_and_preserve_lfs_when_used
+      - explicit_submodule_disposition
+      - navigable_repository_tree
+    verification_requirements:
+      - compare_source_and_preserved_refs
+      - compare_ref_target_shas
+      - git_object_integrity_verification
+      - verify_lfs_oids_sizes_and_hashes_when_applicable
+
+  issues:
+    architectural_status: ROUTE_DEFINED
+    required_read_capabilities: [issues, comments, reactions, relationships, events, assignees]
+    approved_route_types: [CONNECTOR, REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  pull_requests:
+    architectural_status: ROUTE_DEFINED
+    required_read_capabilities: [pull_requests, commits, files, reviews, review_comments, threads, material_pr_refs]
+    approved_route_types: [CONNECTOR, REST_API, GIT, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  actions:
+    architectural_status: ROUTE_DEFINED
+    temporal: true
+    required_read_capabilities: [workflow_definitions, workflow_runs, workflow_attempts, jobs, steps, logs, artifacts, commit_statuses]
+    approved_route_types: [CONNECTOR, REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  projects:
+    architectural_status: ARCHITECTURALLY_SOLVED
+    required_read_capabilities:
+      - project_identity_and_metadata
+      - repository_relationships
+      - fields_and_options
+      - items
+      - draft_issues
+      - issue_and_pull_request_references
+      - field_values
+      - archived_item_state
+      - views_when_exposed
+      - workflows_automations_when_exposed
+      - status_updates_when_exposed
+      - other_discovered_project_state
+    approved_route_types: [REST_API, GRAPHQL_API, AUTHORIZED_API_IDENTITY, SPECIALIZED_CAPABILITY, DETERMINISTIC_EXECUTOR]
+    combined_surfaces_may_be_required: true
+    preservation_representation:
+      machine_readable: true
+      schema_controlled: true
+      reconstructible_equivalent: true
+      downstream_reusable: true
+
+  environments:
+    architectural_status: ROUTE_DEFINED
+    required_read_capabilities: [environment_inventory, protection_rules, branch_policies, readable_configuration, environment_variable_metadata_and_readable_values, secret_metadata]
+    approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  variables:
+    architectural_status: ROUTE_DEFINED
+    output_protected: true
+    required_read_capabilities: [variable_inventory, names, readable_values, timestamps_when_exposed, scope]
+    approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  secret_metadata:
+    architectural_status: ROUTE_DEFINED
+    protected_information: true
+    required_read_capabilities: [enumerate_applicable_secret_metadata_classes, relationships, provenance_when_evidenced, recoverability_disposition]
+    approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, SPECIALIZED_CAPABILITY, DETERMINISTIC_EXECUTOR]
+    plaintext_required: false
+
+  deployments:
+    architectural_status: ROUTE_DEFINED
+    required_read_capabilities: [deployments, deployment_statuses]
+    approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  rules_and_branch_protection:
+    architectural_status: ROUTE_DEFINED
+    required_read_capabilities: [rulesets, branch_protection, required_checks_when_exposed, restrictions_when_exposed]
+    approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  collaborators:
+    architectural_status: ROUTE_DEFINED
+    required_read_capabilities: [collaborator_inventory, permissions, invitations_when_exposed]
+    approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  webhooks:
+    architectural_status: ROUTE_DEFINED
+    temporal_components: [webhook_deliveries]
+    protected_information: true
+    required_read_capabilities:
+      - webhook_identity
+      - destination_when_readable
+      - event_subscriptions
+      - active_state
+      - content_type
+      - ssl_tls_configuration_when_exposed
+      - other_readable_configuration
+      - readable_delivery_evidence
+      - secret_presence_and_metadata_when_observable
+    approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+    external_state_scope_expansion: false
+    webhook_secret_plaintext:
+      preservation_status: NON_EXPORTABLE_VALUE_REISSUABLE_WHEN_NOT_EXPOSED
+
+  labels:
+    architectural_status: ROUTE_DEFINED
+    required_read_capabilities: [label_inventory, label_properties]
+    approved_route_types: [CONNECTOR, REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  milestones:
+    architectural_status: ROUTE_DEFINED
+    required_read_capabilities: [milestone_inventory, milestone_properties]
+    approved_route_types: [CONNECTOR, REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  checks:
+    architectural_status: ROUTE_DEFINED
+    temporal: true
+    required_read_capabilities: [check_suites, check_runs, commit_statuses]
+    approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+
+  actions_caches:
+    architectural_status: ROUTE_DEFINED
+    temporal: true
+    required_read_capabilities: [cache_inventory, effective_retention_when_exposed, cache_usage_when_exposed, cache_size_when_exposed, last_access_metadata_when_exposed]
+    approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
+    non_time_bound_eviction_risk: true
+
+  codespaces_repository_state_delta:
+    architectural_status: ROUTE_DEFINED
+    required_read_capabilities:
+      - enumerate_codespaces_for_scope
+      - assess_accessibility
+      - verify_unpushed_commits
+      - verify_modified_tracked_files
+      - verify_untracked_repository_content
+    approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, SPECIALIZED_CAPABILITY, DETERMINISTIC_EXECUTOR]
+    preservation_object: REPOSITORY_STATE_DELTA_ONLY
+    required_order: [discover, assess_accessibility, verify_repository_state_delta, record_evidence_and_state, evaluate_retention]
+    official_export_alone_proves_completeness: false
+
+  other_discovered_state:
+    architectural_status: OPEN_SET_CONTROL
+    control_id: O-24
+    required_behavior: [classify_new_material_state, assign_preservation_or_disposition_route, evidence_state, never_silently_omit]
+    approved_route_types: [ENGINE_NATIVE, CONNECTOR, GIT, REST_API, GRAPHQL_API, AUTHORIZED_API_IDENTITY, SPECIALIZED_CAPABILITY, DETERMINISTIC_EXECUTOR]
+
 capabilities:
   - id: backup_repository
     name: Backup Repository
     class: PRESERVATION_EXECUTION
     hitl_required: true
     source_repository_mode: READ_ONLY
-    executor: github_actions:backup-repository.yml
+    deterministic_executor:
+      reference: github_actions:backup-repository.yml
+      current_materialization: NOT_MATERIALIZED
+      historical_existence: NOT_DETERMINED
+      required_for_capability_definition: false
     capability_preflight:
       required: true
-      timing: BEFORE_SOURCE_INVENTORY
-      assess_actual_read_capability: true
-      object_classes: [git, issues, pull_requests, actions, projects, environments, variables, secret_metadata, deployments, rules_and_branch_protection, collaborators, webhooks, labels, milestones, checks, actions_caches, codespaces_repository_state_delta, other_discovered_state]
-      gap_report_requires: [unreadable_or_undiscoverable_scope, cause, preservation_impact, resulting_restriction]
-      hitl_decisions: [STOP, CONTINUE_WITH_RESTRICTIONS]
+      timing: AFTER_HITL_GO_BEFORE_SOURCE_INVENTORY
+      assessment_target: EFFECTIVE_EXECUTION_CAPABILITY
+      assess_route_types_separately: true
+      gap_classifications: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP, FACTUAL_INVENTORY_PENDING]
+      factual_inventory_pending_is_gap: false
+      material_gap_hitl_decisions: [STOP, CONTINUE_WITH_RESTRICTIONS]
+      gap_report_requires: [object_class, unreadable_or_undiscoverable_scope, gap_classification, required_capability, routes_assessed, cause, preservation_impact, resulting_restriction]
       inability_to_read_means_absent: false
       accepted_restrictions_traceable: true
     parameters:
@@ -26,17 +325,38 @@ capabilities:
       destination: {type: string, required: true, source: HITL_OR_EXPLICIT_CONFIRMATION}
       additional_parameters: {type: object, required: false, source: HITL_WHEN_APPLICABLE}
     includes: [git, issues, pull_requests, actions, projects, environments, variables, secret_metadata, deployments, rules_and_branch_protection, collaborators, webhooks, labels, milestones, checks, actions_caches, codespaces_repository_state_delta, other_discovered_state]
+
   - id: backup_projects
     name: Backup Projects
     class: PRESERVATION_EXECUTION
     hitl_required: true
     source_repository_mode: READ_ONLY
-    executor: github_actions:backup-projects.yml
+    deterministic_executor:
+      reference: github_actions:backup-projects.yml
+      current_materialization: NOT_MATERIALIZED
+      historical_existence: NOT_DETERMINED
+      required_for_capability_definition: false
+    relationship_to_backup_repository:
+      related_projects_included_by_backup_repository: true
+      independently_callable: true
+    required_routes: [REST_API, GRAPHQL_API]
+    combined_surfaces_may_be_required: true
+    preservation_representation:
+      machine_readable: true
+      schema_controlled: true
+      reconstructible_equivalent: true
+      downstream_reusable: true
+      evidence_and_provenance_required: true
     parameters:
-      scope: {type: enum, values: [SOURCE_REPOSITORY, PROJECT, OWNER_PROJECT_SET], required: true, source: HITL}
+      scope:
+        type: enum
+        values: [SOURCE_REPOSITORY, PROJECT, OWNER_PROJECT_SET]
+        required: true
+        source: HITL
       scope_identifiers: {type: object, required: true, source: HITL}
       destination: {type: string, required: true, source: HITL_OR_EXPLICIT_CONFIRMATION}
       additional_parameters: {type: object, required: false, source: HITL_WHEN_APPLICABLE}
+
   - {id: list_capabilities, name: List Capabilities, class: INFORMATIONAL, hitl_required: false}
   - {id: show_status, name: Show Status, class: INFORMATIONAL, hitl_required: false}
   - {id: validate_evidence, name: Validate Evidence, class: VALIDATION, hitl_required: false}
