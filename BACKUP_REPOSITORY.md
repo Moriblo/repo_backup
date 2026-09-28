@@ -194,6 +194,62 @@ A limitation MUST NEVER be converted into evidence that an object is absent, not
 
 Architecturally defined routes remain defined even when a particular execution cannot currently use them. Operational availability is established by Capability Preflight.
 
+
+## Capability ↔ Implementation Artifact Traceability
+`backup/capabilities.yaml` is the single canonical registry for capability-to-artifact traceability. A separate artifact registry MUST NOT be required.
+
+Every declarative or executable implementation artifact that implements, validates, schematizes, configures, or supports the capability system MUST have a stable logical `artifact_id` and explicit relationship(s) to one or more registered `capability_id` values.
+
+The canonical relationship types are:
+
+- `EXECUTES`
+- `VALIDATES`
+- `SCHEMATIZES`
+- `CONFIGURES`
+- `SUPPORTS`
+
+The relationship model is N:M. A capability MAY relate to multiple artifacts and an artifact MAY relate to multiple capabilities. The authoritative relationship is stored once in the implementation-artifact registry; reverse Artifact → Capability lookup MUST be derived from those relationships rather than maintained as a second source of truth.
+
+Each registered implementation artifact records, at minimum:
+
+- stable `artifact_id`;
+- artifact type;
+- repository and path;
+- purpose;
+- materialization status;
+- integrity/version tracking mechanism;
+- validation state;
+- capability relationships.
+
+### Materialization and integrity
+`MATERIALIZED` and `NOT_MATERIALIZED` describe whether the registered implementation artifact currently exists. They are distinct from validation and integrity state.
+
+For Git-versioned materialized artifacts, the current Git blob SHA is the canonical content-integrity/version identifier and the Git commit SHA is change provenance. The current blob SHA MUST be resolved and compared during traceability validation; an artifact MUST NOT be required to embed its own blob SHA.
+
+A `NOT_MATERIALIZED` executor or workflow MAY remain registered as an architectural implementation reference. Its absence does not by itself remove the capability definition.
+
+### Referential Integrity and Broken Reference Detection
+For every registered `MATERIALIZED` artifact, the registered repository/path MUST resolve to an existing object. Failure produces `BROKEN_REFERENCE` and MUST NOT be interpreted as successful validation.
+
+A registered `NOT_MATERIALIZED` artifact is permitted to have no object at its future path.
+
+### Orphan Artifact Detection
+Implementation-artifact locations MUST be checked for capability-system artifacts that exist without a registered `artifact_id`. Such an object is an `ORPHAN_ARTIFACT`.
+
+Orphan detection applies to implementation artifacts within managed locations and MUST NOT classify every unrelated repository file as an implementation artifact merely because it exists.
+
+### Impact Analysis and Revalidation
+Whenever a materialized implementation artifact changes:
+
+1. identify its stable `artifact_id`;
+2. derive every affected capability from the canonical relationships;
+3. mark the affected capability/artifact relationship for revalidation;
+4. perform the applicable validation before treating the changed implementation as validated.
+
+A changed Git blob SHA therefore triggers impact analysis; it does not change the logical `artifact_id`.
+
+These traceability rules are generic and apply equally to current and future capabilities. No capability receives a private or weaker traceability model.
+
 ## Git preservation
 The Git object class includes the requirements to:
 
