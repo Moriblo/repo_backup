@@ -29,28 +29,12 @@ jobs:
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve OneDrive drive ID
+      - name: Set OneDrive drive ID
         id: drive
         shell: bash
-        env:
-          GRAPH_TOKEN: ${{ steps.graph.outputs.token }}
-          ONEDRIVE_USER_ID: 4c330fbe76b815bb
         run: |
           set -euo pipefail
-
-          response="$(
-            curl --silent --show-error --fail-with-body \
-              -H "Authorization: Bearer $GRAPH_TOKEN" \
-              -H "Accept: application/json" \
-              "https://graph.microsoft.com/v1.0/users/${ONEDRIVE_USER_ID}/drive"
-          )"
-
-          drive_id="$(
-            python -c 'import json,sys; print(json.load(sys.stdin)["id"])' \
-              <<< "$response"
-          )"
-
-          echo "drive_id=$drive_id" >> "$GITHUB_OUTPUT"
+          echo "drive_id=4C330FBE76B815BB" >> "$GITHUB_OUTPUT"
 
       - name: Read OneDrive AppFolder
         shell: bash
