@@ -14,11 +14,11 @@ Authoritative portable entry point for the Full Repository Preservation Process.
 8. Backup never authorizes cleanup, deletion, rename, archive, or source modification.
 
 ## Start procedure
-1. Read this document and `capabilities.yaml`.
+1. Read this document and `backup/capabilities.yaml`.
 2. Present the Capability Menu.
 3. Wait for the human to select a capability.
 4. Collect or explicitly confirm every required execution parameter.
-5. Construct the exact Command Request using `schemas/command-request.schema.yaml`.
+5. Construct the exact Command Request using `backup/schemas/command-request.schema.yaml`.
 6. Present that request for HITL when required.
 7. Execute only after `GO`.
 8. Reject on `NO-GO`, missing parameters, scope mismatch, or missing authorization.
@@ -26,7 +26,7 @@ Authoritative portable entry point for the Full Repository Preservation Process.
 10. Report preservation state and the next applicable HITL.
 
 ## Capability Menu
-Canonical definitions are in `capabilities.yaml`.
+Canonical definitions are in `backup/capabilities.yaml`.
 - `backup_repository`
 - `backup_projects`
 - `list_capabilities`
@@ -63,7 +63,7 @@ Independently callable and also included by `backup_repository` when related Pro
 ## Evidence and fail-closed behavior
 Workflow completion alone is not proof of backup completion. Evidence must reconcile requested scope against preserved scope.
 
-Until `evidence.schema.yaml` and `backup-manifest.schema.yaml` are materialized and validated, no production backup may claim completion.
+Until `backup/schemas/evidence.schema.yaml` and `backup/schemas/backup-manifest.schema.yaml` are materialized and validated, no production backup may claim completion.
 
 Stop rather than infer if parameters are absent, HITL is ambiguous, authorization differs from the request, scope exceeds authorization, READ-only cannot be guaranteed, destination cannot be validated, or evidence is insufficient.
 
