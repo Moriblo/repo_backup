@@ -1,13 +1,16 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: command-request.schema.yaml
 title: Governed Backup Command Request
+
 type: object
 additionalProperties: false
 required: [request_id, capability_id, execution_parameters, authorization, invariants]
+
 properties:
   request_id: {type: string, minLength: 1}
   capability_id: {type: string, minLength: 1}
   execution_parameters: {type: object, minProperties: 1}
+
   authorization:
     type: object
     additionalProperties: false
@@ -17,30 +20,158 @@ properties:
       decision: {enum: [GO, NO-GO]}
       authorized_scope: {const: EXACT_COMMAND_REQUEST}
       reusable: {const: false}
+
   capability_preflight:
     type: object
     additionalProperties: false
-    required: [required, status, gaps, hitl_decision, accepted_restrictions]
+    required: [required, status, assessments, gaps, factual_inventory_pending, hitl_decision, accepted_restrictions]
     properties:
       required: {type: boolean}
       status: {enum: [NOT_RUN, PASS, GAPS_IDENTIFIED]}
-      gaps:
+
+      assessments:
         type: array
         items:
           type: object
           additionalProperties: false
-          required: [object_class, limitation, cause, preservation_impact, resulting_restriction]
+          required: [object_class, architectural_status, required_read_capabilities, routes, effective_read_capability]
           properties:
             object_class: {type: string, minLength: 1}
+            architectural_status:
+              enum: [ROUTE_DEFINED, ARCHITECTURALLY_SOLVED, OPEN_SET_CONTROL, ARCHITECTURAL_GAP]
+            required_read_capabilities:
+              type: array
+              minItems: 1
+              items: {type: string, minLength: 1}
+            routes:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                required: [route_type, state, authorized]
+                properties:
+                  route_type:
+                    enum: [ENGINE_NATIVE, CONNECTOR, GIT, REST_API, GRAPHQL_API, AUTHORIZED_API_IDENTITY, SPECIALIZED_CAPABILITY, DETERMINISTIC_EXECUTOR]
+                  route_reference: {type: [string, "null"]}
+                  state: {enum: [AVAILABLE, PARTIAL, UNAVAILABLE, NOT_APPLICABLE, NOT_VERIFIED]}
+                  authorized: {type: boolean}
+                  limitation: {type: [string, "null"]}
+            effective_read_capability: {enum: [AVAILABLE, PARTIAL, UNAVAILABLE, NOT_VERIFIED]}
+
+      gaps:
+        description: >
+          Material Capability Preflight gaps only. FACTUAL_INVENTORY_PENDING
+          is prohibited here and belongs exclusively in factual_inventory_pending.
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [object_class, gap_classification, limitation, required_capability, routes_assessed, cause, preservation_impact, resulting_restriction]
+          properties:
+            object_class: {type: string, minLength: 1}
+            gap_classification:
+              enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
             limitation: {type: string, minLength: 1}
+            required_capability: {type: string, minLength: 1}
+            routes_assessed:
+              type: array
+              minItems: 1
+              items: {type: string, minLength: 1}
             cause: {type: string, minLength: 1}
             preservation_impact: {type: string, minLength: 1}
             resulting_restriction: {type: string, minLength: 1}
+
+      factual_inventory_pending:
+        description: >
+          Non-gap facts deferred to Source Inventory. Entries here do not
+          change PASS into GAPS_IDENTIFIED and do not trigger the second HITL.
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [object_class, pending_fact, route_defined]
+          properties:
+            object_class: {type: string, minLength: 1}
+            pending_fact: {type: string, minLength: 1}
+            route_defined: {const: true}
+
       hitl_decision:
         enum: [NOT_REQUIRED, PENDING, STOP, CONTINUE_WITH_RESTRICTIONS]
+
       accepted_restrictions:
         type: array
-        items: {type: string, minLength: 1}
+        items:
+          type: object
+          additionalProperties: false
+          required: [restriction_id, object_class, restriction, source_gap_classification]
+          properties:
+            restriction_id: {type: string, minLength: 1}
+            object_class: {type: string, minLength: 1}
+            restriction: {type: string, minLength: 1}
+            source_gap_classification:
+              enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
+
+    allOf:
+      - if:
+          properties:
+            status: {const: NOT_RUN}
+          required: [status]
+        then:
+          properties:
+            gaps: {maxItems: 0}
+            hitl_decision: {const: NOT_REQUIRED}
+            accepted_restrictions: {maxItems: 0}
+
+      - if:
+          properties:
+            status: {const: PASS}
+          required: [status]
+        then:
+          properties:
+            gaps: {maxItems: 0}
+            hitl_decision: {const: NOT_REQUIRED}
+            accepted_restrictions: {maxItems: 0}
+
+      - if:
+          properties:
+            status: {const: GAPS_IDENTIFIED}
+          required: [status]
+        then:
+          properties:
+            gaps: {minItems: 1}
+            hitl_decision: {enum: [PENDING, STOP, CONTINUE_WITH_RESTRICTIONS]}
+
+      - if:
+          properties:
+            hitl_decision: {const: CONTINUE_WITH_RESTRICTIONS}
+          required: [hitl_decision]
+        then:
+          properties:
+            status: {const: GAPS_IDENTIFIED}
+            gaps: {minItems: 1}
+            accepted_restrictions: {minItems: 1}
+
+      - if:
+          properties:
+            hitl_decision: {const: STOP}
+          required: [hitl_decision]
+        then:
+          properties:
+            status: {const: GAPS_IDENTIFIED}
+            gaps: {minItems: 1}
+            accepted_restrictions: {maxItems: 0}
+
+      - if:
+          properties:
+            hitl_decision: {const: PENDING}
+          required: [hitl_decision]
+        then:
+          properties:
+            status: {const: GAPS_IDENTIFIED}
+            gaps: {minItems: 1}
+            accepted_restrictions: {maxItems: 0}
+
   invariants:
     type: object
     additionalProperties: false
@@ -50,3 +181,15 @@ properties:
       infer_missing_parameters: {const: false}
       inherit_previous_execution_parameters: {const: false}
       expand_authorization_scope: {const: false}
+
+allOf:
+  - if:
+      properties:
+        capability_id: {const: backup_repository}
+      required: [capability_id]
+    then:
+      required: [capability_preflight]
+      properties:
+        capability_preflight:
+          properties:
+            required: {const: true}
