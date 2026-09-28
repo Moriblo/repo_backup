@@ -1,18 +1,42 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: backup-manifest.schema.yaml
 title: Full Repository Preservation Manifest
+
 type: object
 additionalProperties: false
-required: [schema_version, request_id, capability_id, scope, started_at, status, artifacts, reconciliation]
+required: [schema_version, request_id, capability_id, scope, started_at, status, capability_preflight, artifacts, reconciliation, limitations]
+
 properties:
-  schema_version: {const: "1.0"}
+  schema_version: {const: "2.0"}
   request_id: {type: string, minLength: 1}
   capability_id: {type: string, minLength: 1}
   scope: {type: object, minProperties: 1}
   started_at: {type: string, format: date-time}
   completed_at: {type: [string, "null"], format: date-time}
+
   status:
     enum: [IN_PROGRESS, COMPLETE, COMPLETE_WITH_EXCEPTIONS, BLOCKED, FAILED]
+
+  capability_preflight:
+    type: object
+    additionalProperties: false
+    required: [status, hitl_decision, accepted_restrictions]
+    properties:
+      status: {enum: [PASS, GAPS_IDENTIFIED]}
+      hitl_decision: {enum: [NOT_REQUIRED, CONTINUE_WITH_RESTRICTIONS]}
+      accepted_restrictions:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [restriction_id, object_class, restriction, source_gap_classification]
+          properties:
+            restriction_id: {type: string, minLength: 1}
+            object_class: {type: string, minLength: 1}
+            restriction: {type: string, minLength: 1}
+            source_gap_classification:
+              enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
+
   artifacts:
     type: array
     items:
@@ -24,10 +48,15 @@ properties:
         sha256: {type: string, pattern: "^[a-f0-9]{64}$"}
         object_class: {type: string, minLength: 1}
         bytes: {type: integer, minimum: 0}
+        restriction_ids:
+          type: array
+          uniqueItems: true
+          items: {type: string, minLength: 1}
+
   reconciliation:
     type: object
     additionalProperties: false
-    required: [preserved, equivalent, partial, non_exportable, failed, not_verified]
+    required: [preserved, equivalent, partial, non_exportable, failed, not_verified, unreconciled_object_classes, restrictions_reconciled]
     properties:
       preserved: {type: integer, minimum: 0}
       equivalent: {type: integer, minimum: 0}
@@ -35,4 +64,106 @@ properties:
       non_exportable: {type: integer, minimum: 0}
       failed: {type: integer, minimum: 0}
       not_verified: {type: integer, minimum: 0}
-  limitations: {type: array, items: {type: string}}
+      unreconciled_object_classes:
+        type: array
+        uniqueItems: true
+        items: {type: string, minLength: 1}
+      restrictions_reconciled: {type: boolean}
+
+  limitations:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [limitation_id, description]
+      properties:
+        limitation_id: {type: string, minLength: 1}
+        description: {type: string, minLength: 1}
+        restriction_id: {type: [string, "null"]}
+        object_class: {type: [string, "null"]}
+
+allOf:
+  - if:
+      properties:
+        status: {const: COMPLETE}
+      required: [status]
+    then:
+      properties:
+        capability_preflight:
+          properties:
+            accepted_restrictions: {maxItems: 0}
+        limitations: {maxItems: 0}
+        reconciliation:
+          properties:
+            partial: {const: 0}
+            non_exportable: {const: 0}
+            failed: {const: 0}
+            not_verified: {const: 0}
+            unreconciled_object_classes: {maxItems: 0}
+            restrictions_reconciled: {const: true}
+
+  - if:
+      properties:
+        capability_preflight:
+          properties:
+            accepted_restrictions: {minItems: 1}
+          required: [accepted_restrictions]
+      required: [capability_preflight]
+    then:
+      properties:
+        status:
+          enum: [IN_PROGRESS, COMPLETE_WITH_EXCEPTIONS, BLOCKED, FAILED]
+
+  - if:
+      properties:
+        limitations: {minItems: 1}
+      required: [limitations]
+    then:
+      properties:
+        status:
+          enum: [IN_PROGRESS, COMPLETE_WITH_EXCEPTIONS, BLOCKED, FAILED]
+
+  - if:
+      properties:
+        reconciliation:
+          anyOf:
+            - properties: {partial: {minimum: 1}}
+              required: [partial]
+            - properties: {non_exportable: {minimum: 1}}
+              required: [non_exportable]
+            - properties: {failed: {minimum: 1}}
+              required: [failed]
+            - properties: {not_verified: {minimum: 1}}
+              required: [not_verified]
+            - properties: {unreconciled_object_classes: {minItems: 1}}
+              required: [unreconciled_object_classes]
+          required: [partial, non_exportable, failed, not_verified, unreconciled_object_classes]
+      required: [reconciliation]
+    then:
+      properties:
+        status:
+          enum: [IN_PROGRESS, COMPLETE_WITH_EXCEPTIONS, BLOCKED, FAILED]
+
+  - if:
+      properties:
+        status: {const: COMPLETE_WITH_EXCEPTIONS}
+      required: [status]
+    then:
+      anyOf:
+        - properties:
+            capability_preflight:
+              properties:
+                accepted_restrictions: {minItems: 1}
+              required: [accepted_restrictions]
+          required: [capability_preflight]
+        - properties:
+            limitations: {minItems: 1}
+          required: [limitations]
+        - properties:
+            reconciliation:
+              anyOf:
+                - properties: {partial: {minimum: 1}}
+                - properties: {non_exportable: {minimum: 1}}
+                - properties: {not_verified: {minimum: 1}}
+                - properties: {unreconciled_object_classes: {minItems: 1}}
+          required: [reconciliation]
