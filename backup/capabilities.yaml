@@ -307,8 +307,8 @@ capabilities:
     deterministic_executor:
       artifact_id: backup_repository_executor
       reference: github_actions:backup-repository.yml
-      current_materialization: NOT_MATERIALIZED
-      historical_existence: NOT_DETERMINED
+      current_materialization: MATERIALIZED
+      historical_existence: MATERIALIZED_IN_CURRENT_GOVERNED_CHANGE
       required_for_capability_definition: false
     capability_preflight:
       required: true
@@ -490,9 +490,11 @@ implementation_artifacts:
       path: .github/workflows/backup-repository.yml
     purpose: Deterministic executor referenced by backup_repository.
     materialization:
-      status: NOT_MATERIALIZED
+      status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      current_sha: 5184db171776de1b61ffced5ef57926bce046cad
+      materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: NOT_VALIDATED
     relationships:
