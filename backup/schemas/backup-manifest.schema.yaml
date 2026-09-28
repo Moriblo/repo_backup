@@ -164,6 +164,7 @@ allOf:
               anyOf:
                 - properties: {partial: {minimum: 1}}
                 - properties: {non_exportable: {minimum: 1}}
+                - properties: {failed: {minimum: 1}}
                 - properties: {not_verified: {minimum: 1}}
                 - properties: {unreconciled_object_classes: {minItems: 1}}
           required: [reconciliation]
