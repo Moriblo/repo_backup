@@ -1,37 +1,165 @@
-name: Backup Repository - Git Capability Validation
+# =============================================================================
+# Backup Repository (BKP_REPO) - executor do Mnemonic BKP_REPO
+# =============================================================================
+# O QUE É
+#   Workflow que executa o backup de um repositório GitHub (origem, SOMENTE
+#   LEITURA) para o OneDrive pessoal (destino). É o Mnemonic BKP_REPO do
+#   capabilities.yaml (backup_repository -> BKP_REPO).
+#
+# COMO É ACIONADO
+#   Apenas via `workflow_call`, pelo dispatcher.yml (PR 3), depois que o HITL
+#   deu GO e o engine gravou uma linha em commands.log. Não há `workflow_dispatch`
+#   de propósito: assim ninguém executa o backup sem passar pelo commands.log
+#   (passo 4 do "Governed command flow" em BACKUP_REPOSITORY.md).
+#
+# ECR (Exact Command Request)
+#   Os `inputs` do `on: workflow_call` abaixo SÃO o ECR: o engine lê este arquivo
+#   e apresenta ao HITL exatamente estes campos e restrições. Se mudar um input,
+#   o ECR muda - e é preciso nova autorização.
+#
+# SEQUÊNCIA DOS PASSOS (não reordenar; ver BACKUP_REPOSITORY.md)
+#   1. Revalidar inputs            -> rejeita valores fora do schema
+#   2. Emitir token da origem      -> GitHub App Reader, só leitura
+#   3. Capability Preflight        -> pode terminar BLOCKED (HITL decide)
+#   4. Validar destino             -> falha fechada (OneDrive só no PR 4)
+#   5. Mirror Git + verificações   -> fsck, LFS, submódulos
+#   6. Evidência e manifest 2.0    -> validados contra os schemas
+#   7. Publicar evidência          -> artefato do Actions (sempre)
+#
+# REGRAS QUE ESTE WORKFLOW RESPEITA
+#   - A origem é READ-ONLY: nenhum passo executa push ou escrita na origem.
+#   - Nenhum segredo é impresso; o token da origem só aparece em variável de
+#     ambiente dos passos que o usam e nunca é gravado na config do mirror.
+#   - Sem OIDC: o OneDrive usará OAuth delegado (Files.ReadWrite.AppFolder), PR 4.
+#   - Sucesso do workflow NÃO prova preservação; a prova é o manifest validado.
+# =============================================================================
+name: Backup Repository (BKP_REPO)
 
+# ECR do BKP_REPO: os inputs abaixo são o Exact Command Request completo.
+# As restrições conhecidas estão em cada `description` e são revalidadas no passo
+# "Revalidate inputs". Chamado somente pelo dispatcher.yml (workflow_call).
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      source_repository:
-        description: "GitHub source repository in owner/name form (required; READ-ONLY)"
+      # Identificador único da requisição, vindo da linha do commands.log.
+      # Serve de chave de idempotência e nomeia o artefato de evidência.
+      request_id:
+        description: "Unique request id from commands.log, 8-64 chars [A-Za-z0-9._-] (required)"
         required: true
         type: string
+      # Repositório a copiar, no formato dono/nome. Nunca é alterado (READ-ONLY).
+      source_repository:
+        description: "GitHub source repository in owner/name form, pattern ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ (required; READ-ONLY)"
+        required: true
+        type: string
+      # Pasta de destino DENTRO do AppFolder do OneDrive (não é um caminho absoluto).
+      destination:
+        description: "OneDrive AppFolder-relative path, no leading slash and no '..' (required)"
+        required: true
+        type: string
+      # Decisão do HITL após um BLOCKED de preflight. Vazio na 1ª execução.
+      # Formato: {"previous_request_id": ..., "hitl_decision": "CONTINUE_WITH_RESTRICTIONS",
+      #           "accepted_restrictions": [ {restriction_id, object_class, restriction, source_gap_classification}, ... ]}
+      preflight_decision:
+        description: "JSON of the HITL CONTINUE_WITH_RESTRICTIONS decision (previous_request_id, hitl_decision, accepted_restrictions); empty on a first run (optional)"
+        required: false
+        type: string
+        default: ""
 
+# Permissões do GITHUB_TOKEN: só leitura deste repositório (para o checkout).
+# O acesso à ORIGEM não usa este token; usa o token do GitHub App (passo 2).
 permissions:
   contents: read
 
 jobs:
-  validate-git-capability:
-    name: Validate full Git preservation route
+  backup-repository:
+    name: BKP_REPO ${{ inputs.request_id }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Limite de segurança contra execução presa; ajuste se repositórios grandes precisarem.
+    timeout-minutes: 120
+    # Variáveis comuns a todos os passos. Os inputs entram AQUI (e não direto em
+    # `run:`) para evitar injeção de comando: o shell só os lê como variáveis.
     env:
+      REQUEST_ID: ${{ inputs.request_id }}
       SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+      DESTINATION: ${{ inputs.destination }}
+      PREFLIGHT_DECISION: ${{ inputs.preflight_decision }}
+      # Pasta do clone espelho (mirror) da origem.
       MIRROR_DIR: source.git
+      # Pasta das evidências geradas; é o que o passo final publica.
       EVIDENCE_DIR: evidence
 
     steps:
-      - name: Validate explicit source parameter
+      # Baixa ESTE repositório (execução/controle) para ter scripts e schemas.
+      # Não é a origem do backup.
+      - name: Checkout execution repository
+        uses: actions/checkout@v4
+
+      # Bibliotecas do bkp_repo.py: PyYAML (lê capabilities/schemas) e jsonschema (valida).
+      - name: Install validator dependencies
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            echo "::error::source_repository must be explicitly supplied in owner/name form."
-            exit 2
-          fi
-          printf 'Validated explicit source: %s\n' "$SOURCE_REPOSITORY"
+          pip install --quiet pyyaml jsonschema
 
+      # Segunda barreira de validação (a primeira é do dispatcher). Falha com
+      # saída 2 e BKP_RESULT REJECTED se algum input violar o schema da linha
+      # do commands.log.
+      - name: Revalidate inputs
+        shell: bash
+        run: python3 backup/scripts/bkp_repo.py validate-inputs
+
+      # Separa "dono/nome" em duas saídas, pois o passo do token pede as duas
+      # partes separadas. Seguro: a validação anterior garante o formato.
+      - name: Split source repository
+        id: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "owner=${SOURCE_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${SOURCE_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+      # Emite um token de instalação do GitHub App "Repository Preservation Reader",
+      # válido só para o repositório de origem e limitado a LEITURA
+      # (contents + metadata), mesmo que o App tenha mais permissões.
+      # `continue-on-error: true`: se o token não puder ser emitido (App não
+      # instalado na origem, chave inválida...), o workflow NÃO cai aqui; o
+      # preflight registra a lacuna ACCESS_PERMISSION_GAP e o HITL decide.
+      # Dependências: variável REPOSITORY_PRESERVATION_APP_ID e secret
+      # REPOSITORY_PRESERVATION_APP_PRIVATE_KEY (Settings > Secrets and variables).
+      - name: Issue read-only source token (GitHub App)
+        id: token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.REPOSITORY_PRESERVATION_APP_ID }}
+          private-key: ${{ secrets.REPOSITORY_PRESERVATION_APP_PRIVATE_KEY }}
+          owner: ${{ steps.src.outputs.owner }}
+          repositories: ${{ steps.src.outputs.name }}
+          permission-contents: read
+          permission-metadata: read
+
+      # Capability Preflight: roda APÓS o GO e ANTES de qualquer Source Inventory.
+      # Saídas: 0 = segue; 10 = BLOCKED (lacunas materiais sem decisão do HITL).
+      # Quando BLOCKED, os passos seguintes são pulados e o job termina em falha
+      # de propósito; o engine lê `required_restrictions` na linha BKP_RESULT e
+      # pede ao HITL STOP ou CONTINUE_WITH_RESTRICTIONS.
+      - name: Capability Preflight
+        id: preflight
+        shell: bash
+        env:
+          TOKEN_OUTCOME: ${{ steps.token.outcome }}
+        run: python3 backup/scripts/bkp_repo.py preflight
+
+      # Gate de destino (fail closed). Até o PR 4 implementar o OneDrive, este
+      # passo SEMPRE falha (saída 20): é o comportamento esperado hoje, e é o
+      # que impede gerar "sucesso" sem destino validado.
+      - name: Validate destination (fail closed before Source Inventory)
+        id: destination
+        shell: bash
+        run: python3 backup/scripts/bkp_repo.py validate-destination
+
+      # Confirma que git e git-lfs existem no runner (ubuntu-latest já os traz).
       - name: Install Git LFS
         shell: bash
         run: |
@@ -39,14 +167,26 @@ jobs:
           git --version
           git lfs version
 
+      # Clona a origem com semântica de espelho completo (todas as refs, incluindo
+      # as de pull request). O token vai por GIT_CONFIG_* (cabeçalho HTTP) apenas
+      # neste processo: não aparece na URL, nos logs nem na config do mirror.
       - name: Clone source with full mirror semantics
         shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           set -euo pipefail
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$SOURCE_TOKEN" | base64 -w0)"
           # Source operation is intentionally fetch/clone-only. No push command or
           # source mutation operation is present in this executor.
           git clone --mirror "https://github.com/${SOURCE_REPOSITORY}.git" "$MIRROR_DIR"
 
+      # Evidência de integridade do mirror:
+      #   refs.tsv              lista de refs com SHA e tipo (base da reconciliação)
+      #   git-fsck.txt          verificação completa dos objetos (falha = job falha)
+      #   git-count-objects.txt tamanho/contagem dos objetos
       - name: Validate refs and Git object database
         shell: bash
         run: |
@@ -56,10 +196,20 @@ jobs:
           git -C "$MIRROR_DIR" fsck --full --strict             > "$EVIDENCE_DIR/git-fsck.txt" 2>&1
           git -C "$MIRROR_DIR" count-objects -vH             > "$EVIDENCE_DIR/git-count-objects.txt"
 
+      # Detecta e verifica Git LFS em todas as refs. Se houver objetos LFS, baixa
+      # todos e confere o SHA-256 de cada um contra o OID.
+      # Códigos de saída: 3 = não conseguiu listar LFS; 4 = OID inválido;
+      #                   5 = objeto LFS ausente; 6 = hash não confere.
+      # Sem LFS: registra isso explicitamente (ausência comprovada, não presumida).
       - name: Detect and validate Git LFS
         shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           set -euo pipefail
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$SOURCE_TOKEN" | base64 -w0)"
           mkdir -p "$EVIDENCE_DIR"
           cd "$MIRROR_DIR"
 
@@ -103,6 +253,11 @@ jobs:
             : > "../$EVIDENCE_DIR/lfs-verification.tsv"
           fi
 
+      # Procura submódulos em TODO o histórico alcançável (não só no commit atual):
+      #   gitmodules-history.tsv  commits que possuem .gitmodules
+      #   gitlinks-history.tsv    entradas de modo 160000 (gitlinks) por commit
+      # Arquivos vazios significam "nenhum encontrado". O conteúdo dos submódulos
+      # NÃO é copiado; se houver gitlinks, o manifest marca PARTIALLY-PRESERVED.
       - name: Detect submodules across reachable history
         shell: bash
         run: |
@@ -121,41 +276,23 @@ jobs:
           sort -u -o "$EVIDENCE_DIR/gitmodules-history.tsv"             "$EVIDENCE_DIR/gitmodules-history.tsv"
           sort -u -o "$EVIDENCE_DIR/gitlinks-history.tsv"             "$EVIDENCE_DIR/gitlinks-history.tsv"
 
-      - name: Produce diagnostic evidence
-        if: always()
+      # Gera evidence.json e manifest.json (schemas 2.0), valida ambos e imprime
+      # a linha BKP_RESULT final (COMPLETE, COMPLETE_WITH_EXCEPTIONS ou FAILED).
+      # Só roda se o destino foi validado; senão sai com 21.
+      - name: Build schema 2.0 evidence and manifest
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$EVIDENCE_DIR"
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess
-          evidence = pathlib.Path(os.environ["EVIDENCE_DIR"])
-          mirror = pathlib.Path(os.environ["MIRROR_DIR"])
-          def lines(name):
-              p = evidence / name
-              return p.read_text(errors="replace").splitlines() if p.exists() else []
-          payload = {
-              "mode": "CAPABILITY_VALIDATION",
-              "source_repository": os.environ["SOURCE_REPOSITORY"],
-              "source_mode": "READ_ONLY",
-              "mirror_created": mirror.is_dir(),
-              "refs_count": len(lines("refs.tsv")),
-              "lfs_applicable": os.environ.get("LFS_APPLICABLE", "NOT_DETERMINED"),
-              "lfs_oid_count": len(lines("lfs-oids.txt")),
-              "lfs_verified_count": sum("\tVERIFIED\t" in x for x in lines("lfs-verification.tsv")),
-              "gitmodules_history_entries": len(lines("gitmodules-history.tsv")),
-              "gitlink_history_entries": len(lines("gitlinks-history.tsv")),
-          }
-          (evidence / "capability-validation.json").write_text(
-              json.dumps(payload, indent=2, sort_keys=True) + "\n"
-          )
-          PY
+        env:
+          DESTINATION_VALIDATED: ${{ steps.destination.outputs.destination_validated }}
+        run: python3 backup/scripts/bkp_repo.py build-evidence
 
-      - name: Publish diagnostic evidence
+      # Publica a pasta de evidências como artefato do Actions, MESMO se o job
+      # falhou (`if: always()`), para que um BLOCKED deixe rastro (preflight.json).
+      # Retenção curta (7 dias): a cópia definitiva vai para o OneDrive (PR 4).
+      - name: Publish evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: git-capability-validation
+          name: bkp-repo-${{ inputs.request_id }}
           path: evidence/
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 7
