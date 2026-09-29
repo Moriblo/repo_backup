@@ -495,12 +495,12 @@ Quando a restauração existir, esses limites entram no relatório final como li
 | A opção **"Do not allow bypassing the above settings"** faz as restrições valerem também para administradores | **Confirmado** na documentação |
 | "Require a pull request before merging" impede push direto em condições normais | **Confirmado** na documentação (com a exceção de administradores acima) |
 | O check só pode ser exigido se tiver concluído com sucesso nos últimos 7 dias | **Confirmado** na documentação |
-| A credencial que o engine usa para gravar o `commands.log` é tratada como **administrador** e passa pela regra | **NÃO confirmado**: depende do tipo da credencial e só um teste real responde |
+| A credencial que o engine usa para gravar o `commands.log` é tratada como **administrador** e passa pela regra | **Confirmado em teste real** (29/09/2026): um push direto ao `main`, com a regra ativa, foi aceito com o aviso `Bypassed rule violations ... Required status check "Registry traceability" is expected`. O Dispatcher rodou verde. Commit `42a211e`, run `36622116351` |
 
 Por isso:
 - **não** marque "Require a pull request before merging";
 - **não** marque "Do not allow bypassing the above settings", para o administrador (`Moriblo`, a identidade que o engine usa hoje) continuar podendo gravar o log;
-- depois de ativar, **faça uma gravação real de teste** do `commands.log` antes de depender da regra. Se for recusada, desative a regra ou ajuste-a.
+- depois de ativar, **faça uma gravação real de teste** antes de depender da regra. Foi o que se fez em 29/09/2026 (linha acima da tabela). Se você trocar a credencial do engine, repita o teste. Se a gravação for recusada, desative a regra ou ajuste-a.
 
 Fontes (documentação do GitHub): [Sobre branches protegidos](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches), [Gerenciar uma regra de proteção de branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/managing-a-branch-protection-rule) e [Solução de problemas de status checks obrigatórios](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks).
 
