@@ -466,7 +466,9 @@ The protocol is engine-agnostic: capability is the effective authorized executio
 0c. O HITL roda `onedrive_authorize.py` no computador dele, faz o login, e o script imprime o refresh token só no terminal.
 0d. O HITL grava os segredos e as variáveis (seção 4).
 
-### 2.2 A cada execução
+### 2.2 A cada execução (resumo)
+
+Esta tabela é o resumo. O detalhe de cada passo, o diagrama e o caminho do Mnemonic estão nas seções 2.3 a 2.7.
 
 | # | Quem | O que acontece | Situação hoje |
 |---|---|---|---|
@@ -474,9 +476,9 @@ The protocol is engine-agnostic: capability is the effective authorized executio
 | 2 | HITL | Escolhe `backup_repository` e informa `source_repository` e `destination` (caminho **relativo ao AppFolder**). | Existe |
 | 3 | Engine | Lê o `backup-repository.yml` e apresenta o **ECR** exatamente como o workflow define. | Existe |
 | 4 | HITL | Dá **GO** ou NO-GO. A autorização vale só para esse ECR exato. | Existe |
-| 5 | Engine | Acrescenta **uma linha** no `commands.log` do `main`. É a única escrita direta permitida no `main`. | Existe |
-| 6 | Actions | O push dispara o **Dispatcher**: valida intervalo do push, controle de escrita direta, append-only, schema, `request_id` único e Mnemonic. | Existe |
-| 7 | Actions | O Dispatcher chama o `BKP_REPO` (`workflow_call`, `secrets: inherit`). | Existe |
+| 5 | Engine | Acrescenta **uma linha** no `commands.log` do `main`, com o **Mnemonic copiado do registro**. É a única escrita direta permitida no `main`. | Existe |
+| 6 | Actions | O push dispara o **Dispatcher**: valida intervalo do push, controle de escrita direta, append-only, schema, `request_id` único e Mnemonic (conhecido e coerente com o registro). | Existe |
+| 7 | Actions | O Dispatcher **traduz o Mnemonic em workflow** (mapeamento fixo) e chama o `BKP_REPO` (`workflow_call`, `secrets: inherit`). | Existe |
 | 8 | Actions | O `BKP_REPO` revalida os inputs e emite o token do App Reader. | Existe |
 | 9 | Actions | **Capability Preflight.** Com lacunas materiais e sem decisão do HITL, termina `BLOCKED`. | Existe |
 | 10 | Engine → HITL | O engine lê a linha `BKP_RESULT` no log do job e reporta. O HITL decide `STOP` ou `CONTINUE_WITH_RESTRICTIONS`. Se continuar, volta ao passo 3 com **nova linha** (`preflight_decision` e novo `request_id`). | Existe |
@@ -490,6 +492,220 @@ The protocol is engine-agnostic: capability is the effective authorized executio
 - Com as 17 restrições atuais (todas as classes, menos o Git), toda execução exige **duas linhas** no `commands.log`: a primeira termina `BLOCKED`; a segunda carrega a decisão do HITL.
 - O `request_id` de uma linha rejeitada ou bloqueada fica **queimado**: o log é append-only e a autorização não é reutilizável.
 - Enquanto o passo 11 falhar fechado, nada é copiado e nenhuma evidência é gerada.
+
+### 2.3 Fluxo detalhado, passo a passo
+
+Cada passo abaixo diz **quem** age, **o que entra**, **o que acontece** (com os arquivos envolvidos), **o que pode falhar** e **o que sai**. A tabela da seção 2.2 é o resumo; esta seção é o detalhe. As marcas **(PLANEJADO)** indicam o que só passa a existir com o PR do OneDrive (SA-08).
+
+#### Passo 1: o engine apresenta o Capability Menu
+- **Quem:** Engine.
+- **Entra:** o pedido do HITL para iniciar um backup.
+- **O que acontece:** o engine lê este `BACKUP_REPOSITORY.md` e o `backup/capabilities.yaml` (lista `capabilities`) e apresenta as seis capabilities. Ele **não escolhe** por conta própria.
+- **Lê / escreve:** lê os dois arquivos; não escreve nada.
+- **Se falhar:** se não conseguir ler o registro, o engine para e avisa (fail-closed). Nada é inferido de conversas anteriores.
+- **Sai:** o menu na tela do HITL.
+
+#### Passo 2: o HITL escolhe a capability e informa os parâmetros
+- **Quem:** HITL (o engine consulta o registro).
+- **Entra:** o menu.
+- **O que acontece:**
+  1. O HITL escolhe `backup_repository`.
+  2. O engine consulta o registro e descobre dois fatos: o **Mnemonic** da capability (`mnemonic: BKP_REPO`, no `capabilities.yaml`) e os **parâmetros requeridos** (`parameters`: `source_repository` e `destination`).
+  3. O HITL informa ou confirma cada valor. O engine pode **propor**, mas nunca substitui a confirmação, e nada é herdado de execuções anteriores.
+- **Se falhar:** valor fora do formato é recusado. Exemplo real: o `destination` informado como URL do OneDrive foi recusado, porque o destino precisa ser um caminho **relativo ao AppFolder** (sem `/` inicial e sem `..`).
+- **Sai:** capability, Mnemonic e valores.
+
+#### Passo 3: o engine apresenta o ECR (Exact Command Request)
+- **Quem:** Engine.
+- **Entra:** capability, Mnemonic e valores.
+- **O que acontece:** o engine lê os `inputs` do `on: workflow_call` do workflow do Mnemonic (`.github/workflows/backup-repository.yml`) e apresenta cada campo **exatamente como o workflow o define**, com a sua restrição e o valor proposto. Antes de apresentar, confere os valores contra o schema da linha (`commands-log-line.schema.yaml`).
+- **Lê / escreve:** lê o workflow e o schema; não escreve nada.
+- **Sai:** o ECR completo para o GO.
+
+#### Passo 4: o HITL dá GO ou NO-GO
+- **Quem:** HITL.
+- **O que acontece:** o GO vale **somente para este ECR exato**. Mudou qualquer valor, é um novo ECR e um novo GO.
+- **Se falhar:** NO-GO, resposta ambígua ou ausente: nada é gravado. Nenhuma autorização é presumida.
+- **Sai:** a autorização.
+
+#### Passo 5: o engine grava a linha no `commands.log`
+- **Quem:** Engine, com uma identidade autorizada a gravar no `main` (hoje, o actor `Moriblo`; ver a issue #5).
+- **Entra:** o ECR autorizado.
+- **O que acontece:**
+  1. O engine monta **uma linha JSON**: `request_id`, `mnemonic` (copiado do registro, sem alteração), `ts` (hora atual, UTC), `authorization` e `params` (ver a seção 2.5).
+  2. Como boa prática adotada nas execuções reais, ele roda o mesmo verificador do dispatcher **localmente**, antes do push.
+  3. Faz um commit **só com o `commands.log`** e o envia direto ao `main`. É a **única escrita direta** permitida no `main`.
+- **Lê / escreve:** escreve o `commands.log` (só acrescenta ao fim).
+- **Se falhar:** push recusado: nada dispara, nada é gravado.
+- **Sai:** um push no `main`, que dispara o Dispatcher.
+
+#### Passo 6: o Dispatcher valida o push e as linhas novas
+- **Quem:** GitHub Actions, workflow `dispatcher.yml`, job **"Validate push and new command lines"**, executando `backup/scripts/dispatch_check.py`.
+- **Entra:** o intervalo do push (commit anterior e commit novo).
+- **O que acontece:** as verificações rodam nesta ordem, e **a primeira que falhar recusa o push inteiro**:
+  1. **Intervalo:** existe commit anterior e ele é ancestral do novo (recusa criação de branch e reescrita de histórico).
+  2. **Escrita direta:** cada commit da linha principal que toca arquivos além do `commands.log` precisa vir de um pull request mergeado (consulta à API). Commit que mistura `commands.log` com outros arquivos é recusado.
+  3. **O log mudou?** Se não mudou (ex.: merge de PR), o push é aceito e não há nada a despachar. É o que se vê nos runs verdes a cada merge.
+  4. **Append-only:** o conteúdo antigo é prefixo exato do novo; a última linha termina em quebra de linha; não há linha em branco.
+  5. **Cada linha nova:** é JSON válido e cumpre o `commands-log-line.schema.yaml`.
+  6. **`request_id` único:** não repete nenhum id já presente no log nem outro do mesmo push.
+  7. **Mnemonic:** consta no mapeamento fixo do dispatcher **e** o registro (`capabilities.yaml`) concorda com o workflow mapeado.
+- **Se falhar:** saída **30**, o job fica vermelho e **nada é despachado**. A mensagem diz qual regra falhou, sem repetir o conteúdo da linha.
+- **Sai:** a linha `DISPATCH_ACCEPTED {json}` com os `request_id` aceitos e a matriz de despacho.
+
+#### Passo 7: o Dispatcher chama o workflow do Mnemonic
+- **Quem:** GitHub Actions, job **`run-bkp-repo`** (nome "BKP_REPO `<request_id>`").
+- **Entra:** a matriz com uma entrada por linha aceita.
+- **O que acontece:** o dispatcher **traduz o Mnemonic em workflow** pelo mapeamento fixo (`BKP_REPO` → `.github/workflows/backup-repository.yml`) e o chama por `workflow_call`, com `secrets: inherit`, passando os quatro inputs do ECR: `request_id`, `source_repository`, `destination` e `preflight_decision`. Há um grupo de concorrência por `request_id`.
+- **Se falhar:** sem linhas novas, o job é **pulado** (aparece como cinza no run); não é erro.
+- **Sai:** uma execução do `BKP_REPO` por linha aceita.
+
+#### Passo 8: o `BKP_REPO` começa
+- **Quem:** GitHub Actions, `backup-repository.yml`.
+- **O que acontece:**
+  1. Baixa este repositório (scripts e schemas) e instala as bibliotecas do validador.
+  2. **`validate-inputs`:** revalida os inputs contra o mesmo schema da linha (segunda barreira). Também recusa `preflight_decision` ilegível e recusa reutilização de autorização (`previous_request_id` igual ao `request_id`).
+  3. **Token do App Reader:** emite um token de curta duração, só de leitura (`contents: read`, `metadata: read`), válido só para o repositório de origem.
+- **Se falhar:** entrada inválida termina com saída **2** e `BKP_RESULT` **`REJECTED`**. A falha do **token não derruba** o workflow: ela vira uma lacuna no preflight.
+- **Sai:** inputs válidos e, se possível, um token de leitura.
+
+#### Passo 9: Capability Preflight
+- **Quem:** GitHub Actions, `bkp_repo.py preflight`.
+- **O que acontece:** avalia as **18 classes** do `backup_repository` (`includes` do registro). Cada rota é avaliada separadamente. Hoje só a classe **`git`** tem rota implementada; as outras **17** viram lacuna `EXECUTION_CAPABILITY_GAP`. Se o token não foi emitido, o `git` também vira lacuna (`ACCESS_PERMISSION_GAP`), e são **18**. O resultado é validado contra o schema do command-request e gravado em `evidence/preflight.json`.
+- **Decisão:** a execução só segue se **todas** as restrições exigidas estiverem em `preflight_decision.accepted_restrictions`. Aceitar menos mantém o bloqueio.
+- **Sai:**
+  - Saída **10**: `BKP_RESULT` **`BLOCKED`** (`CAPABILITY_PREFLIGHT_GAPS`), com a lista `required_restrictions`. Os passos seguintes são pulados.
+  - Saída **0**: `BKP_RESULT` **`PREFLIGHT_OK`**.
+- **Sempre:** o artefato `bkp-repo-<request_id>` é publicado, mesmo com `BLOCKED`.
+
+#### Passo 10: o engine reporta e o HITL decide
+- **Quem:** Engine e HITL.
+- **O que acontece:** o engine lê a linha `BKP_RESULT` no log do passo "Capability Preflight" (Actions, run do Dispatcher, job "BKP_REPO `<request_id>`") e apresenta ao HITL as restrições exigidas. O HITL escolhe:
+  - **`STOP`:** encerra. Nenhuma linha é gravada. O `request_id` usado continua queimado.
+  - **`CONTINUE_WITH_RESTRICTIONS`:** o engine monta uma **nova linha**, com **novo `request_id`**, os **mesmos** `source_repository` e `destination`, e o bloco `preflight_decision` (`previous_request_id` = a requisição bloqueada; `hitl_decision`; `accepted_restrictions` = os itens de `required_restrictions`). O fluxo **volta ao passo 3**: é um novo ECR, com novo GO.
+- **Sai:** o encerramento, ou uma nova rodada a partir do passo 3.
+
+#### Passo 11: validação do destino
+- **Quem:** GitHub Actions, `bkp_repo.py validate-destination`.
+- **Hoje:** **sempre falha fechado**: saída **20**, `BKP_RESULT` **`BLOCKED`** (`DESTINATION_NOT_VALIDATED`). Nada é copiado. É o comportamento correto até o OneDrive existir.
+- **(PLANEJADO)** Com o SA-08: renova o access token, grava o novo refresh token no secret pelo App Writer e faz uma escrita e uma leitura de teste no AppFolder.
+
+#### Passo 12: leitura da origem
+- **Quem:** GitHub Actions, passos bash do `backup-repository.yml`.
+- **O que acontece (só chega aqui com o destino validado):**
+  1. Confere `git` e `git-lfs` no runner.
+  2. Clona a origem com `git clone --mirror`. O token vai por cabeçalho HTTP, só nesse processo: não aparece na URL, no log nem na configuração do mirror.
+  3. Grava `refs.tsv`, `git-fsck.txt` (`fsck --full --strict`) e `git-count-objects.txt`.
+  4. Enumera Git LFS em todas as refs; havendo objetos, baixa todos e confere o SHA-256 de cada um. Falhas: saída **3** (não listou), **4** (OID inválido), **5** (objeto ausente), **6** (hash divergente).
+  5. Varre o histórico inteiro atrás de submódulos (`gitmodules-history.tsv`, `gitlinks-history.tsv`).
+- **(PLANEJADO)** Comparação das refs da **origem** com as do mirror (`git ls-remote` contra `refs.tsv`).
+- **Se falhar:** o job fica vermelho no passo que falhou.
+
+#### Passo 13: pacote e envio ao OneDrive **(PLANEJADO)**
+- Gera o pacote (`git bundle`) do mirror e o envia em blocos ao OneDrive, conferindo o SHA-256 depois do envio.
+
+#### Passo 14: evidência e manifest
+- **Quem:** GitHub Actions, `bkp_repo.py build-evidence`.
+- **O que acontece:** recusa-se a rodar sem destino validado (saída **21**). Monta o `evidence.json` (a classe `git` como `PRESERVED`, ou `PARTIALLY-PRESERVED` se houver submódulos, ou `FAILED` se nenhuma ref foi lida; as demais classes como `NOT-VERIFIED`, ligadas às restrições aceitas) e o `manifest.json`, e **valida ambos contra os schemas 2.0 antes de gravar**. O status final é `COMPLETE`, `COMPLETE_WITH_EXCEPTIONS` ou `FAILED` (saída **1**).
+- **Sai:** a linha final `BKP_RESULT` com `evidence_sha256`, `manifest_sha256` e a reconciliação; o artefato com os arquivos. **(PLANEJADO)** O envio da evidência ao OneDrive.
+
+#### Passo 15: o engine reporta o resultado
+- **Quem:** Engine.
+- **O que acontece:** lê o `BKP_RESULT` final e reporta ao HITL o estado, as restrições aceitas, a reconciliação e os hashes. **Sucesso do workflow não prova preservação**: vale o manifest validado.
+
+### 2.4 Diagrama do fluxo
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor HITL
+    participant Engine
+    participant Main as main e commands.log
+    participant Disp as Dispatcher
+    participant BKP as BKP_REPO
+    participant Src as Origem no GitHub
+    participant OD as OneDrive
+
+    Engine->>Engine: Le BACKUP_REPOSITORY.md e capabilities.yaml
+    Engine->>HITL: Capability Menu
+    HITL->>Engine: backup_repository, source_repository, destination
+    Note over Engine: O Mnemonic BKP_REPO vem do capabilities.yaml
+    Engine->>HITL: ECR lido do backup-repository.yml
+    HITL->>Engine: GO
+    Engine->>Main: Acrescenta uma linha no commands.log
+    Main->>Disp: O push dispara o Dispatcher
+    Disp->>Disp: Valida push, log, schema, request_id e Mnemonic
+    Disp->>BKP: workflow_call com os 4 inputs
+    BKP->>BKP: Revalida os inputs
+    BKP->>Src: Token do App Reader, somente leitura
+    BKP->>BKP: Capability Preflight
+    alt lacunas sem decisao do HITL
+        BKP-->>Engine: BKP_RESULT BLOCKED com required_restrictions
+        Engine->>HITL: Reporta as restricoes
+        HITL->>Engine: STOP ou CONTINUE_WITH_RESTRICTIONS
+        Note over Engine,Main: Se CONTINUE, nova linha e novo GO, volta ao ECR
+    else sem lacunas ou decisao ja aceita
+        BKP->>OD: Valida o destino, PLANEJADO
+        Note over BKP,OD: Hoje o destino falha fechado, saida 20
+        BKP->>Src: Mirror, fsck, LFS e submodulos
+        BKP->>OD: Pacote e evidencia, PLANEJADO
+        BKP-->>Engine: BKP_RESULT final
+        Engine->>HITL: Reporta estado, restricoes e reconciliacao
+    end
+```
+
+### 2.5 Anatomia da linha do `commands.log`
+
+Uma linha JSON por comando, sem quebras internas. Esquema em `backup/schemas/commands-log-line.schema.yaml`.
+
+| Campo | O que é | Regra |
+|---|---|---|
+| `request_id` | Identificador único da requisição | 8 a 64 caracteres `[A-Za-z0-9._-]`. Não pode repetir nenhum id já usado no log. Convenção adotada: `req-AAAAMMDD-NNN`. |
+| `mnemonic` | Comando a executar | Vem do registro. Valores aceitos hoje: `BKP_REPO`. |
+| `ts` | Hora da gravação | UTC, ISO 8601. |
+| `authorization` | O GO do HITL | `decision: GO`, `authorized_scope: EXACT_COMMAND_REQUEST`, `reusable: false`. |
+| `params.source_repository` | Origem do backup | Formato `dono/nome`. Somente leitura. |
+| `params.destination` | Pasta no OneDrive | Relativo ao AppFolder; sem `/` inicial e sem `..`. |
+| `params.preflight_decision` | Só na linha de continuação | `previous_request_id`, `hitl_decision: CONTINUE_WITH_RESTRICTIONS`, `accepted_restrictions` (lista). |
+
+Exemplo de uma 1ª linha (numa única linha no arquivo real):
+
+```json
+{"request_id":"req-20260929-001","mnemonic":"BKP_REPO","ts":"2026-09-29T04:35:22Z","authorization":{"decision":"GO","authorized_scope":"EXACT_COMMAND_REQUEST","reusable":false},"params":{"source_repository":"Moriblo/Minha_Caixinha_de_Saude","destination":"Minha_Caixinha_de_Saude"}}
+```
+
+A linha de continuação é igual, com outro `request_id` e, em `params`, o bloco `preflight_decision` (abreviado aqui):
+
+```json
+"preflight_decision":{"previous_request_id":"req-20260929-001","hitl_decision":"CONTINUE_WITH_RESTRICTIONS","accepted_restrictions":[{"restriction_id":"RST-issues-EXECUTION_CAPABILITY_GAP","object_class":"issues","restriction":"...","source_gap_classification":"EXECUTION_CAPABILITY_GAP"}]}
+```
+
+O log é **append-only**: uma linha nunca é editada nem apagada. Uma linha recusada continua no arquivo, e o `request_id` dela fica **queimado**.
+
+### 2.6 De onde vem o Mnemonic
+
+| Etapa | Quem | O que faz |
+|---|---|---|
+| **Declaração** | Registro (`backup/capabilities.yaml`, capability `backup_repository`, campo `mnemonic: BKP_REPO`) | É a **origem**. O Mnemonic é um rótulo fixo, declarado por escrito e alterado só por pull request. |
+| **Leitura** | Engine (passos 1 e 2) | Descobre o Mnemonic ao ler o registro e ao HITL escolher a capability. |
+| **Transporte** | Engine (passo 5) | Copia o Mnemonic para o campo `mnemonic` da linha, depois do GO. Não o calcula. |
+| **Validação** | Dispatcher (passo 6) | Confere se o schema o aceita, se o mapeamento fixo o conhece e se o registro concorda. |
+| **Tradução** | Dispatcher (passo 7) | Converte o Mnemonic em workflow: `BKP_REPO` → `backup-repository.yml`. |
+
+Ninguém, em execução, **escolhe** o Mnemonic. Um Mnemonic novo precisa ser declarado, por pull request, em quatro lugares: o registro, o `enum` do schema da linha, o mapa do `dispatch_check.py` e um job do `dispatcher.yml`. Sem isso, o dispatcher recusa a linha.
+
+### 2.7 Situações de uma requisição e o que fazer
+
+| Situação | Como se chega | O que fazer |
+|---|---|---|
+| **Proposta** | Passo 3 | O HITL revisa o ECR. |
+| **Autorizada** | GO no passo 4 | O engine grava a linha. |
+| **Recusada pelo Dispatcher** | Violação no passo 6 (saída 30) | Corrigir a causa. Se a linha já entrou no log, o `request_id` está queimado: a nova tentativa usa **outro** id, e a linha ruim permanece no log. |
+| **`REJECTED`** | Inputs inválidos no passo 8 (saída 2) | Idem: corrigir e gravar nova linha com novo id. |
+| **`BLOCKED` (preflight)** | Lacunas sem decisão (saída 10) | O HITL decide `STOP` ou `CONTINUE_WITH_RESTRICTIONS` (passo 10). |
+| **`BLOCKED` (destino)** | Destino não validado (saída 20) | Resolver a causa. Hoje, isso depende do PR do OneDrive. |
+| **`PREFLIGHT_OK`** | Preflight passou | A execução segue para o destino e a leitura da origem. |
+| **`COMPLETE`, `COMPLETE_WITH_EXCEPTIONS`, `FAILED`** | Fim da preservação (passo 14) | O engine reporta (passo 15). Só o manifest validado prova a preservação. |
 
 ## 3. Inventário de arquivos
 
