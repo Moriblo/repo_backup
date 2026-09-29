@@ -653,3 +653,25 @@ implementation_artifacts:
       status: NOT_VALIDATED
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
+
+  # ---------------------------------------------------------------------------
+  # Workflow de DIAGNÓSTICO TEMPORÁRIO (workflow_dispatch): exercita só a leitura Git
+  # (token do App Reader, mirror, fsck, LFS, submódulos) enquanto o destino OneDrive
+  # não existe. Não faz parte do fluxo do BKP_REPO e não prova preservação.
+  # REMOVER (arquivo e este registro) quando o destino OneDrive estiver funcionando.
+  # ---------------------------------------------------------------------------
+  - artifact_id: diagnostic_git_read_test
+    artifact_type: GITHUB_ACTIONS_WORKFLOW
+    location:
+      repository: Moriblo/repo_backup
+      path: .github/workflows/diagnostic-git-read.yml
+    purpose: Temporary manual diagnostic of the Git read route; removed once the OneDrive destination works.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      current_sha: 6f51ac45d541e630776764b7d20a49fbbc49eeb3
+    validation:
+      status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: SUPPORTS}
