@@ -106,8 +106,14 @@ jobs:
     steps:
       # Baixa ESTE repositório (execução/controle) para ter scripts e schemas.
       # Não é a origem do backup.
+      # persist-credentials: false impede o checkout de gravar o cabeçalho Authorization do
+      # GITHUB_TOKEN na configuração do git. Sem isso, o `git ls-remote` do passo de comparação de
+      # refs (que roda neste diretório e envia o SOURCE_TOKEN) mandava DOIS cabeçalhos
+      # Authorization e o GitHub respondia HTTP 400 "Duplicate header" (run do req-20260929-006).
       - name: Checkout execution repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Bibliotecas dos scripts: PyYAML (lê capabilities/schemas), jsonschema (valida) e
       # PyNaCl (o GitHub exige "sealed box" para gravar o secret do refresh token).
