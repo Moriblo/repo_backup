@@ -1,22 +1,49 @@
+# =============================================================================
+# Schema do manifest de preservação (backup-manifest.schema.yaml), versão 2.0
+# =============================================================================
+# O QUE É
+#   Formato do manifest.json: reconciliação legível por máquina do que foi
+#   preservado, das restrições aceitas e das limitações. É a entrada autoritativa
+#   do relatório final (nenhum relatório pode remover ou enfraquecer o que consta aqui).
+#
+# QUEM USA
+#   bkp_repo.py (build-evidence) valida o manifest contra este schema.
+#
+# STATUS FINAL (regras no `allOf` no fim do arquivo)
+#   COMPLETE                  só sem restrições, limitações ou objetos parciais/falhos/não verificados.
+#   COMPLETE_WITH_EXCEPTIONS  concluído com exceções aceitas explicitamente.
+#   BLOCKED / FAILED / IN_PROGRESS  demais casos.
+#   Conclusão de workflow NUNCA prova preservação: vale o manifest validado.
+# =============================================================================
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: backup-manifest.schema.yaml
 title: Full Repository Preservation Manifest
 
+# O manifest é um objeto com os campos abaixo.
 type: object
 additionalProperties: false
+# Campos obrigatórios do manifest.
 required: [schema_version, request_id, capability_id, scope, started_at, status, capability_preflight, artifacts, reconciliation, limitations]
 
 properties:
+  # Versão do schema do manifest.
   schema_version: {const: "2.0"}
+  # request_id da execução.
   request_id: {type: string, minLength: 1}
+  # Capability executada.
   capability_id: {type: string, minLength: 1}
+  # Escopo: origem e destino.
   scope: {type: object, minProperties: 1}
+  # Início da execução (UTC, ISO 8601).
   started_at: {type: string, format: date-time}
+  # Fim da execução; nulo se ainda em andamento.
   completed_at: {type: [string, "null"], format: date-time}
 
+  # Status final da execução (ver o cabeçalho e as regras no `allOf`).
   status:
     enum: [IN_PROGRESS, COMPLETE, COMPLETE_WITH_EXCEPTIONS, BLOCKED, FAILED]
 
+  # Resumo do preflight e das restrições aceitas, que permanecem rastreáveis até o relatório final.
   capability_preflight:
     type: object
     additionalProperties: false
@@ -24,6 +51,7 @@ properties:
     properties:
       status: {enum: [PASS, GAPS_IDENTIFIED]}
       hitl_decision: {enum: [NOT_REQUIRED, CONTINUE_WITH_RESTRICTIONS]}
+      # Restrições aceitas pelo HITL, com restriction_id estável.
       accepted_restrictions:
         type: array
         items:
@@ -37,6 +65,7 @@ properties:
             source_gap_classification:
               enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
 
+  # Arquivos gerados, cada um com caminho, SHA-256 e classe de objeto.
   artifacts:
     type: array
     items:
@@ -45,31 +74,43 @@ properties:
       required: [path, sha256, object_class]
       properties:
         path: {type: string, minLength: 1}
+        # SHA-256 (hex minúsculo, 64 caracteres) do arquivo.
         sha256: {type: string, pattern: "^[a-f0-9]{64}$"}
         object_class: {type: string, minLength: 1}
         bytes: {type: integer, minimum: 0}
+        # Restrições aceitas que se aplicam a este arquivo.
         restriction_ids:
           type: array
           uniqueItems: true
           items: {type: string, minLength: 1}
 
+  # Contagem de objetos por disposição, mais classes não reconciliadas.
   reconciliation:
     type: object
     additionalProperties: false
     required: [preserved, equivalent, partial, non_exportable, failed, not_verified, unreconciled_object_classes, restrictions_reconciled]
     properties:
+      # Objetos PRESERVED.
       preserved: {type: integer, minimum: 0}
+      # Objetos PRESERVED-AS-EQUIVALENT-REPRESENTATION.
       equivalent: {type: integer, minimum: 0}
+      # Objetos PARTIALLY-PRESERVED.
       partial: {type: integer, minimum: 0}
+      # Objetos NON-EXPORTABLE.
       non_exportable: {type: integer, minimum: 0}
+      # Objetos FAILED.
       failed: {type: integer, minimum: 0}
+      # Objetos NOT-VERIFIED (não lidos; nunca tratados como ausentes).
       not_verified: {type: integer, minimum: 0}
+      # Classes de objeto que ficaram sem reconciliação.
       unreconciled_object_classes:
         type: array
         uniqueItems: true
         items: {type: string, minLength: 1}
+      # Se as restrições aceitas foram reconciliadas.
       restrictions_reconciled: {type: boolean}
 
+  # Limitações que restam, cada uma ligada à restrição e à classe de origem.
   limitations:
     type: array
     items:
@@ -82,7 +123,9 @@ properties:
         restriction_id: {type: [string, "null"]}
         object_class: {type: [string, "null"]}
 
+# Regras de coerência do status final (uma por caso, abaixo).
 allOf:
+  # Regra: status COMPLETE exige zero restrições, zero limitações, contagens parcial/não exportável/falho/não verificado iguais a zero, nenhuma classe não reconciliada e restrições reconciliadas.
   - if:
       properties:
         status: {const: COMPLETE}
@@ -102,6 +145,7 @@ allOf:
             unreconciled_object_classes: {maxItems: 0}
             restrictions_reconciled: {const: true}
 
+  # Regra: havendo restrições aceitas, o status não pode ser COMPLETE.
   - if:
       properties:
         capability_preflight:
@@ -114,6 +158,7 @@ allOf:
         status:
           enum: [IN_PROGRESS, COMPLETE_WITH_EXCEPTIONS, BLOCKED, FAILED]
 
+  # Regra: havendo limitações, o status não pode ser COMPLETE.
   - if:
       properties:
         limitations: {minItems: 1}
@@ -123,6 +168,7 @@ allOf:
         status:
           enum: [IN_PROGRESS, COMPLETE_WITH_EXCEPTIONS, BLOCKED, FAILED]
 
+  # Regra: havendo objetos parciais, não exportáveis, falhos, não verificados ou classes não reconciliadas, o status não pode ser COMPLETE.
   - if:
       properties:
         reconciliation:
@@ -144,6 +190,7 @@ allOf:
         status:
           enum: [IN_PROGRESS, COMPLETE_WITH_EXCEPTIONS, BLOCKED, FAILED]
 
+  # Regra: COMPLETE_WITH_EXCEPTIONS exige ao menos uma exceção (restrição aceita, limitação ou contagem diferente de zero).
   - if:
       properties:
         status: {const: COMPLETE_WITH_EXCEPTIONS}

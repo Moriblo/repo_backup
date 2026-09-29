@@ -1,15 +1,51 @@
+# =============================================================================
+# Registro canônico de capabilities (capabilities.yaml)
+# =============================================================================
+# O QUE É
+#   Fonte única, legível por máquina, das políticas e controles do backup:
+#   quais capabilities existem, seu Mnemonic e workflow, as classes de objeto a
+#   preservar, as rotas aprovadas, os controles temporais e de informação
+#   protegida, e o registro de artefatos de implementação (com rastreabilidade).
+#
+# QUEM LÊ
+#   O engine (menu e ECR), o dispatch_check.py (Mnemonic -> workflow),
+#   o bkp_repo.py (classes do preflight) e o HITL (manutenção).
+#
+# COMO ESTÁ ORGANIZADO (de cima para baixo)
+#   1. Vocabulários: rotas, estados, lacunas, preservação, estados temporais.
+#   2. Políticas: alertas, preservação temporal (MRBI/CRR), informação protegida.
+#   3. object_classes: cada classe de objeto do GitHub e como lê-la.
+#   4. capabilities: o menu (backup_repository, backup_projects e informativas).
+#   5. artifact_traceability + implementation_artifacts: artefatos que
+#      implementam o sistema e a que capability cada um serve.
+#
+# REGRAS
+#   - O texto normativo é o BACKUP_REPOSITORY.md; este arquivo o torna executável.
+#   - Alterar aqui muda o comportamento do sistema: só por pull request.
+#   - Nomes em MAIÚSCULAS são códigos usados por scripts e schemas; não os traduza.
+# =============================================================================
 schema_version: "2.0"
 
+# Repositório de execução/controle. Nunca é a origem de um backup; só lê a origem e escreve no destino autorizado.
 execution_repository: Moriblo/repo_backup
 
+# Valores padrão que valem para toda capability de preservação.
+# Todos existem para impedir que o engine 'adivinhe' ou amplie a autorização.
 defaults:
+  # A origem é SEMPRE somente leitura (regra 2 do protocolo).
   source_repository_mode: READ_ONLY
+  # Parâmetro ausente nunca é inferido: o HITL informa ou confirma.
   infer_missing_parameters: false
+  # Nenhum parâmetro é herdado de uma execução anterior.
   inherit_previous_execution_parameters: false
+  # Um GO vale só para o Exact Command Request apresentado; não é reutilizável.
   authorization_reusable: false
+  # Limitação de um conector/engine não reduz o escopo do backup; vira lacuna declarada.
   connector_limitation_reduces_scope: false
+  # Não conseguir ler um objeto NÃO significa que ele não existe (regra 9).
   inability_to_read_means_absent: false
 
+# Tipos de rota pelos quais um objeto pode ser lido. Cada rota é avaliada separadamente no Capability Preflight.
 route_types:
   - ENGINE_NATIVE
   - CONNECTOR
@@ -20,9 +56,11 @@ route_types:
   - SPECIALIZED_CAPABILITY
   - DETERMINISTIC_EXECUTOR
 
+# Mecanismos históricos de rota. WORKFLOW é preservado por compatibilidade e NÃO é sinônimo do resultado ROUTED.
 historical_route_mechanisms:
   - WORKFLOW
 
+# Estado de uma rota numa execução: disponível, parcial, indisponível, não aplicável ou não verificada.
 route_states:
   - AVAILABLE
   - PARTIAL
@@ -30,6 +68,9 @@ route_states:
   - NOT_APPLICABLE
   - NOT_VERIFIED
 
+# Classificação das lacunas do Capability Preflight.
+# blocking_or_restricting: lacunas MATERIAIS; exigem decisão do HITL (STOP ou CONTINUE_WITH_RESTRICTIONS).
+# non_gap: fato que só o Source Inventory descobre; NUNCA entra em gaps[] nem aciona o HITL.
 gap_classifications:
   blocking_or_restricting:
     - ARCHITECTURAL_GAP
@@ -38,12 +79,14 @@ gap_classifications:
   non_gap:
     - FACTUAL_INVENTORY_PENDING
 
+# Resultado agregado da avaliação de rotas de uma classe de objeto.
 routing_outcomes:
   - DIRECT
   - ROUTED
   - PARTIAL
   - LIMITATION
 
+# Significado de cada resultado: DIRECT (rota direta basta), ROUTED (rota alternativa basta), PARTIAL (rotas combinadas cobrem em parte), LIMITATION (sem cobertura).
 routing_model:
   direct_sufficient: DIRECT
   alternate_route_sufficient: ROUTED
@@ -53,6 +96,7 @@ routing_model:
     WORKFLOW is preserved as a historical/specialized route mechanism
     and is not a synonym for the generalized ROUTED outcome.
 
+# Estados finais possíveis de cada objeto material descoberto. Nenhum objeto pode ser omitido em silêncio.
 preservation_states:
   - PRESERVED
   - PRESERVED-AS-EQUIVALENT-REPRESENTATION
@@ -61,12 +105,14 @@ preservation_states:
   - FAILED
   - NOT-VERIFIED
 
+# Estados de objetos temporais (que expiram): disponível, expirado, apagado/indisponível ou não verificado.
 temporal_states:
   - AVAILABLE
   - EXPIRED
   - DELETED_UNAVAILABLE
   - NOT_VERIFIED
 
+# Alertas canônicos. Cada um tem uma classe e a regra que o dispara.
 alerts:
   RETENTION_ALERT:
     class: TEMPORAL
@@ -83,8 +129,10 @@ alerts:
       Emit when a current access constraint may prevent Codespaces
       repository-state delta verification or preservation.
 
+# Controles de preservação temporal: objetos que expiram têm prioridade sobre os estáveis assim que o backup é autorizado.
 temporal_preservation:
   priority: BEFORE_STABLE_OBJECTS_WHEN_BACKUP_AUTHORIZED
+  # MRBI: menor janela de retenção determinística entre as classes temporais descobertas. Risco de expulsão sem prazo NÃO vira número: gera VOLATILITY_ALERT.
   mrbi:
     name: Maximum Recommended Backup Interval
     rule: >
@@ -92,11 +140,13 @@ temporal_preservation:
       discovered temporal preservation classes.
     shorter_window_reduces_mrbi: true
     non_time_bound_eviction_is_numeric_mrbi: false
+  # CRR: retenção efetiva lida do repositório e preservada como evidência. Nunca inferida de um padrão do produto.
   crr:
     name: Current Repository Retention
     rule: >
       Read and preserve the effective repository/applicable retention
       as evidence when applicable; never infer it from a default.
+  # Classes temporais que o backup deve considerar.
   classes:
     - workflow_runs
     - workflow_attempts
@@ -114,6 +164,7 @@ temporal_preservation:
     FAILED applies when preservation fails for material that was
     available during the authorized capture window.
 
+# Regras para informação protegida (segredos etc.): metadados primeiro; texto puro nunca aparece em chat, log ou evidência.
 protected_information:
   plaintext_required_for_architectural_completeness: false
   expose_plaintext_in_chat_logs_or_plaintext_evidence: false
@@ -137,6 +188,7 @@ protected_information:
     - provenance
     - reconstruction_reissuance_references
     - evidence
+  # Como um valor protegido pode ser recuperado ou reconstruído.
   recoverability:
     - RECONSTRUCTIBLE
     - REISSUABLE
@@ -144,7 +196,18 @@ protected_information:
     - RUNTIME_ONLY_CANDIDATE
     - NOT_YET_DETERMINED
 
+# Classes de objeto do GitHub que o backup_repository preserva.
+# Campos comuns:
+#   architectural_status  ROUTE_DEFINED (há rota aprovada), ARCHITECTURALLY_SOLVED (resolvido por
+#                         combinação de rotas) ou OPEN_SET_CONTROL (controle O-24, sem lista fixa).
+#   required_read_capabilities  o que precisa ser lido para preservar a classe.
+#   approved_route_types  rotas aprovadas (ver route_types).
+#   temporal: true        a classe expira e entra nos controles temporais.
+#   protected_information / output_protected  a classe pode ter valores protegidos.
+# NOTA: hoje o executor (backup-repository.yml) só implementa 'git'. As demais viram
+# lacunas EXECUTION_CAPABILITY_GAP no preflight, aceitas como restrições pelo HITL.
 object_classes:
+  # Repositório Git: grafo de objetos completo, refs (inclusive de pull request), LFS e submódulos.
   git:
     architectural_status: ROUTE_DEFINED
     required_read_capabilities:
@@ -165,22 +228,26 @@ object_classes:
       - git_object_integrity_verification
       - verify_lfs_oids_sizes_and_hashes_when_applicable
 
+  # Issues, comentários, reações, relações, eventos e responsáveis.
   issues:
     architectural_status: ROUTE_DEFINED
     required_read_capabilities: [issues, comments, reactions, relationships, events, assignees]
     approved_route_types: [CONNECTOR, REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # Pull requests: commits, arquivos, revisões, comentários, threads e refs de PR.
   pull_requests:
     architectural_status: ROUTE_DEFINED
     required_read_capabilities: [pull_requests, commits, files, reviews, review_comments, threads, material_pr_refs]
     approved_route_types: [CONNECTOR, REST_API, GIT, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # GitHub Actions: definições de workflow, execuções, tentativas, jobs, passos, logs, artefatos e statuses. Temporal.
   actions:
     architectural_status: ROUTE_DEFINED
     temporal: true
     required_read_capabilities: [workflow_definitions, workflow_runs, workflow_attempts, jobs, steps, logs, artifacts, commit_statuses]
     approved_route_types: [CONNECTOR, REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # Projects (v2). Pode exigir REST e GraphQL combinados, pois nenhuma superfície única é completa.
   projects:
     architectural_status: ARCHITECTURALLY_SOLVED
     required_read_capabilities:
@@ -204,17 +271,20 @@ object_classes:
       reconstructible_equivalent: true
       downstream_reusable: true
 
+  # Environments: inventário, regras de proteção, políticas de branch e metadados de secrets.
   environments:
     architectural_status: ROUTE_DEFINED
     required_read_capabilities: [environment_inventory, protection_rules, branch_policies, readable_configuration, environment_variable_metadata_and_readable_values, secret_metadata]
     approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # Variáveis de Actions: nomes, valores legíveis, escopo e datas. Saída protegida.
   variables:
     architectural_status: ROUTE_DEFINED
     output_protected: true
     required_read_capabilities: [variable_inventory, names, readable_values, timestamps_when_exposed, scope]
     approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # Metadados de secrets. Informação protegida; o texto puro não é exigido nem exposto.
   secret_metadata:
     architectural_status: ROUTE_DEFINED
     protected_information: true
@@ -222,21 +292,25 @@ object_classes:
     approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, SPECIALIZED_CAPABILITY, DETERMINISTIC_EXECUTOR]
     plaintext_required: false
 
+  # Deployments e seus statuses.
   deployments:
     architectural_status: ROUTE_DEFINED
     required_read_capabilities: [deployments, deployment_statuses]
     approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # Rulesets e proteção de branch.
   rules_and_branch_protection:
     architectural_status: ROUTE_DEFINED
     required_read_capabilities: [rulesets, branch_protection, required_checks_when_exposed, restrictions_when_exposed]
     approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # Colaboradores, permissões e convites.
   collaborators:
     architectural_status: ROUTE_DEFINED
     required_read_capabilities: [collaborator_inventory, permissions, invitations_when_exposed]
     approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # Webhooks e entregas. As entregas são temporais. O segredo do webhook não é exportável; sistemas externos alcançados são só referência.
   webhooks:
     architectural_status: ROUTE_DEFINED
     temporal_components: [webhook_deliveries]
@@ -256,22 +330,26 @@ object_classes:
     webhook_secret_plaintext:
       preservation_status: NON_EXPORTABLE_VALUE_REISSUABLE_WHEN_NOT_EXPOSED
 
+  # Labels e suas propriedades.
   labels:
     architectural_status: ROUTE_DEFINED
     required_read_capabilities: [label_inventory, label_properties]
     approved_route_types: [CONNECTOR, REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # Milestones e suas propriedades.
   milestones:
     architectural_status: ROUTE_DEFINED
     required_read_capabilities: [milestone_inventory, milestone_properties]
     approved_route_types: [CONNECTOR, REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # Check suites, check runs e commit statuses. Temporal.
   checks:
     architectural_status: ROUTE_DEFINED
     temporal: true
     required_read_capabilities: [check_suites, check_runs, commit_statuses]
     approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
 
+  # Caches de Actions. Temporal, com risco de expulsão sem prazo (VOLATILITY_ALERT).
   actions_caches:
     architectural_status: ROUTE_DEFINED
     temporal: true
@@ -279,6 +357,7 @@ object_classes:
     approved_route_types: [REST_API, AUTHORIZED_API_IDENTITY, DETERMINISTIC_EXECUTOR]
     non_time_bound_eviction_risk: true
 
+  # Codespaces: só o delta de estado do repositório (commits não enviados, arquivos rastreados modificados e conteúdo não rastreado). O estado da VM fica fora.
   codespaces_repository_state_delta:
     architectural_status: ROUTE_DEFINED
     required_read_capabilities:
@@ -292,12 +371,16 @@ object_classes:
     required_order: [discover, assess_accessibility, verify_repository_state_delta, record_evidence_and_state, evaluate_retention]
     official_export_alone_proves_completeness: false
 
+  # Controle O-24: qualquer estado material novo descoberto deve ser classificado, receber rota ou disposição, ser evidenciado e reconciliado.
   other_discovered_state:
     architectural_status: OPEN_SET_CONTROL
     control_id: O-24
     required_behavior: [classify_new_material_state, assign_preservation_or_disposition_route, evidence_state, never_silently_omit]
     approved_route_types: [ENGINE_NATIVE, CONNECTOR, GIT, REST_API, GRAPHQL_API, AUTHORIZED_API_IDENTITY, SPECIALIZED_CAPABILITY, DETERMINISTIC_EXECUTOR]
 
+# Menu de capabilities. As que têm `hitl_required: true` exigem GO do HITL.
+# Só uma capability com `mnemonic` e `command_workflow` gera linha no commands.log
+# (hoje, apenas backup_repository).
 capabilities:
   - id: backup_repository
     name: Backup Repository
@@ -329,15 +412,19 @@ capabilities:
       path: commands.log
       # Schema que valida cada linha (envelope comum + params por Mnemonic).
       line_schema: backup/schemas/commands-log-line.schema.yaml
+    # Classe da capability: execução de preservação (as outras são informativas ou de validação).
     class: PRESERVATION_EXECUTION
+    # Exige GO do HITL antes de qualquer execução.
     hitl_required: true
     source_repository_mode: READ_ONLY
+    # Executor determinístico. `artifact_id` liga ao registro de artefatos no fim do arquivo. `required_for_capability_definition: false` = a capability existe mesmo sem este executor.
     deterministic_executor:
       artifact_id: backup_repository_executor
       reference: github_actions:backup-repository.yml
       current_materialization: MATERIALIZED
       historical_existence: MATERIALIZED_IN_CURRENT_GOVERNED_CHANGE
       required_for_capability_definition: false
+    # Capability Preflight: roda APÓS o GO e ANTES do Source Inventory; avalia se a execução AUTORIZADA consegue ler tudo que importa.
     capability_preflight:
       required: true
       timing: AFTER_HITL_GO_BEFORE_SOURCE_INVENTORY
@@ -349,12 +436,15 @@ capabilities:
       gap_report_requires: [object_class, unreadable_or_undiscoverable_scope, gap_classification, required_capability, routes_assessed, cause, preservation_impact, resulting_restriction]
       inability_to_read_means_absent: false
       accepted_restrictions_traceable: true
+    # Parâmetros do comando. `source: HITL` = informado pelo humano; `HITL_OR_EXPLICIT_CONFIRMATION` = o engine pode propor, o HITL confirma.
     parameters:
       source_repository: {type: string, required: true, source: HITL}
       destination: {type: string, required: true, source: HITL_OR_EXPLICIT_CONFIRMATION}
       additional_parameters: {type: object, required: false, source: HITL_WHEN_APPLICABLE}
+    # Classes de objeto (de object_classes) que este backup cobre.
     includes: [git, issues, pull_requests, actions, projects, environments, variables, secret_metadata, deployments, rules_and_branch_protection, collaborators, webhooks, labels, milestones, checks, actions_caches, codespaces_repository_state_delta, other_discovered_state]
 
+  # Backup de Projects. Chamável sozinho e também incluído pelo backup_repository. SEM Mnemonic e SEM executor materializado: hoje não gera comando.
   - id: backup_projects
     name: Backup Projects
     class: PRESERVATION_EXECUTION
@@ -366,9 +456,11 @@ capabilities:
       current_materialization: NOT_MATERIALIZED
       historical_existence: NOT_DETERMINED
       required_for_capability_definition: false
+    # Relação com o backup_repository: Projects relacionados entram no backup do repositório; também pode ser chamado isoladamente.
     relationship_to_backup_repository:
       related_projects_included_by_backup_repository: true
       independently_callable: true
+    # Rotas exigidas: REST e GraphQL, combinadas.
     required_routes: [REST_API, GRAPHQL_API]
     combined_surfaces_may_be_required: true
     preservation_representation:
@@ -387,19 +479,26 @@ capabilities:
       destination: {type: string, required: true, source: HITL_OR_EXPLICIT_CONFIRMATION}
       additional_parameters: {type: object, required: false, source: HITL_WHEN_APPLICABLE}
 
+  # Capabilities informativas e de validação: respondidas pelo engine na conversa; não têm Mnemonic nem workflow e nunca geram linha de comando.
   - {id: list_capabilities, name: List Capabilities, class: INFORMATIONAL, hitl_required: false}
   - {id: show_status, name: Show Status, class: INFORMATIONAL, hitl_required: false}
   - {id: validate_evidence, name: Validate Evidence, class: VALIDATION, hitl_required: false}
   - {id: help, name: Help, class: INFORMATIONAL, hitl_required: false}
 
 
+# Regras de rastreabilidade capability <-> artefato de implementação (detalhes no BACKUP_REPOSITORY.md).
+# Relação N:M, registrada uma vez em implementation_artifacts; a consulta inversa é derivada.
 artifact_traceability:
   registry_authority: THIS_FILE
   registry_path: backup/capabilities.yaml
   model: CANONICAL_N_TO_M
+  # Tipos de relação: EXECUTES (executa), VALIDATES (valida), SCHEMATIZES (define schema), CONFIGURES (configura), SUPPORTS (apoia).
   relationship_types: [EXECUTES, VALIDATES, SCHEMATIZES, CONFIGURES, SUPPORTS]
+  # MATERIALIZED = o arquivo existe hoje; NOT_MATERIALIZED = registrado, mas ainda não existe.
   materialization_states: [MATERIALIZED, NOT_MATERIALIZED]
+  # Estado de validação, distinto de existir. VALIDATED exigirá evidência registrada (URL do run e commit), conforme a issue #7 (SA-06).
   validation_states: [VALIDATED, NOT_VALIDATED, REVALIDATION_REQUIRED]
+  # Integridade: o SHA de blob Git do arquivo é o identificador da versão; o SHA do commit é a proveniência. Um artefato não embute o próprio SHA.
   integrity:
     materialized_version_identifier: GIT_BLOB_SHA
     change_provenance_identifier: GIT_COMMIT_SHA
@@ -407,20 +506,31 @@ artifact_traceability:
     rule: >
       Resolve and compare the current Git blob SHA during traceability validation.
       A registry entry MUST NOT require an artifact to embed its own blob SHA.
+  # Todo artefato MATERIALIZED precisa existir no caminho registrado; senão BROKEN_REFERENCE.
   referential_integrity:
     materialized_artifact_path_must_exist: true
     not_materialized_artifact_path_may_be_absent: true
     broken_reference_state: BROKEN_REFERENCE
+  # Arquivo de implementação numa pasta gerenciada, sem artifact_id registrado, é ORPHAN_ARTIFACT.
   orphan_detection:
     required: true
     rule: >
       Any implementation artifact within a managed artifact location that is
       related to the capability system MUST have a registered artifact_id.
+  # Ao mudar um artefato, as capabilities afetadas (derivadas das relações) voltam a exigir revalidação.
   impact_analysis:
     changed_artifact_requires_capability_lookup: true
     affected_capabilities_derived_from_relationships: true
     affected_capabilities_require_revalidation: true
 
+# Artefatos que implementam o sistema. Campos:
+#   artifact_id        identificador lógico estável (não muda quando o arquivo muda).
+#   artifact_type      tipo (schema, protocolo, workflow, script...).
+#   location           repositório e caminho.
+#   materialization    MATERIALIZED ou NOT_MATERIALIZED.
+#   integrity          como a versão é rastreada (current_sha = SHA de blob Git).
+#   validation         estado de validação.
+#   relationships      capabilities atendidas e tipo da relação.
 implementation_artifacts:
   - artifact_id: capability_registry
     artifact_type: CAPABILITY_REGISTRY

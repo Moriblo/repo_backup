@@ -1,34 +1,67 @@
+# =============================================================================
+# Schema do Exact Command Request (command-request.schema.yaml)
+# =============================================================================
+# O QUE É
+#   Define o Exact Command Request (ECR) completo de uma capability: o pedido que o
+#   HITL autoriza, com os parâmetros, a decisão e o resultado do Capability Preflight.
+#
+# QUEM USA
+#   - O engine, ao montar o ECR apresentado ao HITL.
+#   - O bkp_repo.py, que valida o resultado do preflight contra o sub-schema
+#     `properties.capability_preflight` (ver cmd_preflight).
+#   NOTA: a linha gravada no commands.log é MENOR e tem schema próprio
+#   (commands-log-line.schema.yaml). Este schema descreve o pedido completo.
+#
+# CONVENÇÕES
+#   - `additionalProperties: false` em quase tudo: campo desconhecido é rejeitado.
+#   - Os valores em MAIÚSCULAS são códigos do protocolo (BACKUP_REPOSITORY.md).
+# =============================================================================
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: command-request.schema.yaml
 title: Governed Backup Command Request
 
+# O ECR é um objeto com os campos abaixo.
 type: object
 additionalProperties: false
+# Campos obrigatórios do ECR. `capability_preflight` é exigido só para backup_repository (regra no `allOf` final).
 required: [request_id, capability_id, execution_parameters, authorization, invariants]
 
 properties:
+  # Identificador único da requisição.
   request_id: {type: string, minLength: 1}
+  # Capability do menu (ex.: backup_repository).
   capability_id: {type: string, minLength: 1}
+  # Valores informados ou confirmados pelo HITL (ex.: source_repository, destination). Pelo menos um.
   execution_parameters: {type: object, minProperties: 1}
 
+  # Autorização do HITL para ESTE pedido exato.
   authorization:
     type: object
     additionalProperties: false
     required: [hitl_required, decision, authorized_scope, reusable]
     properties:
+      # Se a capability exige HITL.
       hitl_required: {type: boolean}
+      # Decisão do HITL. NO-GO rejeita a execução.
       decision: {enum: [GO, NO-GO]}
+      # A autorização vale só para o pedido exato apresentado (não é transitiva).
       authorized_scope: {const: EXACT_COMMAND_REQUEST}
+      # A autorização nunca é reutilizável: outra execução exige novo GO.
       reusable: {const: false}
 
+  # Resultado do Capability Preflight (após o GO e antes do Source Inventory).
+  # Responde: a execução autorizada tem capacidade efetiva de leitura para tudo que pode afetar a preservação?
   capability_preflight:
     type: object
     additionalProperties: false
     required: [required, status, assessments, gaps, factual_inventory_pending, hitl_decision, accepted_restrictions]
     properties:
+      # Se o preflight é exigido (sempre true para backup_repository).
       required: {type: boolean}
+      # NOT_RUN = ainda não rodou; PASS = sem lacunas materiais; GAPS_IDENTIFIED = há lacunas que exigem decisão do HITL.
       status: {enum: [NOT_RUN, PASS, GAPS_IDENTIFIED]}
 
+      # Avaliação por classe de objeto: rotas avaliadas, cada uma com seu estado, e a capacidade efetiva de leitura.
       assessments:
         type: array
         items:
@@ -37,6 +70,7 @@ properties:
           required: [object_class, architectural_status, required_read_capabilities, routes, effective_read_capability]
           properties:
             object_class: {type: string, minLength: 1}
+            # Status arquitetural da classe (vem de object_classes no capabilities.yaml).
             architectural_status:
               enum: [ROUTE_DEFINED, ARCHITECTURALLY_SOLVED, OPEN_SET_CONTROL, ARCHITECTURAL_GAP]
             required_read_capabilities:
@@ -51,14 +85,18 @@ properties:
                 additionalProperties: false
                 required: [route_type, state, authorized]
                 properties:
+                  # Tipo da rota avaliada (ver route_types no capabilities.yaml).
                   route_type:
                     enum: [ENGINE_NATIVE, CONNECTOR, GIT, REST_API, GRAPHQL_API, AUTHORIZED_API_IDENTITY, SPECIALIZED_CAPABILITY, DETERMINISTIC_EXECUTOR]
                   route_reference: {type: [string, "null"]}
                   state: {enum: [AVAILABLE, PARTIAL, UNAVAILABLE, NOT_APPLICABLE, NOT_VERIFIED]}
                   authorized: {type: boolean}
                   limitation: {type: [string, "null"]}
+            # Capacidade efetiva de leitura da classe, somando as rotas autorizadas.
             effective_read_capability: {enum: [AVAILABLE, PARTIAL, UNAVAILABLE, NOT_VERIFIED]}
 
+      # Lacunas MATERIAIS do preflight (ARCHITECTURAL, EXECUTION_CAPABILITY ou ACCESS_PERMISSION).
+      # FACTUAL_INVENTORY_PENDING é proibido aqui: pertence só a factual_inventory_pending.
       gaps:
         description: >
           Material Capability Preflight gaps only. FACTUAL_INVENTORY_PENDING
@@ -82,6 +120,7 @@ properties:
             preservation_impact: {type: string, minLength: 1}
             resulting_restriction: {type: string, minLength: 1}
 
+      # Fatos que só o Source Inventory descobre. Não mudam PASS para GAPS_IDENTIFIED e não acionam o HITL.
       factual_inventory_pending:
         description: >
           Non-gap facts deferred to Source Inventory. Entries here do not
@@ -96,9 +135,11 @@ properties:
             pending_fact: {type: string, minLength: 1}
             route_defined: {const: true}
 
+      # Decisão do HITL sobre as lacunas: NOT_REQUIRED (sem lacunas), PENDING (aguardando), STOP ou CONTINUE_WITH_RESTRICTIONS.
       hitl_decision:
         enum: [NOT_REQUIRED, PENDING, STOP, CONTINUE_WITH_RESTRICTIONS]
 
+      # Restrições aceitas pelo HITL, cada uma com restriction_id estável, rastreável até a evidência e o manifest.
       accepted_restrictions:
         type: array
         items:
@@ -112,7 +153,9 @@ properties:
             source_gap_classification:
               enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
 
+    # Coerência entre status, lacunas, decisão e restrições (uma regra por caso, abaixo).
     allOf:
+      # Regra: status NOT_RUN => sem lacunas, decisão NOT_REQUIRED e sem restrições.
       - if:
           properties:
             status: {const: NOT_RUN}
@@ -123,6 +166,7 @@ properties:
             hitl_decision: {const: NOT_REQUIRED}
             accepted_restrictions: {maxItems: 0}
 
+      # Regra: status PASS => sem lacunas, decisão NOT_REQUIRED e sem restrições.
       - if:
           properties:
             status: {const: PASS}
@@ -133,6 +177,7 @@ properties:
             hitl_decision: {const: NOT_REQUIRED}
             accepted_restrictions: {maxItems: 0}
 
+      # Regra: status GAPS_IDENTIFIED => pelo menos uma lacuna e decisão PENDING, STOP ou CONTINUE_WITH_RESTRICTIONS.
       - if:
           properties:
             status: {const: GAPS_IDENTIFIED}
@@ -142,6 +187,7 @@ properties:
             gaps: {minItems: 1}
             hitl_decision: {enum: [PENDING, STOP, CONTINUE_WITH_RESTRICTIONS]}
 
+      # Regra: decisão CONTINUE_WITH_RESTRICTIONS => status GAPS_IDENTIFIED, pelo menos uma lacuna e pelo menos uma restrição aceita.
       - if:
           properties:
             hitl_decision: {const: CONTINUE_WITH_RESTRICTIONS}
@@ -152,6 +198,7 @@ properties:
             gaps: {minItems: 1}
             accepted_restrictions: {minItems: 1}
 
+      # Regra: decisão STOP => status GAPS_IDENTIFIED e nenhuma restrição aceita.
       - if:
           properties:
             hitl_decision: {const: STOP}
@@ -162,6 +209,7 @@ properties:
             gaps: {minItems: 1}
             accepted_restrictions: {maxItems: 0}
 
+      # Regra: decisão PENDING => status GAPS_IDENTIFIED e nenhuma restrição aceita.
       - if:
           properties:
             hitl_decision: {const: PENDING}
@@ -172,16 +220,22 @@ properties:
             gaps: {minItems: 1}
             accepted_restrictions: {maxItems: 0}
 
+  # Invariantes do protocolo: valem em toda execução e não podem ser alteradas por parâmetro.
   invariants:
     type: object
     additionalProperties: false
     required: [source_repository_mode, infer_missing_parameters, inherit_previous_execution_parameters, expand_authorization_scope]
     properties:
+      # A origem é sempre somente leitura.
       source_repository_mode: {const: READ_ONLY}
+      # Parâmetro ausente nunca é inferido.
       infer_missing_parameters: {const: false}
+      # Nada é herdado de execuções anteriores.
       inherit_previous_execution_parameters: {const: false}
+      # O escopo autorizado nunca é ampliado.
       expand_authorization_scope: {const: false}
 
+# Regra por capability: backup_repository exige o bloco capability_preflight, com required=true.
 allOf:
   - if:
       properties:

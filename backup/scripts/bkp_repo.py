@@ -129,10 +129,12 @@ def cmd_validate_inputs():
     regras (o schema), sem duplicar padrões de regex neste script.
     Falha com saída 2 e status REJECTED.
     """
+    # Valores recebidos do workflow. Chegam por variável de ambiente (nunca interpolados no shell), o que evita injeção de comando.
     params = {
         "source_repository": os.environ.get("SOURCE_REPOSITORY", ""),
         "destination": os.environ.get("DESTINATION", ""),
     }
+    # Decisão do HITL (só existe em linha de continuação). None = 1ª execução.
     decision = parse_decision()
     if decision is not None:
         params["preflight_decision"] = decision
@@ -144,9 +146,12 @@ def cmd_validate_inputs():
         "authorization": {"decision": "GO", "authorized_scope": "EXACT_COMMAND_REQUEST", "reusable": False},
         "params": params,
     }
+    # O schema da linha do commands.log é a ÚNICA definição das regras de entrada: nada de regex duplicada aqui.
     schema = load("backup/schemas/commands-log-line.schema.yaml")
+    # Coleta TODOS os erros de uma vez, em ordem estável, para o log mostrar tudo que está errado.
     errors = sorted(jsonschema.Draft202012Validator(schema).iter_errors(line), key=str)
     if errors:
+        # Cada erro vira uma anotação ::error:: no log do job (visível na tela do run).
         for e in errors:
             print(f"::error::input validation: {e.message}")
         result("REJECTED", reason="INPUT_VALIDATION")
@@ -157,6 +162,7 @@ def cmd_validate_inputs():
         print("::error::preflight_decision.previous_request_id must differ from request_id")
         result("REJECTED", reason="AUTHORIZATION_REUSE")
         sys.exit(2)
+    # Só chega aqui se a entrada passou em todas as verificações.
     print(f"Inputs valid for {params['source_repository']}")
 
 
@@ -174,9 +180,13 @@ def build_preflight():
     # aqui o resultado dele decide se a leitura da origem está disponível.
     token_ok = os.environ.get("TOKEN_OUTCOME") == "success"
     assessments, gaps, pending = [], [], []
+    # Uma avaliação por classe de objeto que o backup_repository cobre (lista `includes` do capabilities.yaml).
     for cls in cap["includes"]:
+        # spec = definição da classe: leituras exigidas e rotas aprovadas.
         spec = caps["object_classes"][cls]
+        # True só para classes com rota realmente implementada neste executor.
         implemented = cls in IMPLEMENTED_CLASSES
+        # Rotas avaliadas desta classe; cada tipo de rota aprovado é avaliado separadamente.
         routes = []
         # Cada tipo de rota aprovado é avaliado separadamente (BACKUP_REPOSITORY.md).
         for rt in spec["approved_route_types"]:
@@ -196,6 +206,7 @@ def build_preflight():
                 # não existem, apenas que não foram avaliadas.
                 routes.append({"route_type": rt, "route_reference": None, "state": "NOT_VERIFIED",
                                "authorized": False, "limitation": "Route not assessed; only the deterministic executor is in scope of this execution."})
+        # Capacidade efetiva: só é AVAILABLE se a classe está implementada E o token de leitura foi emitido.
         effective = "AVAILABLE" if implemented and token_ok else "UNAVAILABLE"
         assessments.append({
             "object_class": cls,
@@ -205,6 +216,7 @@ def build_preflight():
             "routes": routes,
             "effective_read_capability": effective,
         })
+        # Sem leitura efetiva, a classe vira lacuna MATERIAL declarada; nunca é tratada como ausente nem como preservada.
         if effective != "AVAILABLE":
             # Classe implementada sem token = problema de ACESSO.
             # Classe não implementada = falta de CAPACIDADE DE EXECUÇÃO.
@@ -252,12 +264,16 @@ def cmd_preflight():
     assessments, gaps, pending = build_preflight()
     pf = {"required": True, "status": "PASS", "assessments": assessments, "gaps": gaps,
           "factual_inventory_pending": pending, "hitl_decision": "NOT_REQUIRED", "accepted_restrictions": []}
+    # Código de saída do preflight: 0 = segue; 10 = BLOCKED (falta decisão do HITL).
     exit_code = 0
+    # Com lacunas materiais, o preflight não passa sozinho: precisa da decisão do HITL.
     if gaps:
         pf["status"] = "GAPS_IDENTIFIED"
         pf["hitl_decision"] = "PENDING"
+        # Restrições que o HITL PRECISA aceitar, indexadas por restriction_id.
         needed = {restriction_id(g): g for g in gaps}
         decision = parse_decision()
+        # Restrições que o HITL de fato aceitou na linha de continuação (vazio se não houve decisão).
         accepted = {a["restriction_id"]: a for a in (decision or {}).get("accepted_restrictions", [])}
         # `<=` entre conjuntos: todo ID exigido precisa constar entre os aceitos.
         if decision and set(needed) <= set(accepted):
@@ -274,11 +290,13 @@ def cmd_preflight():
     # Valida o resultado contra o sub-schema `capability_preflight` do command-request.
     schema = load("backup/schemas/command-request.schema.yaml")["properties"]["capability_preflight"]
     jsonschema.validate(pf, schema)
+    # preflight.json é gravado mesmo no BLOCKED: o workflow o publica como artefato (rastro da decisão pendente).
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     (EVIDENCE / "preflight.json").write_text(json.dumps(pf, indent=2, sort_keys=True) + "\n")
     # Lista pronta para o HITL copiar na linha de continuação do commands.log.
     required = [{"restriction_id": restriction_id(g), "object_class": g["object_class"],
                  "restriction": g["resulting_restriction"], "source_gap_classification": g["gap_classification"]} for g in gaps]
+    # BLOCKED: emite BKP_RESULT com a lista de restrições para o engine apresentar ao HITL.
     if exit_code:
         result("BLOCKED", reason="CAPABILITY_PREFLIGHT_GAPS", hitl_decision="PENDING",
                required_restrictions=required)
@@ -339,13 +357,16 @@ def cmd_build_evidence():
     if os.environ.get("DESTINATION_VALIDATED") != "true":
         print("::error::Refusing to build evidence: destination was not validated.")
         sys.exit(21)
+    # Daqui em diante o destino JÁ foi validado (checado acima); é seguro montar a evidência.
     request_id = os.environ["REQUEST_ID"]
     source = os.environ["SOURCE_REPOSITORY"]
+    # Resultado do preflight desta mesma execução, gravado antes pelo subcomando `preflight`.
     pf = json.loads((EVIDENCE / "preflight.json").read_text())
     # Restrições aceitas indexadas por classe de objeto.
     accepted = {a["object_class"]: a for a in pf["accepted_restrictions"]}
     started = os.environ.get("STARTED_AT", now())
 
+    # Lista de objetos da evidência: primeiro o git, depois as classes NOT-VERIFIED.
     objects = []
     # --- Classe git: disposição decidida pelos arquivos que os passos bash gravaram ---
     git_disp, git_lim = "PRESERVED", None
@@ -360,6 +381,7 @@ def cmd_build_evidence():
                     "evidence": ["refs.tsv", "git-fsck.txt", "git-count-objects.txt", "lfs-files.txt",
                                  "lfs-verification.tsv", "gitmodules-history.tsv", "gitlinks-history.tsv"],
                     "limitation": git_lim})
+    # Limitações do manifest, cada uma ligada à sua restrição aceita (rastreabilidade).
     limitations = []
     if git_lim:
         limitations.append({"limitation_id": "LIM-git-submodules", "description": git_lim,
@@ -379,6 +401,7 @@ def cmd_build_evidence():
              "gaps": [{k: g[k] for k in ("object_class", "gap_classification", "limitation", "preservation_impact", "resulting_restriction")} for g in pf["gaps"]],
              "factual_inventory_pending": [{"object_class": p["object_class"], "pending_fact": p["pending_fact"]} for p in pf["factual_inventory_pending"]],
              "hitl_decision": pf["hitl_decision"], "accepted_restrictions": pf["accepted_restrictions"]}
+    # Corpo do evidence.json (schema 2.0).
     evidence = {
         "schema_version": "2.0", "request_id": request_id, "capability_id": "backup_repository",
         "source_scope": {"source_repository": source, "destination": os.environ["DESTINATION"]},
@@ -390,16 +413,22 @@ def cmd_build_evidence():
                       "temporal_preservation": {"mrbi": None, "crr": None,
                                                 "notes": ["Temporal classes are not read by this executor version."]}},
     }
+    # Valida ANTES de gravar: evidência fora do schema derruba a etapa (não existe 'sucesso' sem evidência válida).
     jsonschema.validate(evidence, load("backup/schemas/evidence.schema.yaml"))
     (EVIDENCE / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
 
     # Contagem de objetos por disposição, para a reconciliação do manifest.
+    # Quantos objetos têm cada disposição (base da reconciliação).
     count = lambda d: sum(o["disposition"] == d for o in objects)
     # O manifest lista cada arquivo de evidência com seu SHA-256 (exceto ele mesmo).
+    # Manifest lista cada arquivo de evidência com SHA-256 (exceto o próprio manifest).
     arts = [{"path": p.name, "sha256": sha256(p), "object_class": "evidence", "bytes": p.stat().st_size}
             for p in sorted(EVIDENCE.iterdir()) if p.is_file() and p.name != "manifest.json"]
+    # Há exceções se existirem limitações, restrições aceitas ou objetos FAILED.
     exceptions = bool(limitations or pf["accepted_restrictions"] or count("FAILED"))
+    # FAILED se algum objeto falhou; COMPLETE_WITH_EXCEPTIONS se há exceções aceitas; COMPLETE só sem nenhuma.
     status = "FAILED" if count("FAILED") else ("COMPLETE_WITH_EXCEPTIONS" if exceptions else "COMPLETE")
+    # Corpo do manifest.json (schema 2.0): reconciliação legível por máquina.
     manifest = {
         "schema_version": "2.0", "request_id": request_id, "capability_id": "backup_repository",
         "scope": evidence["source_scope"], "started_at": started, "completed_at": now(), "status": status,
@@ -412,6 +441,7 @@ def cmd_build_evidence():
                            "unreconciled_object_classes": [], "restrictions_reconciled": True},
         "limitations": limitations,
     }
+    # Também validado antes de gravar.
     jsonschema.validate(manifest, load("backup/schemas/backup-manifest.schema.yaml"))
     (EVIDENCE / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     result(status, evidence_sha256=sha256(EVIDENCE / "evidence.json"),

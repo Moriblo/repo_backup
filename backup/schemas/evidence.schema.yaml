@@ -1,24 +1,51 @@
+# =============================================================================
+# Schema da evidência de preservação (evidence.schema.yaml), versão 2.0
+# =============================================================================
+# O QUE É
+#   Formato do evidence.json que o BKP_REPO gera ao fim de uma execução: o que foi
+#   capturado, o resultado do preflight, a disposição de cada objeto e o resumo da
+#   execução. Restrições aceitas pelo HITL aparecem por restriction_id estável.
+#
+# QUEM USA
+#   bkp_repo.py (build-evidence) valida o evidence.json contra este schema antes
+#   de gravá-lo. Falha de validação derruba a etapa: sem evidência válida não há sucesso.
+#
+# REGRAS
+#   - Evidência só existe se o destino foi validado (`destination_validated: true`).
+#   - Falta de evidência nunca é sucesso: objeto não lido fica NOT-VERIFIED.
+#   - Segredo em texto puro nunca é registrado (`plaintext_exposed: false`).
+# =============================================================================
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: evidence.schema.yaml
 title: Repository Preservation Evidence
 
+# A evidência é um objeto com os campos abaixo.
 type: object
 additionalProperties: false
+# Campos obrigatórios da evidência.
 required: [schema_version, request_id, capability_id, source_scope, captured_at, capability_preflight, objects, execution]
 
 properties:
+  # Versão do schema de evidência.
   schema_version: {const: "2.0"}
+  # request_id da execução (o mesmo da linha do commands.log).
   request_id: {type: string, minLength: 1}
+  # Capability executada.
   capability_id: {type: string, minLength: 1}
+  # Escopo lido: origem e destino.
   source_scope: {type: object, minProperties: 1}
+  # Momento da captura (UTC, ISO 8601).
   captured_at: {type: string, format: date-time}
 
+  # Resumo do preflight que autorizou a execução (o detalhe completo fica em preflight.json).
   capability_preflight:
     type: object
     additionalProperties: false
     required: [status, gaps, factual_inventory_pending, hitl_decision, accepted_restrictions]
     properties:
+      # Resultado do preflight.
       status: {enum: [PASS, GAPS_IDENTIFIED]}
+      # Lacunas materiais identificadas e seu impacto na preservação.
       gaps:
         type: array
         items:
@@ -32,6 +59,7 @@ properties:
             limitation: {type: string, minLength: 1}
             preservation_impact: {type: string, minLength: 1}
             resulting_restriction: {type: string, minLength: 1}
+      # Fatos deixados para o Source Inventory (não são lacunas).
       factual_inventory_pending:
         type: array
         items:
@@ -41,8 +69,10 @@ properties:
           properties:
             object_class: {type: string, minLength: 1}
             pending_fact: {type: string, minLength: 1}
+      # Decisão do HITL; na evidência só existem NOT_REQUIRED ou CONTINUE_WITH_RESTRICTIONS (STOP encerra antes de gerar evidência).
       hitl_decision:
         enum: [NOT_REQUIRED, CONTINUE_WITH_RESTRICTIONS]
+      # Restrições aceitas, com restriction_id estável, mantidas até o relatório final.
       accepted_restrictions:
         type: array
         items:
@@ -56,6 +86,7 @@ properties:
             source_gap_classification:
               enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
 
+  # Um item por objeto material descoberto (classe e identificador) com a sua disposição final.
   objects:
     type: array
     items:
@@ -65,26 +96,34 @@ properties:
       properties:
         object_class: {type: string, minLength: 1}
         object_id: {type: string, minLength: 1}
+        # PRESERVED, PRESERVED-AS-EQUIVALENT-REPRESENTATION, PARTIALLY-PRESERVED, NON-EXPORTABLE, FAILED ou NOT-VERIFIED. Nenhum objeto é omitido em silêncio.
         disposition:
           enum: [PRESERVED, PRESERVED-AS-EQUIVALENT-REPRESENTATION, PARTIALLY-PRESERVED, NON-EXPORTABLE, FAILED, NOT-VERIFIED]
+        # Arquivos de evidência que sustentam a disposição.
         evidence:
           type: array
           items: {type: string, minLength: 1}
+        # Limitação que explica uma disposição diferente de PRESERVED.
         limitation: {type: [string, "null"]}
+        # Restrições aceitas que se aplicam a este objeto (rastreabilidade).
         restriction_ids:
           type: array
           uniqueItems: true
           items: {type: string, minLength: 1}
+        # Para objetos temporais: disponível, expirado, apagado/indisponível ou não verificado.
         temporal_state:
           enum: [AVAILABLE, EXPIRED, DELETED_UNAVAILABLE, NOT_VERIFIED]
+        # Alertas do objeto (RETENTION, VOLATILITY, ACCESSIBILITY).
         alerts:
           type: array
           uniqueItems: true
           items: {enum: [RETENTION_ALERT, VOLATILITY_ALERT, ACCESSIBILITY_ALERT]}
+        # Tratamento de informação protegida: o texto puro nunca é exposto; registra-se recuperabilidade e proveniência.
         protected_information:
           type: object
           additionalProperties: false
           properties:
+            # Sempre false: segredo em texto puro nunca aparece na evidência.
             plaintext_exposed: {const: false}
             recoverability:
               enum: [RECONSTRUCTIBLE, REISSUABLE, RECOVERABLE_FROM_AUTHORIZED_SOURCE, RUNTIME_ONLY_CANDIDATE, NOT_YET_DETERMINED]
@@ -94,19 +133,26 @@ properties:
               type: array
               items: {type: string, minLength: 1}
 
+  # Resumo da execução.
   execution:
     type: object
     additionalProperties: false
     required: [source_repository_mode, destination_validated, authorization_request_id, restrictions_reconciled]
     properties:
+      # A origem foi tratada como somente leitura.
       source_repository_mode: {const: READ_ONLY}
+      # O destino foi validado antes da execução (sem isso, não há evidência).
       destination_validated: {const: true}
+      # request_id da autorização (GO) que sustenta esta execução.
       authorization_request_id: {type: string, minLength: 1}
+      # Se todas as restrições aceitas foram reconciliadas com os objetos.
       restrictions_reconciled: {type: boolean}
+      # Alertas da execução como um todo.
       alerts:
         type: array
         uniqueItems: true
         items: {enum: [RETENTION_ALERT, VOLATILITY_ALERT, ACCESSIBILITY_ALERT]}
+      # MRBI e CRR (nulos enquanto o executor não lê classes temporais; nunca inferidos de padrão do produto).
       temporal_preservation:
         type: object
         additionalProperties: false
