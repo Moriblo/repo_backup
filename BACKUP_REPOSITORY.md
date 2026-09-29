@@ -6,6 +6,8 @@
 
 **O que é.** Um sistema que copia um repositório do GitHub (a **origem**, sempre somente leitura) para o OneDrive pessoal (o **destino**). Cada execução exige autorização humana (o **HITL**) e gera evidência verificável. A origem nunca é alterada.
 
+**Objetivo final: restaurar.** O backup existe para que, depois de salvo no OneDrive, ele possa ser acessado direto de lá e, se necessário, **restituído ao GitHub**. Um backup só está provado quando uma restauração funciona. A restauração é **PLANEJADA** (seção I.14).
+
 **Como funciona, em seis linhas**
 1. O **engine** (o assistente de IA) apresenta o menu de capabilities. O HITL escolhe `backup_repository` e informa origem e destino.
 2. O engine apresenta o pedido exato (o **ECR**), lido do workflow. O HITL dá **GO**.
@@ -21,7 +23,7 @@
 - Segredo em texto puro nunca aparece em chat, log ou evidência.
 - Código só entra por pull request. A única escrita direta no `main` é o `commands.log`, e só depois do GO.
 
-**Estado atual (29/09/2026).** A leitura do GitHub e o fluxo até o preflight estão validados em execuções reais. O destino OneDrive ainda não existe, então toda execução termina `BLOCKED` no passo do destino (seção I.4, passo 11).
+**Estado atual (29/09/2026).** A leitura do GitHub e o fluxo até o preflight estão validados em execuções reais. O destino OneDrive ainda não existe, então toda execução termina `BLOCKED` no passo do destino (seção I.4, passo 11). Hoje o backup cobre só o **código Git**; as demais 17 classes são restrições aceitas (seção I.14). **Ainda não existe restauração.**
 
 **Onde encontrar cada coisa**
 
@@ -34,6 +36,7 @@
 | Saber de onde vem o Mnemonic | I.7 |
 | Interpretar um resultado ou um código de saída | I.8 e I.12 |
 | Saber onde ficam segredos e variáveis | I.10 |
+| Saber o que dá para restaurar e o que não dá | **I.14** |
 | Ver as regras obrigatórias | Parte II |
 | Saber o significado de um termo | Parte III |
 
@@ -75,6 +78,7 @@ Endereço: `https://github.com/Moriblo/repo_backup/blob/main/<caminho>`. O engin
 | `backup_repository` | `.github/workflows/backup-repository.yml` (o ECR, nos `inputs`); `backup/schemas/commands-log-line.schema.yaml` (formato da linha); `commands.log` (ids já usados) | O caminho do workflow vem do campo `command_workflow.path` da capability, no registro. |
 | `backup_projects` | Nada além dos dois iniciais | **Ainda não tem Mnemonic nem executor.** O engine informa que não consegue gerar comando e aponta a seção II.15. |
 | `list_capabilities`, `show_status`, `validate_evidence`, `help` | Só os dois iniciais | O engine responde na conversa. Não geram linha de comando. |
+| `restore_repository` (**PLANEJADA**) | Ainda não existe no registro | Restaurar a partir do OneDrive para o GitHub (seção I.14). Quando existir, terá Mnemonic e workflow próprios, sob GO do HITL. |
 | Capability nova no futuro | O que o registro indicar para ela | O menu vem do registro: **o prompt inicial não muda** quando uma capability é acrescentada. |
 
 **Regra geral.** Se a capability escolhida tem `mnemonic` no registro, o engine lê o workflow apontado em `command_workflow` e apresenta o ECR a partir dele. Se não tem, responde na conversa e não grava nada.
@@ -219,6 +223,7 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
 #### Passo 9: Capability Preflight
 - **Quem:** GitHub Actions, `bkp_repo.py preflight`.
 - **Acontece:** avalia as **18 classes** de objeto do `backup_repository`, cada rota separadamente. Hoje só a classe **`git`** tem rota implementada. As outras **17** viram lacuna `EXECUTION_CAPABILITY_GAP`. Se o token não foi emitido, o `git` também vira lacuna (`ACCESS_PERMISSION_GAP`), e são **18**. O resultado é validado contra o schema do command-request e gravado em `evidence/preflight.json`.
+- **De onde vêm as restrições:** não são uma lista fixa. São **calculadas** a cada execução: as classes de `includes` (em `backup/capabilities.yaml`) menos as de `IMPLEMENTED_CLASSES` (em `backup/scripts/bkp_repo.py`). Hoje, 18 menos 1 (`git`) dá **17**. Cada uma tem o nome `RST-<classe>-<tipo da lacuna>`. A lista completa aparece no `BKP_RESULT`, no `preflight.json` e, depois de aceita, no `commands.log`. Implementar uma classe a retira das restrições (seção I.14).
 - **Decisão:** a execução só segue se **todas** as restrições exigidas estiverem em `preflight_decision.accepted_restrictions`. Aceitar menos mantém o bloqueio.
 - **Sai:** saída **10**, `BKP_RESULT` **`BLOCKED`** (`CAPABILITY_PREFLIGHT_GAPS`) com a lista `required_restrictions`, e os passos seguintes são pulados. Ou saída **0**, `BKP_RESULT` **`PREFLIGHT_OK`**. O artefato `bkp-repo-<request_id>` é publicado sempre.
 
@@ -245,7 +250,8 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
 - **Falha:** o job fica vermelho no passo que falhou.
 
 #### Passo 13: pacote e envio ao OneDrive (**PLANEJADO**)
-- Gera o pacote (`git bundle`) do mirror e o envia em blocos ao OneDrive, conferindo o SHA-256 depois do envio.
+- Gera o **pacote restaurável**: o `git bundle` de todas as refs, os **objetos LFS** (o bundle não os carrega) e a lista das refs. Envia em blocos ao OneDrive e confere o SHA-256 depois do envio.
+- O pacote só conta como pronto se uma **restauração de teste** o aceitar (seção I.14).
 
 #### Passo 14: evidência e manifest
 - **Quem:** GitHub Actions, `bkp_repo.py build-evidence`.
@@ -434,6 +440,35 @@ Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `
 - **`onedrive-appfolder-oidc-read-test.yml`** sai no SA-08.
 - **`backup_projects`** aparece no menu, mas não tem Mnemonic nem executor: hoje não gera comando.
 - **Manutenção deste documento:** ao criar, mover ou remover um arquivo, um segredo ou um código de saída, atualize as seções I.9, I.10 e I.12 no mesmo PR. Itens *planejados* viram *existentes* no PR que os implementa.
+
+## I.14 Restauração e Etapa 2 (**PLANEJADO**)
+
+**Objetivo.** Depois de salvo no OneDrive, o backup deve poder ser acessado direto de lá e **restituído ao GitHub**. Hoje **nada disso existe**: o plano cobre a preservação do Git e o envio ao OneDrive, mas não há capability, procedimento ou teste de restauração.
+
+**O que muda no plano**
+1. **Pacote restaurável** no passo 13: bundle de todas as refs, objetos LFS e lista das refs.
+2. **Teste de restauração** logo depois do primeiro backup real: restaurar para um repositório **novo e vazio** e registrar o resultado. Um backup só está provado quando a restauração funciona.
+3. **Capability `restore_repository`** no menu, com Mnemonic e workflow próprios, sob GO do HITL, no mesmo padrão do `BKP_REPO`.
+4. **Etapa 2: preservar e restaurar as 17 classes**, uma de cada vez. Cada classe implementada sai de `IMPLEMENTED_CLASSES`, e a restrição correspondente deixa de ser exigida. As classes **temporais** (que expiram) vêm primeiro, como manda o protocolo (seção II.12).
+
+**Níveis de restauração**
+
+| Nível | O que volta | Classes |
+|---|---|---|
+| **1. Código e histórico** | Branches, tags, histórico, LFS e submódulos, com `git push --mirror` para um repositório novo. Os arquivos de workflow vão junto, pois são arquivos Git. | `git` (**coberto** pelo plano atual) |
+| **2. Configuração** | Recriada pela API a partir dos dados preservados. Segredos de webhook são reemitidos. | `labels`, `milestones`, `rules_and_branch_protection`, `environments`, `variables`, `collaborators`, `webhooks` |
+| **3. Conteúdo colaborativo** | Recriado como **cópia equivalente**, sem a fidelidade original. | `issues`, `pull_requests`, `projects` |
+| **Sem restauração** | Fica como registro e evidência. | `actions` (execuções, logs, artefatos), `checks`, `actions_caches`, `deployments`, `codespaces_repository_state_delta` (o conteúdo pode ser recuperado como commits ou patch), `secret_metadata` (valores não são exportáveis; os segredos são criados de novo), `other_discovered_state` (depende do que for descoberto) |
+
+O modo de restauração de cada classe é **previsto** e será confirmado no teste de restauração.
+
+**Limites aceitos: o que não volta idêntico**
+- As refs `refs/pull/*`: o GitHub as gerencia e não aceita enviá-las de volta.
+- O número, o autor e as datas originais de issues e pull requests.
+- O histórico de execuções do Actions e os artefatos.
+- Os valores de segredos.
+
+Quando a restauração existir, esses limites entram no relatório final como limitações explícitas, e não como falhas.
 
 ---
 
