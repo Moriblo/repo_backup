@@ -153,9 +153,20 @@ def _json(body):
         return {}
 
 
-def _safe_error(status, body):
-    """Resumo seguro de um erro HTTP: só código e mensagem do serviço, sem valores de token."""
+def _safe_error(status, body, headers=None):
+    """Resumo seguro de um erro HTTP: só código e mensagem do serviço, sem valores de token.
+
+    Erros da API do GitHub trazem `message`; o cabeçalho X-Accepted-GitHub-Permissions (se
+    vier em `headers`) diz qual permissão o endpoint exige, o que acelera o diagnóstico de 403.
+    """
     err = _json(body)
+    if "message" in err and "error" not in err:       # formato da API do GitHub
+        perms = ""
+        if headers:
+            perms = str(dict(headers).get("X-Accepted-GitHub-Permissions")
+                        or dict(headers).get("x-accepted-github-permissions") or "")[:120]
+        extra = f" (permissão exigida: {perms})" if perms else ""
+        return f"HTTP {status}: {str(err['message'])[:160]}{extra}"
     if isinstance(err.get("error"), dict):          # formato do Graph
         return f"HTTP {status} {err['error'].get('code', '')}: {str(err['error'].get('message', ''))[:160]}"
     return f"HTTP {status} {err.get('error', '')}: {str(err.get('error_description', ''))[:160]}".strip()
@@ -260,16 +271,16 @@ class Session:
         env_name = os.environ.get("ONEDRIVE_SECRETS_ENVIRONMENT", "")
         base = (f"{api}/repos/{self.repo}/environments/{urllib.parse.quote(env_name, safe='')}/secrets" if env_name
                 else f"{api}/repos/{self.repo}/actions/secrets")
-        st, _, body = http("GET", f"{base}/public-key", headers=h)
+        st, rh, body = http("GET", f"{base}/public-key", headers=h)
         key = _json(body)
         if st != 200 or "key" not in key:
-            raise OneDriveError("SECRET_ROTATION_FAILED", "não foi possível ler a chave pública dos secrets: " + _safe_error(st, body))
+            raise OneDriveError("SECRET_ROTATION_FAILED", "não foi possível ler a chave pública dos secrets: " + _safe_error(st, body, rh))
         box = public.SealedBox(public.PublicKey(key["key"].encode(), encoding.Base64Encoder()))
         encrypted = base64.b64encode(box.encrypt(value.encode())).decode()
-        st, _, body = http("PUT", f"{base}/{SECRET_NAME}", headers=h,
+        st, rh, body = http("PUT", f"{base}/{SECRET_NAME}", headers=h,
                            json_body={"encrypted_value": encrypted, "key_id": key["key_id"]})
         if st not in (201, 204):
-            raise OneDriveError("SECRET_ROTATION_FAILED", "não foi possível gravar o novo refresh token no secret: " + _safe_error(st, body))
+            raise OneDriveError("SECRET_ROTATION_FAILED", "não foi possível gravar o novo refresh token no secret: " + _safe_error(st, body, rh))
 
     # --- Graph ---
     def _auth(self):
