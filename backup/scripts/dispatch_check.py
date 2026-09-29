@@ -91,8 +91,10 @@ def commit_has_merged_pr(sha):
     Usa GET /repos/{repo}/commits/{sha}/pulls. Isolada em uma função para poder
     ser substituída nos testes locais (não há API do GitHub fora do Actions).
     """
+    # Consulta a API do GitHub: 'a que pull requests este commit pertence?'
     repo = os.environ["GITHUB_REPOSITORY"]
     base = os.environ.get("BASE_BRANCH", "main")
+    # Requisição autenticada com o GITHUB_TOKEN (permissão pull-requests: read); nenhum valor sensível é impresso.
     req = urllib.request.Request(
         f"https://api.github.com/repos/{repo}/commits/{sha}/pulls",
         headers={
@@ -103,6 +105,7 @@ def commit_has_merged_pr(sha):
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         pulls = json.load(resp)
+    # Vale como PR legítimo só se foi MERGEADO e o destino do merge foi a branch protegida.
     return any(p.get("merged_at") and p["base"]["ref"] == base for p in pulls)
 
 
@@ -118,9 +121,11 @@ def check_range(before, after):
         # Sem commit anterior não há como saber o que é "novo": recusa em vez de adivinhar.
         violation("push without a previous commit (branch creation); cannot determine new command lines.")
     # `merge-base --is-ancestor` devolve código != 0 se NÃO for ancestral (ex.: force push).
+    # Código != 0 significa que `before` NÃO é ancestral de `after`: histórico reescrito ou force push.
     anc = subprocess.run(["git", "merge-base", "--is-ancestor", before, after], cwd=ROOT)
     if anc.returncode != 0:
         violation("previous commit is not an ancestor of the new head (force push / history rewrite).")
+    # Arquivos alterados em TODO o push (usado adiante para saber se o commands.log mudou).
     changed = git_text("diff", "--name-only", before, after).splitlines()
     return changed
 
@@ -134,12 +139,17 @@ def check_direct_writes(before, after):
       - commands.log + outros arquivos    -> violação (mistura comando com código)
       - só outros arquivos                -> exige pull request mergeado
     """
+    # Só a linha principal do push: um merge de PR conta como UM commit (não inspecionamos os commits internos do PR).
     for sha in git_text("rev-list", "--first-parent", f"{before}..{after}").splitlines():
+        # Arquivos que este commit mudou em relação ao primeiro pai.
         files = set(git_text("diff", "--name-only", f"{sha}^1", sha).splitlines())
+        # Arquivos alterados além do commands.log.
         others = files - {LOG}
+        # Comando misturado com código no mesmo commit: violação, mesmo que venha de um PR.
         if LOG in files and others:
             violation(f"commit {sha[:12]} mixes {LOG} with other files ({', '.join(sorted(others))}); "
                       f"only {LOG} may be written directly to main, and alone.")
+        # Código fora do commands.log só é aceito se vier de um pull request mergeado.
         if others and not commit_has_merged_pr(sha):
             violation(f"commit {sha[:12]} changed files other than {LOG} without a merged pull request "
                       f"({', '.join(sorted(others))}); code changes must go through pull request.")
@@ -148,27 +158,34 @@ def check_direct_writes(before, after):
 def new_lines(before, after):
     """Devolve (ids_antigos, linhas_novas) do commands.log, exigindo apenas acréscimo."""
     # Se o arquivo não existia no commit anterior, o log antigo é vazio.
+    # O arquivo pode não existir no commit anterior (primeiro uso): nesse caso o log antigo é vazio.
     exists = subprocess.run(["git", "cat-file", "-e", f"{before}:{LOG}"], cwd=ROOT).returncode == 0
+    # Conteúdo do log ANTES do push, em bytes (a comparação é exata).
     old = git("show", f"{before}:{LOG}") if exists else b""
+    # Conteúdo do log DEPOIS do push.
     new = git("show", f"{after}:{LOG}")
 
     # Append-only: o conteúdo antigo deve ser prefixo exato do novo.
+    # Append-only: o conteúdo antigo precisa ser prefixo exato do novo (senão houve edição ou truncamento).
     if not new.startswith(old):
         violation(f"{LOG} was modified or truncated; the log is append-only.")
     if old and not old.endswith(b"\n"):
         violation(f"{LOG} previous content does not end with a newline; refusing to append to a partial line.")
+    # Só o trecho acrescentado: são as linhas NOVAS a validar; as antigas não são revalidadas nem redespachadas.
     added = new[len(old):]
     if not added:
         violation(f"{LOG} changed but has no new lines.")
     if not added.endswith(b"\n"):
         violation("last new line does not end with a newline (incomplete write).")
 
+    # Uma linha JSON por item; o último elemento do split é vazio (o texto termina com \n) e é descartado.
     lines = added.decode("utf-8", errors="strict").split("\n")[:-1]
     if any(not line.strip() for line in lines):
         violation("blank line found among new command lines.")
 
     # IDs já usados no log anterior (linhas antigas ilegíveis são ignoradas aqui, pois
     # já foram aceitas ou rejeitadas em pushes anteriores).
+    # request_ids já usados no log anterior (para recusar reutilização).
     old_ids = set()
     for raw in old.decode("utf-8", errors="replace").splitlines():
         try:
@@ -182,29 +199,39 @@ def new_lines(before, after):
 
 def validate_lines(old_ids, lines):
     """Valida cada linha nova (JSON, schema, id único, Mnemonic mapeado) e as devolve como objetos."""
+    # Schema oficial da linha; a mesma definição é revalidada dentro do workflow do Mnemonic.
     schema = load_yaml("backup/schemas/commands-log-line.schema.yaml")
     validator = jsonschema.Draft202012Validator(schema)
+    # O registro é lido para conferir a coerência do Mnemonic com o workflow declarado.
     caps = load_yaml("backup/capabilities.yaml")
     # Coerência com o registro: Mnemonic -> workflow declarado em capabilities.yaml.
+    # Mapa Mnemonic -> caminho do workflow, como o capabilities.yaml declara.
     registry = {c["mnemonic"]: c["command_workflow"]["path"] for c in caps["capabilities"] if "mnemonic" in c}
 
+    # seen: ids já vistos (log antigo + linhas deste push); accepted: linhas aprovadas nesta rodada.
     seen, accepted = set(old_ids), []
+    # Cada linha nova passa por: JSON, schema, id único, Mnemonic mapeado e coerência com o registro.
     for number, raw in enumerate(lines, start=1):
         try:
             obj = json.loads(raw)
         except json.JSONDecodeError as exc:
             violation(f"new line {number} is not valid JSON: {exc.msg}")
+        # Erros de schema desta linha.
         errors = sorted(validator.iter_errors(obj), key=str)
         if errors:
             # Mostra o caminho e a regra violada, sem ecoar valores da linha.
             details = "; ".join(f"{'/'.join(str(p) for p in e.absolute_path) or '<line>'}: {e.validator}" for e in errors)
             violation(f"new line {number} violates commands-log-line schema ({details}).")
+        # Campos já validados pelo schema (existem e têm o formato certo).
         rid, mnemonic = obj["request_id"], obj["mnemonic"]
+        # Autorização não reutilizável: request_id repetido é recusado.
         if rid in seen:
             violation(f"request_id {rid} was already used; authorization is not reusable.")
         seen.add(rid)
+        # Mnemonic sem workflow no mapeamento fixo do dispatcher não é despachado.
         if mnemonic not in MNEMONIC_WORKFLOWS:
             violation(f"mnemonic {mnemonic} has no fixed workflow mapping in the dispatcher.")
+        # Mapeamento do dispatcher e capabilities.yaml divergem: configuração inconsistente, recusa por segurança.
         if registry.get(mnemonic) != MNEMONIC_WORKFLOWS[mnemonic]:
             violation(f"mnemonic {mnemonic}: dispatcher mapping and capabilities.yaml disagree "
                       f"({MNEMONIC_WORKFLOWS[mnemonic]} vs {registry.get(mnemonic)}).")
@@ -218,10 +245,12 @@ def build_matrix(accepted, mnemonic):
     `preflight_decision` vai como TEXTO JSON (string) porque inputs de workflow_call
     só aceitam string/boolean/number; o workflow chamado faz o parse.
     """
+    # Uma entrada da matriz por linha aprovada deste Mnemonic.
     include = []
     for obj in accepted:
         if obj["mnemonic"] != mnemonic:
             continue
+        # Só os params autorizados viram inputs do workflow; nenhum valor do log é executado como comando.
         p = obj["params"]
         include.append({
             "request_id": obj["request_id"],
@@ -250,9 +279,12 @@ def main():
         print(f"missing environment variable: {exc}")
         sys.exit(64)
 
+    # 1) O intervalo do push é utilizável?
     changed = check_range(before, after)
+    # 2) Controle de escrita direta no main (detectivo): só o commands.log pode ser escrito direto.
     check_direct_writes(before, after)
 
+    # 3) Push sem mudança no commands.log (ex.: merge de PR): aceito, mas nada a despachar.
     if LOG not in changed:
         # Push legítimo (ex.: merge de PR) que não mexeu no log: nada a despachar.
         print("commands.log unchanged; nothing to dispatch.")
@@ -260,8 +292,11 @@ def main():
         set_output("bkp_repo_count", "0")
         return
 
+    # 4) Extrai as linhas NOVAS exigindo apenas acréscimo.
     old_ids, lines = new_lines(before, after)
+    # 5) Valida cada linha nova; qualquer falha encerra com saída 30 e nada é despachado.
     accepted = validate_lines(old_ids, lines)
+    # 6) Monta a matriz do job `run-bkp-repo`; um Mnemonic novo precisa de matriz e job próprios.
     matrix = build_matrix(accepted, "BKP_REPO")
     set_output("bkp_repo_matrix", json.dumps(matrix, sort_keys=True))
     set_output("bkp_repo_count", str(len(matrix["include"])))
