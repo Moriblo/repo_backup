@@ -81,6 +81,18 @@ This sequence MUST NOT be shortened, reordered, or silently bypassed for `backup
 16. Collect and validate evidence.
 17. Report preservation state, limitations, accepted restrictions, reconciliation result, and next applicable HITL.
 
+## Governed command flow (engine → commands.log → dispatcher → workflow)
+1. The engine reads this document and presents the Capability Menu; HITL selects one capability.
+2. `backup/capabilities.yaml` maps the capability to its Mnemonic (`backup_repository` → `BKP_REPO`) and required parameters; HITL supplies the values.
+3. The workflow bound to the Mnemonic (`command_workflow.path`) fully defines the Exact Command Request: the `on: workflow_call` inputs plus the constraints stated in their descriptions. The engine reads the workflow and presents the ECR exactly as defined.
+4. Only after `GO`, the engine appends one JSON line to `commands.log` on `main` (`backup/schemas/commands-log-line.schema.yaml`): `request_id`, `mnemonic`, `ts`, `authorization` and the authorized `params`. The set of `params` varies per Mnemonic schema. `commands.log` is append-only, and it is the only file written directly on `main`.
+5. `dispatcher.yml` runs on pushes touching `commands.log`, reads only the new lines, validates them (schema, unique `request_id`, no edits to existing lines) and calls the Mnemonic's workflow through a fixed mapping (`workflow_call`, `secrets: inherit`).
+6. The workflow revalidates its inputs, runs Capability Preflight, executes and produces schema 2.0 evidence. The engine reports the result to HITL.
+
+Capability Preflight gaps: the workflow is unattended, so a material gap ends the run as `BLOCKED` with `GAPS_IDENTIFIED` evidence. HITL then decides `STOP` or `CONTINUE_WITH_RESTRICTIONS`; the latter requires a new `commands.log` line carrying `preflight_decision` with stable `restriction_id` values. Authorization is never reused.
+
+Boundaries: code changes only through pull request; direct writes to `main` only to `commands.log` and only after `GO`; the source is always READ-ONLY; OneDrive uses delegated OAuth (`Files.ReadWrite.AppFolder`), never OIDC.
+
 ## Capability Menu
 Canonical definitions are in `backup/capabilities.yaml`.
 

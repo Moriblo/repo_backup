@@ -301,6 +301,16 @@ object_classes:
 capabilities:
   - id: backup_repository
     name: Backup Repository
+    mnemonic: BKP_REPO
+    command_workflow:
+      artifact_id: backup_repository_executor
+      path: .github/workflows/backup-repository.yml
+      invocation: workflow_call
+      secrets: inherit
+      ecr_source: WORKFLOW_ON_WORKFLOW_CALL_INPUTS
+    command_log:
+      path: commands.log
+      line_schema: backup/schemas/commands-log-line.schema.yaml
     class: PRESERVATION_EXECUTION
     hitl_required: true
     source_repository_mode: READ_ONLY
@@ -514,3 +524,48 @@ implementation_artifacts:
       status: NOT_VALIDATED
     relationships:
       - {capability_id: backup_projects, relationship: EXECUTES}
+
+  - artifact_id: commands_log
+    artifact_type: COMMAND_LOG
+    location:
+      repository: Moriblo/repo_backup
+      path: commands.log
+    purpose: Append-only log of HITL-authorized command lines; the only file written directly on main, and only after GO.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: CONFIGURES}
+
+  - artifact_id: commands_log_line_schema
+    artifact_type: SCHEMA
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/schemas/commands-log-line.schema.yaml
+    purpose: Schema control for each commands.log line (common envelope plus per-mnemonic params).
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: SCHEMATIZES}
+
+  - artifact_id: command_dispatcher
+    artifact_type: GITHUB_ACTIONS_WORKFLOW
+    location:
+      repository: Moriblo/repo_backup
+      path: .github/workflows/dispatcher.yml
+    purpose: Triggered by pushes to commands.log; validates new lines and calls the mnemonic workflow through a fixed mapping.
+    materialization:
+      status: NOT_MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: EXECUTES}

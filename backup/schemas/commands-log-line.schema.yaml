@@ -1,0 +1,76 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: commands-log-line.schema.yaml
+title: Authorized Command Log Line
+description: >
+  One JSON object per line appended to commands.log on main, only after HITL GO
+  for the exact Command Request. The envelope is common; `params` varies by
+  mnemonic. Lines are append-only and MUST NOT contain secret plaintext.
+
+type: object
+additionalProperties: false
+required: [request_id, mnemonic, ts, authorization, params]
+
+properties:
+  request_id:
+    type: string
+    pattern: "^[A-Za-z0-9._-]{8,64}$"
+    description: Unique per line. A repeated request_id MUST be rejected by the dispatcher.
+  mnemonic:
+    enum: [BKP_REPO]
+  ts:
+    type: string
+    format: date-time
+  authorization:
+    type: object
+    additionalProperties: false
+    required: [decision, authorized_scope, reusable]
+    properties:
+      decision: {const: GO}
+      authorized_scope: {const: EXACT_COMMAND_REQUEST}
+      reusable: {const: false}
+  params:
+    type: object
+
+allOf:
+  - if:
+      properties:
+        mnemonic: {const: BKP_REPO}
+      required: [mnemonic]
+    then:
+      properties:
+        params:
+          type: object
+          additionalProperties: false
+          required: [source_repository, destination]
+          properties:
+            source_repository:
+              type: string
+              pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+            destination:
+              type: string
+              description: Path relative to the OneDrive AppFolder (approot).
+              pattern: "^[A-Za-z0-9_][A-Za-z0-9._/-]*$"
+              not: {pattern: "\\.\\."}
+            preflight_decision:
+              description: >
+                Present only on a follow-up line issued after a run ended BLOCKED
+                by a material Capability Preflight gap and HITL chose to continue.
+              type: object
+              additionalProperties: false
+              required: [previous_request_id, hitl_decision, accepted_restrictions]
+              properties:
+                previous_request_id: {type: string, minLength: 1}
+                hitl_decision: {const: CONTINUE_WITH_RESTRICTIONS}
+                accepted_restrictions:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [restriction_id, object_class, restriction, source_gap_classification]
+                    properties:
+                      restriction_id: {type: string, minLength: 1}
+                      object_class: {type: string, minLength: 1}
+                      restriction: {type: string, minLength: 1}
+                      source_gap_classification:
+                        enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
