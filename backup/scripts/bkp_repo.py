@@ -17,7 +17,9 @@ SUBCOMANDOS
                           (saída 2 = rejeitado)
     preflight             Capability Preflight
                           (saída 10 = BLOCKED, exige decisão do HITL)
-    validate-destination  gate de destino, falha fechada
+    validate-destination  gate de destino, falha fechada: valida o OneDrive de verdade
+                          (escrita, leitura e remoção de teste no AppFolder) e faz a
+                          rotação do secret do refresh token
                           (saída 20 = destino não validado)
     build-evidence        monta e valida evidence.json e manifest.json
                           (saída 21 = destino não validado; 1 = FAILED)
@@ -30,7 +32,7 @@ CONTRATO DE SAÍDA
 VARIÁVEIS DE AMBIENTE (definidas pelo workflow)
     REQUEST_ID, SOURCE_REPOSITORY, DESTINATION   inputs autorizados
     PREFLIGHT_DECISION                           JSON da decisão CONTINUE_WITH_RESTRICTIONS (opcional)
-    TOKEN_OUTCOME                                resultado do passo que emite o token do GitHub App
+    TOKEN_OUTCOME                                resultado do passo que fornece o token de leitura (SOURCE_READ_TOKEN)
     EVIDENCE_DIR                                 pasta de evidências (padrão: "evidence")
     DESTINATION_VALIDATED                        "true" só depois do gate de destino
     STARTED_AT                                   início da execução (opcional)
@@ -170,7 +172,7 @@ def build_preflight():
     """
     caps = load("backup/capabilities.yaml")
     cap = next(c for c in caps["capabilities"] if c["id"] == "backup_repository")
-    # O passo do workflow que emite o token do GitHub App usa continue-on-error;
+    # O passo do workflow que fornece o token de leitura usa continue-on-error;
     # aqui o resultado dele decide se a leitura da origem está disponível.
     token_ok = os.environ.get("TOKEN_OUTCOME") == "success"
     # Classes que o executor JÁ lê e preserva, declaradas no registro (`implemented_classes`).
@@ -221,7 +223,7 @@ def build_preflight():
             # Classe implementada sem token = problema de ACESSO.
             # Classe não implementada = falta de CAPACIDADE DE EXECUÇÃO.
             cls_gap = GAP_ACCESS if implemented else GAP_EXEC
-            cause = ("Read-only GitHub App token could not be issued for the source repository."
+            cause = ("Read-only source token (SOURCE_READ_TOKEN) is missing or could not be provided for the source repository."
                      if implemented else "Executor route for this object class is not implemented yet.")
             gaps.append({
                 "object_class": cls,
@@ -310,19 +312,24 @@ def cmd_preflight():
 def cmd_validate_destination():
     """Gate de destino: falha FECHADA se o destino não puder ser validado.
 
-    Regra de fail-closed do protocolo ("destination cannot be validated").
-    O PR 4 implementa a validação real do OneDrive (OAuth delegado,
-    Files.ReadWrite.AppFolder). Até lá, esta função só libera quando
-    ONEDRIVE_DESTINATION_VALIDATED=true, algo que nenhum passo define ainda;
-    portanto, hoje, toda execução para aqui com saída 20. É intencional.
+    Regra de fail-closed do protocolo ("destination cannot be validated"). Valida o OneDrive
+    de verdade, pela biblioteca onedrive.py: renova o token, grava o novo refresh token no
+    secret (rotação) e faz uma escrita, uma leitura e uma remoção de teste em
+    <AppFolder>/<destination>/<request_id>/. Qualquer falha, inclusive configuração ausente,
+    encerra com saída 20 e nada da origem é lido.
     """
-    if os.environ.get("ONEDRIVE_DESTINATION_VALIDATED") == "true":
-        set_output("destination_validated", "true")
-        return
-    result("BLOCKED", reason="DESTINATION_NOT_VALIDATED",
-           detail="No OneDrive destination route is implemented in this executor version.")
-    print("::error::Destination cannot be validated; failing closed before Source Inventory.")
-    sys.exit(20)
+    import onedrive                      # mesma pasta deste script
+
+    prefix = f"{os.environ.get('DESTINATION', '').strip('/')}/{os.environ.get('REQUEST_ID', '')}"
+    try:
+        onedrive.Session.from_env().validate_destination(prefix)
+    except onedrive.OneDriveError as exc:
+        # A mensagem já é segura: nomes de variáveis e códigos de erro, nunca valores de token.
+        result("BLOCKED", reason="DESTINATION_NOT_VALIDATED", detail=f"{exc.code}: {exc.message}")
+        print("::error::Destination cannot be validated; failing closed before Source Inventory.")
+        sys.exit(20)
+    set_output("destination_validated", "true")
+    result("DESTINATION_OK", destination=prefix)
 
 
 def lines(name):
@@ -349,7 +356,8 @@ def cmd_build_evidence():
 
     Disposição por classe:
       git            PRESERVED; PARTIALLY-PRESERVED se há submódulos (só os gitlinks
-                     são registrados); FAILED se nenhuma ref foi enumerada.
+                     são registrados); FAILED se nenhuma ref foi enumerada ou se nenhum
+                     pacote foi enviado ao OneDrive (evidence/onedrive-package.json).
       demais classes NOT-VERIFIED, ligadas ao restriction_id aceito pelo HITL.
     Status final: COMPLETE só sem restrições, limitações ou falhas; senão
     COMPLETE_WITH_EXCEPTIONS (ou FAILED).
@@ -377,9 +385,16 @@ def cmd_build_evidence():
     if not lines("refs.tsv"):
         # Nenhuma ref enumerada: o mirror não pode ser considerado preservado.
         git_disp, git_lim = "FAILED", "No refs enumerated from the mirror."
+    # Pacote restaurável já enviado ao OneDrive (onedrive.py upload grava esta lista).
+    package_file = EVIDENCE / "onedrive-package.json"
+    package = json.loads(package_file.read_text()) if package_file.exists() else []
+    if git_disp != "FAILED" and not package:
+        # Sem pacote no destino não há preservação: o mirror local some com o runner.
+        git_disp, git_lim = "FAILED", "No preservation package was uploaded to the destination."
     objects.append({"object_class": "git", "object_id": source, "disposition": git_disp,
-                    "evidence": ["refs.tsv", "git-fsck.txt", "git-count-objects.txt", "lfs-files.txt",
-                                 "lfs-verification.tsv", "gitmodules-history.tsv", "gitlinks-history.tsv"],
+                    "evidence": ["refs.tsv", "refs-compare.txt", "git-fsck.txt", "git-count-objects.txt", "lfs-files.txt",
+                                 "lfs-verification.tsv", "gitmodules-history.tsv", "gitlinks-history.tsv",
+                                 "onedrive-package.json"],
                     "limitation": git_lim})
     # Limitações do manifest, cada uma ligada à sua restrição aceita (rastreabilidade).
     limitations = []
@@ -417,13 +432,14 @@ def cmd_build_evidence():
     jsonschema.validate(evidence, load("backup/schemas/evidence.schema.yaml"))
     (EVIDENCE / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
 
-    # Contagem de objetos por disposição, para a reconciliação do manifest.
-    # Quantos objetos têm cada disposição (base da reconciliação).
+    # Quantos objetos têm cada disposição (base da reconciliação do manifest).
     count = lambda d: sum(o["disposition"] == d for o in objects)
-    # O manifest lista cada arquivo de evidência com seu SHA-256 (exceto ele mesmo).
-    # Manifest lista cada arquivo de evidência com SHA-256 (exceto o próprio manifest).
-    arts = [{"path": p.name, "sha256": sha256(p), "object_class": "evidence", "bytes": p.stat().st_size}
-            for p in sorted(EVIDENCE.iterdir()) if p.is_file() and p.name != "manifest.json"]
+    # O manifest lista, primeiro, os arquivos do pacote enviados ao OneDrive (caminho no destino,
+    # SHA-256 e tamanho) e, depois, cada arquivo de evidência com SHA-256 (exceto o próprio manifest).
+    arts = [{"path": f["remote_path"], "sha256": f["sha256"], "object_class": "preservation-package", "bytes": f["bytes"]}
+            for f in package]
+    arts += [{"path": p.name, "sha256": sha256(p), "object_class": "evidence", "bytes": p.stat().st_size}
+             for p in sorted(EVIDENCE.iterdir()) if p.is_file() and p.name != "manifest.json"]
     # Há exceções se existirem limitações, restrições aceitas ou objetos FAILED.
     exceptions = bool(limitations or pf["accepted_restrictions"] or count("FAILED"))
     # FAILED se algum objeto falhou; COMPLETE_WITH_EXCEPTIONS se há exceções aceitas; COMPLETE só sem nenhuma.
@@ -445,7 +461,8 @@ def cmd_build_evidence():
     jsonschema.validate(manifest, load("backup/schemas/backup-manifest.schema.yaml"))
     (EVIDENCE / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     result(status, evidence_sha256=sha256(EVIDENCE / "evidence.json"),
-           manifest_sha256=sha256(EVIDENCE / "manifest.json"), reconciliation=manifest["reconciliation"])
+           manifest_sha256=sha256(EVIDENCE / "manifest.json"), reconciliation=manifest["reconciliation"],
+           package_files=[f["remote_path"] for f in package])
     # Conclusão do workflow nunca prova preservação: FAILED derruba o job.
     if status == "FAILED":
         sys.exit(1)
