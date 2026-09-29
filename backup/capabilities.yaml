@@ -301,18 +301,33 @@ object_classes:
 capabilities:
   - id: backup_repository
     name: Backup Repository
+    # Mnemonic: nome curto que o engine grava no commands.log (campo `mnemonic`) e que o
+    # dispatcher mapeia, de forma FIXA, para um workflow. Um Mnemonic por capability executável.
     mnemonic: BKP_REPO
+    # Workflow associado ao Mnemonic. Ele define INTEGRALMENTE o ECR (Exact Command Request):
+    # os inputs do seu `on: workflow_call` mais as restrições descritas neles.
     command_workflow:
+      # Liga este bloco ao registro de artefatos (implementation_artifacts, no fim do arquivo).
       artifact_id: backup_repository_executor
+      # Caminho do workflow que o dispatcher chama.
       path: .github/workflows/backup-repository.yml
+      # Forma de chamada: reutilização de workflow (não workflow_dispatch), para que só o
+      # dispatcher, disparado pelo commands.log, consiga executar o backup.
       invocation: workflow_call
+      # Repassa os secrets do repositório ao workflow chamado (secrets de repositório/organização;
+      # secrets de environment não são repassados por `inherit`).
       secrets: inherit
+      # De onde o engine lê o ECR: dos inputs do workflow, e não deste arquivo.
       ecr_source: WORKFLOW_ON_WORKFLOW_CALL_INPUTS
       # Prefixo da linha que o workflow imprime no log do job com o desfecho em JSON.
       # O engine procura esta linha para reportar ao HITL (BACKUP_REPOSITORY.md, passo 6).
       result_log_marker: BKP_RESULT
+    # Log de comandos autorizados: uma linha JSON por requisição, acrescentada no main SOMENTE
+    # após o GO do HITL. É a única escrita direta permitida no main.
     command_log:
+      # Arquivo do log (JSON Lines, append-only; não aceita comentários).
       path: commands.log
+      # Schema que valida cada linha (envelope comum + params por Mnemonic).
       line_schema: backup/schemas/commands-log-line.schema.yaml
     class: PRESERVATION_EXECUTION
     hitl_required: true
@@ -536,6 +551,10 @@ implementation_artifacts:
     relationships:
       - {capability_id: backup_projects, relationship: EXECUTES}
 
+  # ---------------------------------------------------------------------------
+  # commands.log: fila append-only de comandos autorizados. O push nele dispara o
+  # dispatcher.yml. Alterar ou apagar linhas existentes é proibido (o dispatcher rejeita).
+  # ---------------------------------------------------------------------------
   - artifact_id: commands_log
     artifact_type: COMMAND_LOG
     location:
@@ -551,6 +570,11 @@ implementation_artifacts:
     relationships:
       - {capability_id: backup_repository, relationship: CONFIGURES}
 
+  # ---------------------------------------------------------------------------
+  # Schema de uma linha do commands.log: envelope comum (request_id, mnemonic, ts,
+  # authorization) e `params` que varia por Mnemonic. Usado pelo dispatcher e
+  # revalidado pelo workflow do Mnemonic.
+  # ---------------------------------------------------------------------------
   - artifact_id: commands_log_line_schema
     artifact_type: SCHEMA
     location:
@@ -566,6 +590,12 @@ implementation_artifacts:
     relationships:
       - {capability_id: backup_repository, relationship: SCHEMATIZES}
 
+  # ---------------------------------------------------------------------------
+  # dispatcher.yml: disparado por push no commands.log. Lê só as linhas novas, valida
+  # e chama o workflow do Mnemonic por mapeamento fixo (workflow_call, secrets: inherit).
+  # NOT_MATERIALIZED: ainda não existe (PR 3); manter o registro permite rastrear o
+  # artefato futuro sem tratá-lo como ORPHAN_ARTIFACT quando ele chegar.
+  # ---------------------------------------------------------------------------
   - artifact_id: command_dispatcher
     artifact_type: GITHUB_ACTIONS_WORKFLOW
     location:
