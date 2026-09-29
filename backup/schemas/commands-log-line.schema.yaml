@@ -1,3 +1,30 @@
+# =============================================================================
+# Schema de uma linha do commands.log
+# =============================================================================
+# O QUE É
+#   Define o formato de CADA linha (um objeto JSON por linha) do commands.log.
+#   O engine acrescenta uma linha no main SOMENTE após o GO do HITL; o dispatcher
+#   valida as linhas novas contra este schema; o workflow do Mnemonic revalida.
+#
+# ESTRUTURA
+#   Envelope comum a todos os comandos:  request_id, mnemonic, ts, authorization
+#   Conteúdo variável por Mnemonic:      params (validado pelo bloco `allOf` no fim)
+#
+# COMO ADICIONAR UM NOVO MNEMONIC
+#   1. Inclua o nome em `properties.mnemonic.enum`.
+#   2. Acrescente um item em `allOf` (if mnemonic == NOVO, then params = ...).
+#   3. Registre o Mnemonic e o workflow dele em backup/capabilities.yaml.
+#
+# REGRAS
+#   - Uma linha NUNCA contém segredo em texto puro.
+#   - `additionalProperties: false`: campo desconhecido é rejeitado (fail-closed).
+#   - O arquivo é append-only; linhas existentes não podem ser alteradas.
+#
+# EXEMPLO DE LINHA VÁLIDA (uma única linha no arquivo real):
+#   {"request_id":"req-20260929-01","mnemonic":"BKP_REPO","ts":"2026-09-29T12:00:00Z",
+#    "authorization":{"decision":"GO","authorized_scope":"EXACT_COMMAND_REQUEST","reusable":false},
+#    "params":{"source_repository":"Moriblo/exemplo","destination":"backups/exemplo"}}
+# =============================================================================
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: commands-log-line.schema.yaml
 title: Authorized Command Log Line
@@ -7,31 +34,43 @@ description: >
   mnemonic. Lines are append-only and MUST NOT contain secret plaintext.
 
 type: object
+# Rejeita qualquer campo fora do envelope abaixo.
 additionalProperties: false
 required: [request_id, mnemonic, ts, authorization, params]
 
 properties:
+  # Identificador único da requisição. Reutilizar um id já visto no log é rejeitado
+  # pelo dispatcher (idempotência e não reutilização da autorização).
   request_id:
     type: string
     pattern: "^[A-Za-z0-9._-]{8,64}$"
     description: Unique per line. A repeated request_id MUST be rejected by the dispatcher.
+  # Comando a executar. Cada valor tem um workflow fixo no dispatcher.
   mnemonic:
     enum: [BKP_REPO]
+  # Momento em que o engine gravou a linha (UTC, ISO 8601).
   ts:
     type: string
     format: date-time
+  # Registro da autorização do HITL para ESTA requisição exata.
   authorization:
     type: object
     additionalProperties: false
     required: [decision, authorized_scope, reusable]
     properties:
+      # Só existe linha se houve GO; NO-GO nunca é gravado no log.
       decision: {const: GO}
+      # A autorização vale apenas para o Exact Command Request apresentado.
       authorized_scope: {const: EXACT_COMMAND_REQUEST}
+      # Autorização nunca é reutilizável: outra execução exige nova linha e novo GO.
       reusable: {const: false}
+  # Valores do comando. A forma exata depende do Mnemonic (ver `allOf` abaixo).
   params:
     type: object
 
+# Validação de `params` conforme o Mnemonic.
 allOf:
+  # ---- BKP_REPO: backup de repositório GitHub para o OneDrive ----
   - if:
       properties:
         mnemonic: {const: BKP_REPO}
@@ -43,14 +82,20 @@ allOf:
           additionalProperties: false
           required: [source_repository, destination]
           properties:
+            # Origem do backup, no formato dono/nome. Sempre SOMENTE LEITURA.
             source_repository:
               type: string
               pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+            # Pasta de destino dentro do AppFolder do OneDrive.
+            # Não pode começar com "/" nem conter ".." (evita sair do AppFolder).
             destination:
               type: string
               description: Path relative to the OneDrive AppFolder (approot).
               pattern: "^[A-Za-z0-9_][A-Za-z0-9._/-]*$"
               not: {pattern: "\\.\\."}
+            # Presente somente numa linha de CONTINUAÇÃO: quando uma execução anterior
+            # terminou BLOCKED por lacunas do Capability Preflight e o HITL escolheu
+            # CONTINUE_WITH_RESTRICTIONS. Sem este campo, é uma 1ª execução.
             preflight_decision:
               description: >
                 Present only on a follow-up line issued after a run ended BLOCKED
@@ -59,8 +104,12 @@ allOf:
               additionalProperties: false
               required: [previous_request_id, hitl_decision, accepted_restrictions]
               properties:
+                # request_id da execução que terminou BLOCKED (deve ser diferente do atual).
                 previous_request_id: {type: string, minLength: 1}
+                # Única decisão que gera nova linha; STOP simplesmente não grava nada.
                 hitl_decision: {const: CONTINUE_WITH_RESTRICTIONS}
+                # Restrições aceitas pelo HITL, uma por lacuna. O workflow exige que
+                # TODAS as restrições da lacuna estejam aqui; faltando alguma, continua BLOCKED.
                 accepted_restrictions:
                   type: array
                   minItems: 1
@@ -69,8 +118,13 @@ allOf:
                     additionalProperties: false
                     required: [restriction_id, object_class, restriction, source_gap_classification]
                     properties:
+                      # ID estável (ex.: RST-issues-EXECUTION_CAPABILITY_GAP); segue
+                      # rastreável na evidência, no manifest e no relatório final.
                       restriction_id: {type: string, minLength: 1}
+                      # Classe de objeto afetada (git, issues, pull_requests...).
                       object_class: {type: string, minLength: 1}
+                      # Texto da restrição aceita, como o HITL a leu.
                       restriction: {type: string, minLength: 1}
+                      # Tipo da lacuna que originou a restrição.
                       source_gap_classification:
                         enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
