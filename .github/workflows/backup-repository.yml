@@ -172,9 +172,9 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-secrets: write
-          # Ler a chave pública de um secret de ENVIRONMENT exige Environments (read) (documentação
-          # do GitHub); sem isso a rotação falhava com HTTP 403 (run do req-20260929-004).
-          permission-environments: read
+          # Secret de ENVIRONMENT: ler a chave pública exigiu Environments (read) (run -004) e
+          # gravar o valor exige Environments (write) (run -005: "environments=write").
+          permission-environments: write
 
       # Capability Preflight: roda APÓS o GO e ANTES de qualquer Source Inventory.
       # Saídas: 0 = segue; 10 = BLOCKED (lacunas materiais sem decisão do HITL).

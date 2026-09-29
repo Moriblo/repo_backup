@@ -115,7 +115,7 @@ Se não conseguir ler o repositório, pare e me avise. Não siga de memória.
 | **Repositório `repo_backup`** (`main`) | Guarda o código, o `commands.log`, os segredos e as variáveis. Código só entra por pull request. |
 | **GitHub Actions** | Executa o Dispatcher e o workflow do `BKP_REPO` (e, temporariamente, o diagnóstico). |
 | **Token `SOURCE_READ_TOKEN`** | Token fine-grained (Contents e Metadata **somente leitura**, todos os repositórios), guardado como secret do environment `onedrive-backup`. É a credencial de leitura da origem. (O GitHub App "Repository Preservation Reader" continua só no workflow de diagnóstico temporário.) |
-| **GitHub App Writer** (**OPCIONAL**, criado) | Regrava o novo refresh token do OneDrive no secret do environment. Só *Secrets: Read and write* e *Environments: Read-only*. Sem ele, a rotação fica desligada (seção I.11). |
+| **GitHub App Writer** (**OPCIONAL**, criado) | Regrava o novo refresh token do OneDrive no secret do environment. Só *Secrets: Read and write* e *Environments: Read and write*. Sem ele, a rotação fica desligada (seção I.11). |
 | **Repositório de origem** | É lido e **nunca alterado**. |
 | **Microsoft Entra, app público** (configuração pelo HITL pendente) | Emite os tokens do OneDrive pela autoridade `consumers` (conta pessoal). |
 | **Microsoft Graph e OneDrive** | Recebem o pacote e a evidência em `Apps/<nome do registro>/<destination>/<request_id>/{package,evidence}/`. |
@@ -123,7 +123,7 @@ Se não conseguir ler o repositório, pare e me avise. Não siga de memória.
 ## I.2 Preparação, uma única vez (feita pelo HITL)
 
 O código já está no repositório (SA-08). O HITL já fez (environment `onedrive-backup`): registro no Entra ("GitHub repo_backup", só contas pessoais, permissões delegadas `Files.ReadWrite.AppFolder` e `offline_access`), variável `ONEDRIVE_CLIENT_ID` e secrets `ONEDRIVE_REFRESH_TOKEN` e `SOURCE_READ_TOKEN`. O workflow declara `environment: onedrive-backup` para enxergá-los.
-- **Opcional (rotação):** criar o GitHub App **Writer** (*Secrets: Read and write* e *Environments: Read-only*, instalado só em `Moriblo/repo_backup`; o *Environments* é necessário porque o secret fica em um environment) e gravar a variável `REPOSITORY_PRESERVATION_SECRETS_APP_ID` e o secret `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY`. Sem isso o backup funciona, mas o refresh token **não** é renovado (seção I.11).
+- **Opcional (rotação):** criar o GitHub App **Writer** (*Secrets: Read and write* e *Environments: Read and write*, instalado só em `Moriblo/repo_backup`; o *Environments* é necessário porque o secret fica em um environment) e gravar a variável `REPOSITORY_PRESERVATION_SECRETS_APP_ID` e o secret `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY`. Sem isso o backup funciona, mas o refresh token **não** é renovado (seção I.11).
 - **Atenção:** não rode dois backups ao mesmo tempo. Com rotação ligada, cada execução gira o refresh token; duas em paralelo podem invalidar uma à outra.
 - **Atenção:** se o environment tiver "Required reviewers", cada execução espera aprovação no GitHub.
 
