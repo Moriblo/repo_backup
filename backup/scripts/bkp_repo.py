@@ -1,14 +1,44 @@
 #!/usr/bin/env python3
-"""Deterministic helpers for the BKP_REPO workflow (backup-repository.yml).
+"""Auxiliar determinístico do workflow BKP_REPO (backup-repository.yml).
 
-Subcommands:
-  validate-inputs       revalidate workflow_call inputs against commands-log-line schema
-  preflight             Capability Preflight; exit 10 = BLOCKED (HITL decision required)
-  validate-destination  fail-closed destination check; exit 20 = not validated
-  build-evidence        build and schema-validate evidence.json and manifest.json
+O QUE É
+    Um único script com quatro subcomandos. O workflow chama cada um em um
+    ponto fixo da execução. Manter a lógica aqui (e não em YAML inline) permite
+    testar localmente e revisar com facilidade.
 
-Every outcome is also printed as one `BKP_RESULT {json}` line so the engine can
-read it from the job log.
+ONDE SE ENCAIXA NO FLUXO
+    Passo 6 do "Governed command flow" (BACKUP_REPOSITORY.md): o workflow
+    recebe os valores autorizados, revalida, roda o preflight, executa e gera
+    a evidência (schemas 2.0). Este script cuida de tudo isso, exceto do
+    clone/verificação Git, que ficam como passos bash no próprio workflow.
+
+SUBCOMANDOS
+    validate-inputs       revalida os inputs contra commands-log-line.schema.yaml
+                          (saída 2 = rejeitado)
+    preflight             Capability Preflight
+                          (saída 10 = BLOCKED, exige decisão do HITL)
+    validate-destination  gate de destino, falha fechada
+                          (saída 20 = destino não validado)
+    build-evidence        monta e valida evidence.json e manifest.json
+                          (saída 21 = destino não validado; 1 = FAILED)
+
+CONTRATO DE SAÍDA
+    Todo desfecho é impresso como UMA linha `BKP_RESULT {json}` no log do job.
+    É essa linha que o engine lê para reportar ao HITL. O mesmo JSON vai para o
+    resumo do job ($GITHUB_STEP_SUMMARY).
+
+VARIÁVEIS DE AMBIENTE (definidas pelo workflow)
+    REQUEST_ID, SOURCE_REPOSITORY, DESTINATION   inputs autorizados
+    PREFLIGHT_DECISION                           JSON da decisão CONTINUE_WITH_RESTRICTIONS (opcional)
+    TOKEN_OUTCOME                                resultado do passo que emite o token do GitHub App
+    EVIDENCE_DIR                                 pasta de evidências (padrão: "evidence")
+    DESTINATION_VALIDATED                        "true" só depois do gate de destino
+    STARTED_AT                                   início da execução (opcional)
+
+REGRAS QUE ESTE SCRIPT NUNCA QUEBRA
+    - A origem é somente leitura: nada aqui escreve na origem.
+    - Falta de evidência nunca vira sucesso: classes não lidas ficam NOT-VERIFIED.
+    - Segredos não são lidos nem impressos.
 """
 import datetime
 import hashlib
@@ -20,29 +50,48 @@ import sys
 import jsonschema
 import yaml
 
+# Raiz do repositório (este arquivo fica em backup/scripts/, dois níveis abaixo).
+# Usada para achar capabilities.yaml e os schemas, independente do diretório atual.
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+# Pasta onde as evidências são gravadas. O workflow define EVIDENCE_DIR=evidence.
 EVIDENCE = pathlib.Path(os.environ.get("EVIDENCE_DIR", "evidence"))
+
+# Classificações de lacuna usadas no preflight (vocabulário de BACKUP_REPOSITORY.md).
+# ACCESS_PERMISSION_GAP: a rota existe, mas o acesso/permissão a bloqueia.
 GAP_ACCESS = "ACCESS_PERMISSION_GAP"
+# EXECUTION_CAPABILITY_GAP: a arquitetura existe, mas esta execução não tem rota operacional.
 GAP_EXEC = "EXECUTION_CAPABILITY_GAP"
 
-# Object classes this executor actually reads and preserves. Everything else in
-# the capability's `includes` list is an EXECUTION_CAPABILITY_GAP until an
-# executor route is implemented (never treated as absent or preserved).
+# Classes de objeto que este executor realmente lê e preserva.
+# Toda outra classe listada em `includes` de capabilities.yaml vira
+# EXECUTION_CAPABILITY_GAP até existir uma rota implementada. Nunca é tratada
+# como ausente nem como preservada (regra 9 do protocolo).
+# Para implementar uma nova classe: acrescente aqui E implemente a leitura no workflow.
 IMPLEMENTED_CLASSES = {"git"}
 
 
 def load(path):
+    """Lê um arquivo YAML relativo à raiz do repositório e devolve o conteúdo."""
     with open(ROOT / path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def now():
+    """Data/hora atual em UTC, formato ISO 8601 com 'Z' (ex.: 2026-09-29T12:00:00Z)."""
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def result(status, **extra):
+    """Emite o desfecho da etapa como uma linha `BKP_RESULT {json}`.
+
+    `status` é o estado (REJECTED, BLOCKED, PREFLIGHT_OK, COMPLETE,
+    COMPLETE_WITH_EXCEPTIONS, FAILED). `extra` traz detalhes específicos.
+    Também grava o JSON no resumo do job quando executado no GitHub Actions.
+    """
     payload = {"status": status, "request_id": os.environ.get("REQUEST_ID", ""), **extra}
     print("BKP_RESULT " + json.dumps(payload, sort_keys=True), flush=True)
+    # GITHUB_STEP_SUMMARY só existe dentro do Actions; localmente é ignorado.
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
@@ -50,6 +99,7 @@ def result(status, **extra):
 
 
 def set_output(key, value):
+    """Grava `key=value` em $GITHUB_OUTPUT para os passos seguintes do workflow lerem."""
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as f:
@@ -57,6 +107,10 @@ def set_output(key, value):
 
 
 def parse_decision():
+    """Lê PREFLIGHT_DECISION (JSON da decisão do HITL). Devolve None se vazio.
+
+    JSON inválido encerra com saída 2: uma decisão ilegível nunca é ignorada.
+    """
     raw = os.environ.get("PREFLIGHT_DECISION", "").strip()
     if not raw:
         return None
@@ -68,6 +122,13 @@ def parse_decision():
 
 
 def cmd_validate_inputs():
+    """Revalida os inputs do workflow (o dispatcher já validou; aqui é a 2ª barreira).
+
+    Monta uma linha sintética de commands.log com os valores recebidos e a valida
+    contra commands-log-line.schema.yaml. Assim existe UMA só definição das
+    regras (o schema), sem duplicar padrões de regex neste script.
+    Falha com saída 2 e status REJECTED.
+    """
     params = {
         "source_repository": os.environ.get("SOURCE_REPOSITORY", ""),
         "destination": os.environ.get("DESTINATION", ""),
@@ -75,6 +136,7 @@ def cmd_validate_inputs():
     decision = parse_decision()
     if decision is not None:
         params["preflight_decision"] = decision
+    # A linha sintética usa GO porque este workflow só é chamado após autorização.
     line = {
         "request_id": os.environ.get("REQUEST_ID", ""),
         "mnemonic": "BKP_REPO",
@@ -89,6 +151,8 @@ def cmd_validate_inputs():
             print(f"::error::input validation: {e.message}")
         result("REJECTED", reason="INPUT_VALIDATION")
         sys.exit(2)
+    # Autorização não é reutilizável (regra 7): a decisão de continuar deve
+    # referenciar OUTRA requisição (a que terminou BLOCKED), nunca a atual.
     if decision and decision["previous_request_id"] == line["request_id"]:
         print("::error::preflight_decision.previous_request_id must differ from request_id")
         result("REJECTED", reason="AUTHORIZATION_REUSE")
@@ -97,16 +161,27 @@ def cmd_validate_inputs():
 
 
 def build_preflight():
+    """Avalia cada classe de objeto do backup_repository. Devolve (assessments, gaps, pending).
+
+    assessments: por classe, as rotas avaliadas e a capacidade efetiva de leitura.
+    gaps:        lacunas MATERIAIS (só ARCHITECTURAL/EXECUTION/ACCESS), que exigem HITL.
+    pending:     fatos que só o Source Inventory descobre (FACTUAL_INVENTORY_PENDING).
+                 Ficam separados e NUNCA entram em `gaps` (regra 12 do protocolo).
+    """
     caps = load("backup/capabilities.yaml")
     cap = next(c for c in caps["capabilities"] if c["id"] == "backup_repository")
+    # O passo do workflow que emite o token do GitHub App usa continue-on-error;
+    # aqui o resultado dele decide se a leitura da origem está disponível.
     token_ok = os.environ.get("TOKEN_OUTCOME") == "success"
     assessments, gaps, pending = [], [], []
     for cls in cap["includes"]:
         spec = caps["object_classes"][cls]
         implemented = cls in IMPLEMENTED_CLASSES
         routes = []
+        # Cada tipo de rota aprovado é avaliado separadamente (BACKUP_REPOSITORY.md).
         for rt in spec["approved_route_types"]:
             if rt == "DETERMINISTIC_EXECUTOR":
+                # Este workflow É o executor determinístico; é a única rota avaliada de fato.
                 if implemented and token_ok:
                     state, lim = "AVAILABLE", None
                 elif implemented:
@@ -116,17 +191,23 @@ def build_preflight():
                 routes.append({"route_type": rt, "route_reference": "github_actions:backup-repository.yml",
                                "state": state, "authorized": True, "limitation": lim})
             else:
+                # Demais rotas (conector, REST direto, etc.) não estão no escopo desta
+                # execução: ficam NOT_VERIFIED e não autorizadas. Não afirmamos que
+                # não existem, apenas que não foram avaliadas.
                 routes.append({"route_type": rt, "route_reference": None, "state": "NOT_VERIFIED",
                                "authorized": False, "limitation": "Route not assessed; only the deterministic executor is in scope of this execution."})
         effective = "AVAILABLE" if implemented and token_ok else "UNAVAILABLE"
         assessments.append({
             "object_class": cls,
             "architectural_status": spec["architectural_status"],
+            # other_discovered_state (O-24) usa `required_behavior` em vez de `required_read_capabilities`.
             "required_read_capabilities": spec.get("required_read_capabilities") or spec.get("required_behavior"),
             "routes": routes,
             "effective_read_capability": effective,
         })
         if effective != "AVAILABLE":
+            # Classe implementada sem token = problema de ACESSO.
+            # Classe não implementada = falta de CAPACIDADE DE EXECUÇÃO.
             cls_gap = GAP_ACCESS if implemented else GAP_EXEC
             cause = ("Read-only GitHub App token could not be issued for the source repository."
                      if implemented else "Executor route for this object class is not implemented yet.")
@@ -141,15 +222,33 @@ def build_preflight():
                 "resulting_restriction": f"{cls} excluded from this preservation and reported NOT-VERIFIED.",
             })
         if cls == "git":
+            # Se a origem usa LFS ou submódulos só se descobre no Source Inventory.
+            # A rota existe (route_defined), portanto NÃO é uma lacuna.
             pending.append({"object_class": "git", "pending_fact": "Git LFS usage and submodule presence in the source", "route_defined": True})
     return assessments, gaps, pending
 
 
 def restriction_id(gap):
+    """ID estável da restrição correspondente a uma lacuna (ex.: RST-issues-EXECUTION_CAPABILITY_GAP).
+
+    Determinístico de propósito: o HITL aceita restrições por ID na linha de
+    continuação do commands.log, e o mesmo ID acompanha evidência e manifest.
+    """
     return f"RST-{gap['object_class']}-{gap['gap_classification']}"
 
 
 def cmd_preflight():
+    """Capability Preflight (roda APÓS o GO e ANTES do Source Inventory).
+
+    Resultados possíveis:
+      - sem lacunas             -> PASS, segue (saída 0)
+      - lacunas + decisão OK    -> CONTINUE_WITH_RESTRICTIONS, segue (saída 0)
+      - lacunas sem decisão     -> BLOCKED, PENDING (saída 10): o HITL precisa
+                                   decidir STOP ou CONTINUE_WITH_RESTRICTIONS
+    A decisão só vale se aceitar TODAS as restrições exigidas; aceitar menos que
+    o necessário mantém o BLOCKED. Depois de gravar preflight.json, o resultado é
+    validado contra o schema do command-request.
+    """
     assessments, gaps, pending = build_preflight()
     pf = {"required": True, "status": "PASS", "assessments": assessments, "gaps": gaps,
           "factual_inventory_pending": pending, "hitl_decision": "NOT_REQUIRED", "accepted_restrictions": []}
@@ -160,8 +259,11 @@ def cmd_preflight():
         needed = {restriction_id(g): g for g in gaps}
         decision = parse_decision()
         accepted = {a["restriction_id"]: a for a in (decision or {}).get("accepted_restrictions", [])}
+        # `<=` entre conjuntos: todo ID exigido precisa constar entre os aceitos.
         if decision and set(needed) <= set(accepted):
             pf["hitl_decision"] = "CONTINUE_WITH_RESTRICTIONS"
+            # As restrições registradas vêm das lacunas reais (não do texto que o
+            # HITL enviou), para o registro refletir o que de fato foi avaliado.
             pf["accepted_restrictions"] = [
                 {"restriction_id": rid, "object_class": g["object_class"],
                  "restriction": g["resulting_restriction"], "source_gap_classification": g["gap_classification"]}
@@ -169,10 +271,12 @@ def cmd_preflight():
             ]
         else:
             exit_code = 10
+    # Valida o resultado contra o sub-schema `capability_preflight` do command-request.
     schema = load("backup/schemas/command-request.schema.yaml")["properties"]["capability_preflight"]
     jsonschema.validate(pf, schema)
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     (EVIDENCE / "preflight.json").write_text(json.dumps(pf, indent=2, sort_keys=True) + "\n")
+    # Lista pronta para o HITL copiar na linha de continuação do commands.log.
     required = [{"restriction_id": restriction_id(g), "object_class": g["object_class"],
                  "restriction": g["resulting_restriction"], "source_gap_classification": g["gap_classification"]} for g in gaps]
     if exit_code:
@@ -186,8 +290,14 @@ def cmd_preflight():
 
 
 def cmd_validate_destination():
-    # PR 4 implements the OneDrive (delegated OAuth, Files.ReadWrite.AppFolder)
-    # destination check. Until then destination validation always fails closed.
+    """Gate de destino: falha FECHADA se o destino não puder ser validado.
+
+    Regra de fail-closed do protocolo ("destination cannot be validated").
+    O PR 4 implementa a validação real do OneDrive (OAuth delegado,
+    Files.ReadWrite.AppFolder). Até lá, esta função só libera quando
+    ONEDRIVE_DESTINATION_VALIDATED=true, algo que nenhum passo define ainda;
+    portanto, hoje, toda execução para aqui com saída 20. É intencional.
+    """
     if os.environ.get("ONEDRIVE_DESTINATION_VALIDATED") == "true":
         set_output("destination_validated", "true")
         return
@@ -198,11 +308,13 @@ def cmd_validate_destination():
 
 
 def lines(name):
+    """Linhas não vazias de um arquivo de evidência; lista vazia se o arquivo não existe."""
     p = EVIDENCE / name
     return [x for x in p.read_text(errors="replace").splitlines() if x] if p.exists() else []
 
 
 def sha256(path):
+    """SHA-256 (hex) de um arquivo, lido em blocos de 1 MiB para não carregar tudo na memória."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -211,21 +323,38 @@ def sha256(path):
 
 
 def cmd_build_evidence():
+    """Monta evidence.json e manifest.json (schemas 2.0) e valida ambos.
+
+    Só roda se o destino foi validado (DESTINATION_VALIDATED=true); caso
+    contrário sai com 21. Regra: nenhuma evidência é produzida sem destino
+    validado, pois o schema exige `destination_validated: true`.
+
+    Disposição por classe:
+      git            PRESERVED; PARTIALLY-PRESERVED se há submódulos (só os gitlinks
+                     são registrados); FAILED se nenhuma ref foi enumerada.
+      demais classes NOT-VERIFIED, ligadas ao restriction_id aceito pelo HITL.
+    Status final: COMPLETE só sem restrições, limitações ou falhas; senão
+    COMPLETE_WITH_EXCEPTIONS (ou FAILED).
+    """
     if os.environ.get("DESTINATION_VALIDATED") != "true":
         print("::error::Refusing to build evidence: destination was not validated.")
         sys.exit(21)
     request_id = os.environ["REQUEST_ID"]
     source = os.environ["SOURCE_REPOSITORY"]
     pf = json.loads((EVIDENCE / "preflight.json").read_text())
+    # Restrições aceitas indexadas por classe de objeto.
     accepted = {a["object_class"]: a for a in pf["accepted_restrictions"]}
     started = os.environ.get("STARTED_AT", now())
 
     objects = []
+    # --- Classe git: disposição decidida pelos arquivos que os passos bash gravaram ---
     git_disp, git_lim = "PRESERVED", None
     if lines("gitlinks-history.tsv"):
+        # Há submódulos no histórico: registramos os gitlinks, não o conteúdo deles.
         git_disp = "PARTIALLY-PRESERVED"
         git_lim = "Submodule gitlinks recorded; submodule contents are not preserved by this executor."
     if not lines("refs.tsv"):
+        # Nenhuma ref enumerada: o mirror não pode ser considerado preservado.
         git_disp, git_lim = "FAILED", "No refs enumerated from the mirror."
     objects.append({"object_class": "git", "object_id": source, "disposition": git_disp,
                     "evidence": ["refs.tsv", "git-fsck.txt", "git-count-objects.txt", "lfs-files.txt",
@@ -235,6 +364,7 @@ def cmd_build_evidence():
     if git_lim:
         limitations.append({"limitation_id": "LIM-git-submodules", "description": git_lim,
                             "restriction_id": None, "object_class": "git"})
+    # --- Demais classes: NOT-VERIFIED, rastreáveis até a restrição aceita ---
     for cls, a in accepted.items():
         if cls == "git":
             continue
@@ -244,6 +374,7 @@ def cmd_build_evidence():
         limitations.append({"limitation_id": f"LIM-{cls}", "description": a["restriction"],
                             "restriction_id": a["restriction_id"], "object_class": cls})
 
+    # Versão do preflight para a evidência (o schema da evidência tem menos campos que o do request).
     pf_ev = {"status": pf["status"],
              "gaps": [{k: g[k] for k in ("object_class", "gap_classification", "limitation", "preservation_impact", "resulting_restriction")} for g in pf["gaps"]],
              "factual_inventory_pending": [{"object_class": p["object_class"], "pending_fact": p["pending_fact"]} for p in pf["factual_inventory_pending"]],
@@ -254,13 +385,17 @@ def cmd_build_evidence():
         "captured_at": now(), "capability_preflight": pf_ev, "objects": objects,
         "execution": {"source_repository_mode": "READ_ONLY", "destination_validated": True,
                       "authorization_request_id": request_id, "restrictions_reconciled": True,
+                      # MRBI/CRR ficam nulos: este executor ainda não lê classes temporais
+                      # (nunca inferir CRR a partir de valor padrão do produto).
                       "temporal_preservation": {"mrbi": None, "crr": None,
                                                 "notes": ["Temporal classes are not read by this executor version."]}},
     }
     jsonschema.validate(evidence, load("backup/schemas/evidence.schema.yaml"))
     (EVIDENCE / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
 
+    # Contagem de objetos por disposição, para a reconciliação do manifest.
     count = lambda d: sum(o["disposition"] == d for o in objects)
+    # O manifest lista cada arquivo de evidência com seu SHA-256 (exceto ele mesmo).
     arts = [{"path": p.name, "sha256": sha256(p), "object_class": "evidence", "bytes": p.stat().st_size}
             for p in sorted(EVIDENCE.iterdir()) if p.is_file() and p.name != "manifest.json"]
     exceptions = bool(limitations or pf["accepted_restrictions"] or count("FAILED"))
@@ -281,14 +416,17 @@ def cmd_build_evidence():
     (EVIDENCE / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     result(status, evidence_sha256=sha256(EVIDENCE / "evidence.json"),
            manifest_sha256=sha256(EVIDENCE / "manifest.json"), reconciliation=manifest["reconciliation"])
+    # Conclusão do workflow nunca prova preservação: FAILED derruba o job.
     if status == "FAILED":
         sys.exit(1)
 
 
+# Mapa subcomando -> função. Para adicionar um subcomando: crie a função e registre-a aqui.
 COMMANDS = {"validate-inputs": cmd_validate_inputs, "preflight": cmd_preflight,
             "validate-destination": cmd_validate_destination, "build-evidence": cmd_build_evidence}
 
 if __name__ == "__main__":
+    # Uso incorreto (sem argumento, ou subcomando desconhecido): mostra a ajuda e sai com 64.
     if len(sys.argv) != 2 or sys.argv[1] not in COMMANDS:
         print(__doc__)
         sys.exit(64)

@@ -308,6 +308,8 @@ capabilities:
       invocation: workflow_call
       secrets: inherit
       ecr_source: WORKFLOW_ON_WORKFLOW_CALL_INPUTS
+      # Prefixo da linha que o workflow imprime no log do job com o desfecho em JSON.
+      # O engine procura esta linha para reportar ao HITL (BACKUP_REPOSITORY.md, passo 6).
       result_log_marker: BKP_RESULT
     command_log:
       path: commands.log
@@ -494,6 +496,14 @@ implementation_artifacts:
       - {capability_id: backup_repository, relationship: SCHEMATIZES}
       - {capability_id: backup_projects, relationship: SCHEMATIZES}
 
+  # ---------------------------------------------------------------------------
+  # Executor do BKP_REPO: workflow_call chamado pelo dispatcher.yml (PR 3).
+  # Os inputs do `on: workflow_call` dele definem o ECR apresentado ao HITL.
+  # `current_sha` é o SHA de blob Git do arquivo; muda a cada alteração do
+  # workflow e dispara nova validação (impact analysis, ver artifact_traceability).
+  # validation REVALIDATION_REQUIRED: o arquivo mudou e ainda não foi revalidado
+  # ponta a ponta (depende do dispatcher e do destino OneDrive).
+  # ---------------------------------------------------------------------------
   - artifact_id: backup_repository_executor
     artifact_type: GITHUB_ACTIONS_WORKFLOW
     location:
@@ -504,7 +514,7 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
-      current_sha: ef4d0957b6440c476cadddd44cf83bef554f25d4
+      current_sha: c774c84daeba46a107d58e130168dc7b87ff36a2
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: REVALIDATION_REQUIRED
@@ -571,6 +581,12 @@ implementation_artifacts:
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
+  # ---------------------------------------------------------------------------
+  # Script auxiliar do executor: revalida inputs, roda o Capability Preflight,
+  # aplica o gate de destino e monta evidence.json/manifest.json (schemas 2.0).
+  # Fica em backup/scripts/ (local gerenciado): todo script ali precisa de
+  # artifact_id, senão é ORPHAN_ARTIFACT (orphan_detection).
+  # ---------------------------------------------------------------------------
   - artifact_id: backup_repository_helper_script
     artifact_type: SCRIPT
     location:
