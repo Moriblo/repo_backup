@@ -19,18 +19,26 @@
 #
 # SEQUÊNCIA DOS PASSOS (não reordenar; ver BACKUP_REPOSITORY.md)
 #   1. Revalidar inputs            -> rejeita valores fora do schema
-#   2. Emitir token da origem      -> GitHub App Reader, só leitura
+#   2. Emitir tokens               -> App Reader (leitura da origem) e App Writer (secret)
 #   3. Capability Preflight        -> pode terminar BLOCKED (HITL decide)
-#   4. Validar destino             -> falha fechada (OneDrive só no PR 4)
-#   5. Mirror Git + verificações   -> fsck, LFS, submódulos
-#   6. Evidência e manifest 2.0    -> validados contra os schemas
-#   7. Publicar evidência          -> artefato do Actions (sempre)
+#   4. Validar destino             -> OneDrive de verdade; falha fechada (saída 20)
+#   5. Mirror Git + verificações   -> clone, comparação de refs, fsck, LFS, submódulos
+#   6. Pacote restaurável          -> bundle de todas as refs + objetos LFS + lista de refs
+#   7. Enviar o pacote ao OneDrive -> upload conferido por hash
+#   8. Evidência e manifest 2.0    -> validados contra os schemas
+#   9. Enviar a evidência          -> ao OneDrive, conferida por hash
+#  10. Limpar e publicar           -> apaga o estado local; artefato do Actions (sempre)
 #
 # REGRAS QUE ESTE WORKFLOW RESPEITA
 #   - A origem é READ-ONLY: nenhum passo executa push ou escrita na origem.
 #   - Nenhum segredo é impresso; o token da origem só aparece em variável de
 #     ambiente dos passos que o usam e nunca é gravado na config do mirror.
-#   - Sem OIDC: o OneDrive usará OAuth delegado (Files.ReadWrite.AppFolder), PR 4.
+#   - Sem OIDC: o OneDrive usa OAuth delegado (Files.ReadWrite.AppFolder), pelo
+#     onedrive.py. O refresh token gira a cada uso e o novo valor é gravado no secret
+#     ANTES de qualquer outro uso do OneDrive; se a gravação falhar, tudo para.
+#   - O BKP_RESULT que vale é o ÚLTIMO da execução (uma falha de envio, depois do
+#     build-evidence, imprime um BKP_RESULT FAILED que substitui o anterior).
+#   - Não dispare duas execuções ao mesmo tempo: ambas girariam o refresh token.
 #   - Sucesso do workflow NÃO prova preservação; a prova é o manifest validado.
 # =============================================================================
 name: Backup Repository (BKP_REPO)
@@ -95,12 +103,13 @@ jobs:
       - name: Checkout execution repository
         uses: actions/checkout@v4
 
-      # Bibliotecas do bkp_repo.py: PyYAML (lê capabilities/schemas) e jsonschema (valida).
-      - name: Install validator dependencies
+      # Bibliotecas dos scripts: PyYAML (lê capabilities/schemas), jsonschema (valida) e
+      # PyNaCl (o GitHub exige "sealed box" para gravar o secret do refresh token).
+      - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
-          pip install --quiet pyyaml jsonschema
+          pip install --quiet pyyaml jsonschema pynacl
 
       # Segunda barreira de validação (a primeira é do dispatcher). Falha com
       # saída 2 e BKP_RESULT REJECTED se algum input violar o schema da linha
@@ -139,6 +148,23 @@ jobs:
           permission-contents: read
           permission-metadata: read
 
+      # Emite um token do GitHub App Writer, limitado a ESCREVER SECRETS neste repositório
+      # (permission-secrets: write). Serve só para gravar o novo refresh token do OneDrive.
+      # `continue-on-error: true`: se não puder ser emitido, o gate de destino falha fechado
+      # (saída 20) informando que falta SECRETS_WRITER_TOKEN.
+      # Dependências: variável REPOSITORY_PRESERVATION_SECRETS_APP_ID e secret
+      # REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY.
+      - name: Issue secrets-writer token (GitHub App Writer)
+        id: writer
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_APP_ID }}
+          private-key: ${{ secrets.REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-secrets: write
+
       # Capability Preflight: roda APÓS o GO e ANTES de qualquer Source Inventory.
       # Saídas: 0 = segue; 10 = BLOCKED (lacunas materiais sem decisão do HITL).
       # Quando BLOCKED, os passos seguintes são pulados e o job termina em falha
@@ -151,12 +177,18 @@ jobs:
           TOKEN_OUTCOME: ${{ steps.token.outcome }}
         run: python3 backup/scripts/bkp_repo.py preflight
 
-      # Gate de destino (fail closed). Até o PR 4 implementar o OneDrive, este
-      # passo SEMPRE falha (saída 20): é o comportamento esperado hoje, e é o
-      # que impede gerar "sucesso" sem destino validado.
+      # Gate de destino (fail closed). Renova o token do OneDrive, GRAVA o novo refresh
+      # token no secret (rotação) e prova que dá para escrever, ler e apagar um arquivo de
+      # teste em <AppFolder>/<destination>/<request_id>/. Qualquer falha, inclusive
+      # configuração ausente (Client ID, refresh token, token do Writer), termina em saída 20
+      # com BKP_RESULT BLOCKED, e a origem nem chega a ser lida.
       - name: Validate destination (fail closed before Source Inventory)
         id: destination
         shell: bash
+        env:
+          ONEDRIVE_CLIENT_ID: ${{ vars.ONEDRIVE_CLIENT_ID }}
+          ONEDRIVE_REFRESH_TOKEN: ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
+          SECRETS_WRITER_TOKEN: ${{ steps.writer.outputs.token }}
         run: python3 backup/scripts/bkp_repo.py validate-destination
 
       # Confirma que git e git-lfs existem no runner (ubuntu-latest já os traz).
@@ -182,6 +214,31 @@ jobs:
           # Source operation is intentionally fetch/clone-only. No push command or
           # source mutation operation is present in this executor.
           git clone --mirror "https://github.com/${SOURCE_REPOSITORY}.git" "$MIRROR_DIR"
+
+      # Reconciliação de refs: compara as refs e os SHAs da ORIGEM (git ls-remote) com os do
+      # mirror recém-clonado. Qualquer diferença é falha (saída 7): o mirror não pode ser
+      # dado como completo. Refs que a origem recebeu ENTRE o clone e esta consulta também
+      # aparecem como diferença; nesse caso, dispare o backup de novo.
+      # Ignora a linha HEAD e as linhas "peeled" (^{}) do ls-remote, que não são refs reais.
+      - name: Compare source refs with mirror refs
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$SOURCE_TOKEN" | base64 -w0)"
+          mkdir -p "$EVIDENCE_DIR"
+          git ls-remote "https://github.com/${SOURCE_REPOSITORY}.git" | awk '$2 != "HEAD" && $2 !~ /\^\{\}$/ {print $2 "\t" $1}' | sort > "$EVIDENCE_DIR/refs-source.tsv"
+          git -C "$MIRROR_DIR" for-each-ref --format='%(refname)%09%(objectname)' | sort > "$EVIDENCE_DIR/refs-mirror.tsv"
+          if diff "$EVIDENCE_DIR/refs-source.tsv" "$EVIDENCE_DIR/refs-mirror.tsv" > "$EVIDENCE_DIR/refs-compare.txt"; then
+            echo "IDENTICAL: $(wc -l < "$EVIDENCE_DIR/refs-source.tsv") refs" | tee "$EVIDENCE_DIR/refs-compare.txt"
+          else
+            echo "::error::Source refs differ from mirror refs (see refs-compare.txt)."
+            cat "$EVIDENCE_DIR/refs-compare.txt"
+            exit 7
+          fi
 
       # Evidência de integridade do mirror:
       #   refs.tsv              lista de refs com SHA e tipo (base da reconciliação)
@@ -276,18 +333,105 @@ jobs:
           sort -u -o "$EVIDENCE_DIR/gitmodules-history.tsv"             "$EVIDENCE_DIR/gitmodules-history.tsv"
           sort -u -o "$EVIDENCE_DIR/gitlinks-history.tsv"             "$EVIDENCE_DIR/gitlinks-history.tsv"
 
+      # Monta o PACOTE RESTAURÁVEL em package/:
+      #   source.bundle   git bundle de TODAS as refs (verificado com `git bundle verify`)
+      #   lfs-objects.tar objetos Git LFS (o bundle não os carrega); só se a origem usa LFS
+      #   refs.tsv        lista das refs e dos SHAs preservados, para conferência
+      #   RESTAURAR.txt   como restaurar para um repositório novo e vazio
+      # Códigos de saída: 8 = objetos LFS não encontrados no mirror.
+      - name: Build restorable package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p package
+          git -C "$MIRROR_DIR" bundle create "$PWD/package/source.bundle" --all
+          git -C "$MIRROR_DIR" bundle verify "$PWD/package/source.bundle"
+          if [[ "${LFS_APPLICABLE:-false}" == "true" ]]; then
+            lfs_dir=""
+            for d in "$MIRROR_DIR/lfs" "$MIRROR_DIR/.git/lfs"; do
+              if [[ -d "$d/objects" ]]; then lfs_dir="$d"; fi
+            done
+            if [[ -z "$lfs_dir" ]]; then
+              echo "::error::Git LFS objects not found in the mirror."
+              exit 8
+            fi
+            tar -C "$(dirname "$lfs_dir")" -cf package/lfs-objects.tar "$(basename "$lfs_dir")/objects"
+          fi
+          cp "$EVIDENCE_DIR/refs.tsv" package/refs.tsv
+          cat > package/RESTAURAR.txt <<'EOF'
+          COMO RESTAURAR ESTE BACKUP PARA UM REPOSITORIO NOVO E VAZIO NO GITHUB
+
+          1. Crie o repositorio vazio no GitHub (sem README, sem licenca).
+          2. git clone --mirror source.bundle restaurado.git
+          3. cd restaurado.git
+          4. git remote set-url origin https://github.com/DONO/NOVO.git
+          5. git push origin 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
+             (NAO envie refs/pull/*: o GitHub as gerencia e nao aceita o envio.)
+          6. Se existir lfs-objects.tar: extraia-o dentro de restaurado.git
+             (cria lfs/objects) e rode: git lfs push --all origin
+
+          refs.tsv lista as refs preservadas e seus SHAs, para conferir depois.
+          EOF
+
+      # Envia o pacote ao OneDrive em <destination>/<request_id>/package/ e confere o hash de
+      # cada arquivo. Grava evidence/onedrive-package.json (o build-evidence lê esta lista).
+      # Falha: imprime BKP_RESULT FAILED (PACKAGE_UPLOAD_FAILED) e sai com o código do
+      # onedrive.py (22 = envio ou hash; 23 = autenticação ou rotação do secret).
+      - name: Upload package to OneDrive
+        shell: bash
+        env:
+          ONEDRIVE_CLIENT_ID: ${{ vars.ONEDRIVE_CLIENT_ID }}
+          ONEDRIVE_REFRESH_TOKEN: ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
+          SECRETS_WRITER_TOKEN: ${{ steps.writer.outputs.token }}
+        run: |
+          set -euo pipefail
+          rc=0
+          python3 backup/scripts/onedrive.py upload --prefix "${DESTINATION}/${REQUEST_ID}/package" \
+            --result "$EVIDENCE_DIR/onedrive-package.json" --files package/* || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            printf 'BKP_RESULT {"reason": "PACKAGE_UPLOAD_FAILED", "request_id": "%s", "status": "FAILED"}\n' "$REQUEST_ID"
+            exit "$rc"
+          fi
+
       # Gera evidence.json e manifest.json (schemas 2.0), valida ambos e imprime
-      # a linha BKP_RESULT final (COMPLETE, COMPLETE_WITH_EXCEPTIONS ou FAILED).
-      # Só roda se o destino foi validado; senão sai com 21.
+      # a linha BKP_RESULT (COMPLETE, COMPLETE_WITH_EXCEPTIONS ou FAILED).
+      # Só roda se o destino foi validado (senão sai com 21). O manifest lista os arquivos
+      # do pacote com o caminho no OneDrive, o SHA-256 e o tamanho.
       - name: Build schema 2.0 evidence and manifest
         shell: bash
         env:
           DESTINATION_VALIDATED: ${{ steps.destination.outputs.destination_validated }}
         run: python3 backup/scripts/bkp_repo.py build-evidence
 
+      # Envia a evidência (evidence.json, manifest.json, preflight.json, listas de refs, fsck...)
+      # a <destination>/<request_id>/evidence/. Falha: BKP_RESULT FAILED (EVIDENCE_UPLOAD_FAILED),
+      # que passa a ser o ÚLTIMO BKP_RESULT e substitui o do passo anterior.
+      - name: Upload evidence to OneDrive
+        shell: bash
+        env:
+          ONEDRIVE_CLIENT_ID: ${{ vars.ONEDRIVE_CLIENT_ID }}
+          ONEDRIVE_REFRESH_TOKEN: ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
+          SECRETS_WRITER_TOKEN: ${{ steps.writer.outputs.token }}
+        run: |
+          set -euo pipefail
+          rc=0
+          python3 backup/scripts/onedrive.py upload --prefix "${DESTINATION}/${REQUEST_ID}/evidence" \
+            --result "${RUNNER_TEMP}/onedrive-evidence-upload.json" --files "$EVIDENCE_DIR"/* || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            printf 'BKP_RESULT {"reason": "EVIDENCE_UPLOAD_FAILED", "request_id": "%s", "status": "FAILED"}\n' "$REQUEST_ID"
+            exit "$rc"
+          fi
+
+      # Apaga o estado local do OneDrive (contém o refresh token corrente), MESMO se o job
+      # falhou. O estado vive só na pasta temporária do runner.
+      - name: Remove local OneDrive state
+        if: always()
+        shell: bash
+        run: python3 backup/scripts/onedrive.py cleanup
+
       # Publica a pasta de evidências como artefato do Actions, MESMO se o job
       # falhou (`if: always()`), para que um BLOCKED deixe rastro (preflight.json).
-      # Retenção curta (7 dias): a cópia definitiva vai para o OneDrive (PR 4).
+      # Retenção curta (7 dias): a cópia definitiva está no OneDrive.
       - name: Publish evidence
         if: always()
         uses: actions/upload-artifact@v4

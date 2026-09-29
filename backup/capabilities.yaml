@@ -447,6 +447,18 @@ capabilities:
     # (bkp_repo.py) calcula as restrições como `includes` menos `implemented_classes`.
     # Ao implementar uma classe, acrescente-a aqui: a restrição correspondente deixa de ser exigida.
     implemented_classes: [git]
+    # Destino OneDrive pessoal (OAuth delegado, sem OIDC). Nada aqui é segredo: os valores
+    # sensíveis ficam em secrets/variáveis do repositório (nomes abaixo).
+    onedrive:
+      # Autoridade de contas pessoais e escopo mínimo (pasta do app).
+      authority: https://login.microsoftonline.com/consumers
+      scope: "Files.ReadWrite.AppFolder offline_access"
+      # Variável de repositório com o Client ID do registro no Entra (app público, sem client secret).
+      client_id_variable: ONEDRIVE_CLIENT_ID
+      # Secret com o refresh token; é regravado a cada execução (rotação) pelo App Writer.
+      refresh_token_secret: ONEDRIVE_REFRESH_TOKEN
+      # Layout no destino: <destination>/<request_id>/package/ (restaurável) e /evidence/.
+      layout: "<destination>/<request_id>/{package,evidence}"
 
   # Backup de Projects. Chamável sozinho e também incluído pelo backup_repository. SEM Mnemonic e SEM executor materializado: hoje não gera comando.
   - id: backup_projects
@@ -595,7 +607,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 981968aeec00807538c527d1257cbb7a991633b7
+      current_sha: ab3c06e3a03cabee6c3757a258ee9b5049e00425
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -693,7 +705,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: c774c84daeba46a107d58e130168dc7b87ff36a2
+      current_sha: 7d1960d6f3e48b2d62358e4fdf220d2b452d0fb3
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: REVALIDATION_REQUIRED
@@ -817,7 +829,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: b7cdc6d9c34199d6ba5c0174e236db36b9b01f46
+      current_sha: 8d55c453d667abc45362815f7f4a0056315854ec
     validation:
       status: NOT_VALIDATED
       scope: Provado em run real - validate-inputs, preflight e validate-destination. Não provado - build-evidence.
@@ -883,24 +895,48 @@ implementation_artifacts:
       - {capability_id: backup_repository, relationship: SUPPORTS}
 
   # ---------------------------------------------------------------------------
-  # Teste OIDC antigo (Azure login por OIDC). Contraria a regra "sem OIDC" e falhou nos
-  # runs. Registrado só para não aparecer como órfão até ser removido no PR do OneDrive.
+  # Biblioteca/CLI do OneDrive (SA-08): renova o refresh token (OAuth delegado), grava o
+  # token rotacionado no secret ONEDRIVE_REFRESH_TOKEN (via token do App Writer), valida o
+  # destino (grava/lê/apaga um arquivo de prova) e envia arquivos com verificação de hash.
+  # NOT_VALIDATED: só testado contra servidores simulados; nunca contra o Graph real.
   # ---------------------------------------------------------------------------
-  - artifact_id: onedrive_oidc_read_test
-    artifact_type: GITHUB_ACTIONS_WORKFLOW
+  - artifact_id: onedrive_client_script
+    artifact_type: SCRIPT
     location:
       repository: Moriblo/repo_backup
-      path: .github/workflows/onedrive-appfolder-oidc-read-test.yml
-    lifecycle: TO_BE_REMOVED
-    purpose: Obsolete OIDC diagnostic for the OneDrive AppFolder; to be removed by the OneDrive pull request (SA-08).
+      path: backup/scripts/onedrive.py
+    purpose: OneDrive client for backup_repository - token refresh with secret rotation, destination validation and verified uploads.
     materialization:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: c22d25b1b11510a18b396455b7f7b6e14cde41e7
+      current_sha: 147f34344678542443cb018b404c274c9e944814
     validation:
       status: NOT_VALIDATED
+      scope: Testado só contra servidores simulados (autenticação, rotação do secret, envio em partes, divergência de hash, ausência de vazamento de token). Não provado contra o Microsoft Graph real.
+    relationships:
+      - {capability_id: backup_repository, relationship: EXECUTES}
+
+  # ---------------------------------------------------------------------------
+  # Login único do HITL (device code): roda no computador do HITL, não no Actions.
+  # Entrega o refresh token no terminal para ser gravado no secret ONEDRIVE_REFRESH_TOKEN.
+  # ---------------------------------------------------------------------------
+  - artifact_id: onedrive_authorize_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/onedrive_authorize.py
+    purpose: One-time HITL device-code login that prints the OneDrive refresh token to the terminal only.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: c41290f581a4c21a98e66a5c8b6ee5b5c76c5e1a
+    validation:
+      status: NOT_VALIDATED
+      scope: Testado só contra servidor simulado. Não provado contra a Microsoft real.
     relationships:
       - {capability_id: backup_repository, relationship: SUPPORTS}
 

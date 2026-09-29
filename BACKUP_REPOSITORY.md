@@ -13,7 +13,7 @@
 2. O engine apresenta o pedido exato (o **ECR**), lido do workflow. O HITL dá **GO**.
 3. O engine grava **uma linha** no `commands.log`, no `main`.
 4. O **Dispatcher** valida a linha e chama o workflow `BKP_REPO`.
-5. O `BKP_REPO` faz a verificação prévia (preflight), lê a origem e gera a evidência. Gravar no OneDrive é **planejado**.
+5. O `BKP_REPO` faz a verificação prévia (preflight), valida o destino, lê a origem, envia o **pacote restaurável** e a evidência ao OneDrive.
 6. O engine lê o resultado e o reporta ao HITL.
 
 **Regras que nunca se quebram**
@@ -23,7 +23,7 @@
 - Segredo em texto puro nunca aparece em chat, log ou evidência.
 - Código só entra por pull request. A única escrita direta no `main` é o `commands.log`, e só depois do GO.
 
-**Estado atual (29/09/2026).** A leitura do GitHub e o fluxo até o preflight estão validados em execuções reais. O destino OneDrive ainda não existe, então toda execução termina `BLOCKED` no passo do destino (seção I.4, passo 11). Hoje o backup cobre só o **código Git**; as demais 17 classes são restrições aceitas (seção I.14). **Ainda não existe restauração.**
+**Estado atual (29/09/2026).** A leitura do GitHub e o fluxo até o preflight estão validados em execuções reais. O código do destino OneDrive (validação, rotação do token, pacote restaurável, envio com conferência de hash) está **implementado e testado só contra servidores simulados**; **ainda não foi provado contra o OneDrive real**. Até o HITL fazer a preparação da seção I.2, toda execução termina `BLOCKED` no passo do destino (seção I.4, passo 11). Hoje o backup cobre só o **código Git**; as demais 17 classes são restrições aceitas (seção I.14). **A restauração ainda não foi testada de ponta a ponta** (o procedimento foi testado só localmente).
 
 **Onde encontrar cada coisa**
 
@@ -115,18 +115,20 @@ Se não conseguir ler o repositório, pare e me avise. Não siga de memória.
 | **Repositório `repo_backup`** (`main`) | Guarda o código, o `commands.log`, os segredos e as variáveis. Código só entra por pull request. |
 | **GitHub Actions** | Executa o Dispatcher e o workflow do `BKP_REPO` (e, temporariamente, o diagnóstico). |
 | **GitHub App "Repository Preservation Reader"** | Emite, a cada execução, um token de curta duração só de leitura (`contents: read`, `metadata: read`) para a origem. |
-| **GitHub App Writer** (**PLANEJADO**) | Grava o novo refresh token do OneDrive no secret. Só *Secrets: Read and write*, instalado só neste repositório. |
+| **GitHub App Writer** (código pronto; **criação pelo HITL pendente**) | Grava o novo refresh token do OneDrive no secret. Só *Secrets: Read and write*, instalado só neste repositório. |
 | **Repositório de origem** | É lido e **nunca alterado**. |
-| **Microsoft Entra, app público** (**PLANEJADO**) | Emite os tokens do OneDrive pela autoridade `consumers` (conta pessoal). |
-| **Microsoft Graph e OneDrive** (**PLANEJADO**) | Recebem o pacote e a evidência em `Apps/<nome do registro>/…`. |
+| **Microsoft Entra, app público** (configuração pelo HITL pendente) | Emite os tokens do OneDrive pela autoridade `consumers` (conta pessoal). |
+| **Microsoft Graph e OneDrive** | Recebem o pacote e a evidência em `Apps/<nome do registro>/<destination>/<request_id>/{package,evidence}/`. |
 
-## I.2 Preparação, uma única vez (**PLANEJADO**)
+## I.2 Preparação, uma única vez (feita pelo HITL)
 
-Depende do PR do OneDrive (SA-08 da issue #7).
-- **0a.** O HITL configura o registro no Entra: aceitar contas pessoais, permitir fluxos de cliente público e conceder as permissões **delegadas** `Files.ReadWrite.AppFolder` e `offline_access`.
-- **0b.** O HITL cria o GitHub App Writer.
-- **0c.** O HITL roda `onedrive_authorize.py` no computador dele e faz o login. O script imprime o refresh token só no terminal.
-- **0d.** O HITL grava os segredos e as variáveis (seção I.10).
+O código já está no repositório (SA-08). Falta só o HITL fazer, nesta ordem:
+- **0a.** Configurar o registro no Entra: aceitar contas pessoais, permitir fluxos de cliente público e conceder as permissões **delegadas** `Files.ReadWrite.AppFolder` e `offline_access`. Anotar o *Client ID*.
+- **0b.** Criar o GitHub App **Writer**: só *Repository permissions › Secrets: Read and write*, instalado só em `Moriblo/repo_backup`. Gravar a chave privada e o ID do app (nomes na seção I.10).
+- **0c.** Gravar a variável `ONEDRIVE_CLIENT_ID` (Settings › Secrets and variables › Actions › Variables).
+- **0d.** Rodar `python3 backup/scripts/onedrive_authorize.py --client-id <ID>` no computador do HITL e fazer o login. O script imprime o refresh token só no terminal.
+- **0e.** Gravar esse valor no secret `ONEDRIVE_REFRESH_TOKEN` e limpar o terminal.
+- **Atenção:** não rode dois backups ao mesmo tempo. Cada execução rotaciona o refresh token; duas em paralelo podem invalidar uma à outra.
 
 ## I.3 Os 15 passos de cada execução (índice)
 
@@ -144,10 +146,10 @@ O texto de cada passo, com o que entra, o que acontece, o que pode falhar e o qu
 | 8 | O `BKP_REPO` começa | Actions | Existe |
 | 9 | Capability Preflight | Actions | Existe |
 | 10 | O engine reporta e o HITL decide | Engine e HITL | Existe |
-| 11 | Validação do destino | Actions | Falha fechado; validação real **PLANEJADA** |
-| 12 | Leitura da origem | Actions | Parcial |
-| 13 | Pacote e envio ao OneDrive | Actions | **PLANEJADO** |
-| 14 | Evidência e manifest | Actions | Parcial |
+| 11 | Validação do destino | Actions | Implementado; falha fechado até a preparação (I.2) |
+| 12 | Leitura da origem | Actions | Existe (com conferência de refs origem × mirror) |
+| 13 | Pacote e envio ao OneDrive | Actions | Implementado; testado só com simulação |
+| 14 | Evidência e manifest | Actions | Existe (evidência também enviada ao OneDrive) |
 | 15 | O engine reporta o resultado | Engine e HITL | Existe |
 
 **Observações**
@@ -236,8 +238,9 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
 
 #### Passo 11: validação do destino
 - **Quem:** GitHub Actions, `bkp_repo.py validate-destination`.
-- **Hoje:** **sempre falha fechado**: saída **20**, `BKP_RESULT` **`BLOCKED`** (`DESTINATION_NOT_VALIDATED`). Nada é copiado. É o comportamento correto até o OneDrive existir.
-- **PLANEJADO:** renova o access token, grava o novo refresh token no secret pelo App Writer e faz uma escrita e uma leitura de teste no AppFolder.
+- **Antes:** o passo "Issue secrets-writer token" emite o token do App Writer (`secrets: write`).
+- **Acontece:** `onedrive.py` renova o access token, **grava o novo refresh token no secret** `ONEDRIVE_REFRESH_TOKEN` e faz uma escrita, uma leitura e um apagamento de arquivo de prova em `<destination>/<request_id>` no AppFolder.
+- **Falha fechado:** qualquer problema (configuração ausente, login recusado, rotação do secret falhou, escrita negada) gera saída **20**, `BKP_RESULT` **`BLOCKED`** (`DESTINATION_NOT_VALIDATED`, com o código interno no `detail`). Nada é copiado. Antes da preparação da seção I.2, é isso que acontece.
 
 #### Passo 12: leitura da origem
 - **Quem:** GitHub Actions, passos bash do `backup-repository.yml`. Só chegam aqui com o destino validado.
@@ -247,17 +250,20 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
   3. Grava `refs.tsv`, `git-fsck.txt` (`fsck --full --strict`) e `git-count-objects.txt`.
   4. Enumera Git LFS em todas as refs. Havendo objetos, baixa todos e confere o SHA-256 de cada um. Falhas: saída **3** (não listou), **4** (OID inválido), **5** (objeto ausente), **6** (hash divergente).
   5. Varre o histórico inteiro atrás de submódulos (`gitmodules-history.tsv`, `gitlinks-history.tsv`).
-- **PLANEJADO:** comparar as refs da **origem** com as do mirror (`git ls-remote` contra `refs.tsv`).
+  6. Logo após o clone, compara as refs da **origem** (`git ls-remote`) com as do mirror. Qualquer diferença: saída **7** (`refs-compare.txt` mostra a diferença). Se a origem recebeu um push entre o clone e a consulta, dispare o backup de novo.
 - **Falha:** o job fica vermelho no passo que falhou.
 
-#### Passo 13: pacote e envio ao OneDrive (**PLANEJADO**)
-- Gera o **pacote restaurável**: o `git bundle` de todas as refs, os **objetos LFS** (o bundle não os carrega) e a lista das refs. Envia em blocos ao OneDrive e confere o SHA-256 depois do envio.
-- O pacote só conta como pronto se uma **restauração de teste** o aceitar (seção I.14).
+#### Passo 13: pacote e envio ao OneDrive
+- **Quem:** GitHub Actions (passos "Build restorable package" e "Upload package to OneDrive").
+- **Acontece:** gera `package/` com `source.bundle` (`git bundle` de todas as refs, verificado com `git bundle verify`), `lfs-objects.tar` (só se a origem usa LFS; o bundle não os carrega), `refs.tsv` e `RESTAURAR.txt`. Envia a `<destination>/<request_id>/package/`: arquivo até 4 MiB em um `PUT`; maior, em sessão de envio por blocos. Depois do envio, confere o hash no OneDrive (SHA-256; se ele não informar, SHA-1; se nenhum, só o tamanho, e isso fica registrado em `verified_by`).
+- **Falha:** saída **8** (objetos LFS não achados), **22** (envio ou hash divergente) ou **23** (login ou rotação do secret); `BKP_RESULT` `FAILED` (`PACKAGE_UPLOAD_FAILED`).
+- **Limite:** `refs/pull/*` vão no bundle mas o GitHub **não aceita** enviá-las de volta; a restauração devolve só branches e tags.
+- **Sem pacote enviado, a classe `git` fica `FAILED`.** O pacote só conta como provado depois de uma **restauração de teste** real (seção I.14).
 
 #### Passo 14: evidência e manifest
 - **Quem:** GitHub Actions, `bkp_repo.py build-evidence`.
-- **Acontece:** recusa-se a rodar sem destino validado (saída **21**). Monta o `evidence.json` (classe `git` como `PRESERVED`, `PARTIALLY-PRESERVED` se houver submódulos ou `FAILED` se nenhuma ref foi lida; demais classes como `NOT-VERIFIED`, ligadas às restrições aceitas) e o `manifest.json`. **Valida ambos contra os schemas 2.0 antes de gravar.** O status final é `COMPLETE`, `COMPLETE_WITH_EXCEPTIONS` ou `FAILED` (saída **1**).
-- **Sai:** a linha final `BKP_RESULT` com `evidence_sha256`, `manifest_sha256` e a reconciliação, e o artefato com os arquivos. **PLANEJADO:** enviar a evidência ao OneDrive.
+- **Acontece:** recusa-se a rodar sem destino validado (saída **21**). Monta o `evidence.json` (classe `git` como `PRESERVED`, `PARTIALLY-PRESERVED` se houver submódulos ou `FAILED` se nenhuma ref foi lida ou nenhum pacote foi enviado; demais classes como `NOT-VERIFIED`, ligadas às restrições aceitas) e o `manifest.json`. **Valida ambos contra os schemas 2.0 antes de gravar.** O status final é `COMPLETE`, `COMPLETE_WITH_EXCEPTIONS` ou `FAILED` (saída **1**).
+- **Sai:** a linha final `BKP_RESULT` com `evidence_sha256`, `manifest_sha256` e a reconciliação, e o artefato com os arquivos. O passo seguinte envia a evidência a `<destination>/<request_id>/evidence/` (falha: saída 22 ou 23 e `FAILED` `EVIDENCE_UPLOAD_FAILED`, que passa a ser o último `BKP_RESULT`). O manifest lista os arquivos do pacote (caminho no OneDrive, SHA-256, tamanho).
 
 #### Passo 15: o engine reporta o resultado
 - **Quem:** engine.
@@ -295,10 +301,10 @@ sequenceDiagram
         HITL->>Engine: STOP ou CONTINUE_WITH_RESTRICTIONS
         Note over Engine,Main: Se CONTINUE, nova linha e novo GO, volta ao ECR
     else sem lacunas ou decisao ja aceita
-        BKP->>OD: Valida o destino, PLANEJADO
-        Note over BKP,OD: Hoje o destino falha fechado, saida 20
-        BKP->>Src: Mirror, fsck, LFS e submodulos
-        BKP->>OD: Pacote e evidencia, PLANEJADO
+        BKP->>OD: Valida o destino e rotaciona o refresh token
+        Note over BKP,OD: Se falhar, o destino falha fechado, saida 20
+        BKP->>Src: Mirror, comparacao de refs, fsck, LFS e submodulos
+        BKP->>OD: Pacote restauravel e evidencia, com conferencia de hash
         BKP-->>Engine: BKP_RESULT final
         Engine->>HITL: Reporta estado, restricoes e reconciliacao
     end
@@ -353,7 +359,7 @@ Ninguém, em execução, **escolhe** o Mnemonic. Um Mnemonic novo precisa ser de
 | **Recusada pelo Dispatcher** | Violação no passo 6 (saída 30) | Corrigir a causa. Se a linha já entrou no log, o `request_id` está queimado: a nova tentativa usa **outro** id, e a linha ruim permanece no log. |
 | **`REJECTED`** | Inputs inválidos no passo 8 (saída 2) | Corrigir e gravar nova linha com novo id. |
 | **`BLOCKED` (preflight)** | Lacunas sem decisão (saída 10) | O HITL decide `STOP` ou `CONTINUE_WITH_RESTRICTIONS` (passo 10). |
-| **`BLOCKED` (destino)** | Destino não validado (saída 20) | Resolver a causa. Hoje depende do PR do OneDrive. |
+| **`BLOCKED` (destino)** | Destino não validado (saída 20) | Ler o `detail` (`CONFIG_MISSING`, `AUTH_FAILED`, `SECRET_ROTATION_FAILED` ou erro do Graph) e corrigir a preparação da seção I.2. |
 | **`PREFLIGHT_OK`** | Preflight passou | A execução segue para o destino e a leitura da origem. |
 | **`COMPLETE`, `COMPLETE_WITH_EXCEPTIONS`, `FAILED`** | Fim da preservação (passo 14) | O engine reporta (passo 15). Só o manifest validado prova a preservação. |
 
@@ -376,9 +382,8 @@ Estados: **EXISTE**, **TEMPORÁRIO**, **A REMOVER**, **PLANEJADO**.
 | `.github/workflows/backup-repository.yml` | Executor do `BKP_REPO`. Seus inputs são o ECR. | EXISTE |
 | `backup/scripts/bkp_repo.py` | Revalidação, preflight, gate de destino e montagem da evidência. | EXISTE |
 | `.github/workflows/diagnostic-git-read.yml` | Teste manual da leitura Git. Não faz parte do fluxo e não prova preservação. | TEMPORÁRIO |
-| `.github/workflows/onedrive-appfolder-oidc-read-test.yml` | Teste OIDC antigo, contrário à regra "sem OIDC". | A REMOVER (SA-08) |
-| `backup/scripts/onedrive.py` | Access token, rotação do secret, destino, upload em blocos e SHA-256. | PLANEJADO (SA-08) |
-| `backup/scripts/onedrive_authorize.py` | Login local único (device code) que entrega o refresh token. | PLANEJADO (SA-08) |
+| `backup/scripts/onedrive.py` | Access token, rotação do secret, validação do destino, envio (simples ou em blocos) e conferência de hash. Testado só com simulação. | EXISTE |
+| `backup/scripts/onedrive_authorize.py` | Login local único (device code) que entrega o refresh token. Roda no computador do HITL. | EXISTE |
 | `backup/scripts/validate_traceability.py` | Confere o registro contra o repositório (existência, SHA, órfãos, caminhos, evidência de `VALIDATED`) e atualiza os SHAs com `--update`. | EXISTE |
 | `.github/workflows/traceability.yml` | Roda o script em todo pull request. | EXISTE |
 
@@ -390,19 +395,20 @@ Ficam em Settings → Secrets and variables → Actions do `repo_backup`. Os val
 |---|---|---|---|---|
 | `REPOSITORY_PRESERVATION_APP_ID` | variável | HITL | Token do App Reader (`backup-repository.yml`, diagnóstico) | EXISTE |
 | `REPOSITORY_PRESERVATION_APP_PRIVATE_KEY` | secret | HITL | Idem | EXISTE |
-| `ONEDRIVE_CLIENT_ID` | variável | HITL | `onedrive.py` | PLANEJADO |
-| `ONEDRIVE_REFRESH_TOKEN` | secret | HITL (valor inicial) e App Writer (rotação) | `onedrive.py` | PLANEJADO |
-| `REPOSITORY_PRESERVATION_SECRETS_APP_ID` | variável | HITL | Gravação do secret pelo App Writer | PLANEJADO |
-| `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY` | secret | HITL | Idem | PLANEJADO |
+| `ONEDRIVE_CLIENT_ID` | variável | HITL | `onedrive.py` | A CRIAR (I.2) |
+| `ONEDRIVE_REFRESH_TOKEN` | secret | HITL (valor inicial) e App Writer (rotação) | `onedrive.py` | A CRIAR (I.2) |
+| `REPOSITORY_PRESERVATION_SECRETS_APP_ID` | variável | HITL | Gravação do secret pelo App Writer | A CRIAR (I.2) |
+| `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY` | secret | HITL | Idem | A CRIAR (I.2) |
 
-O environment `onedrive-backup` e as variáveis `AZURE_CLIENT_ID` e `AZURE_TENANT_ID` pertencem ao teste OIDC antigo e ficam obsoletos; o HITL as apaga depois do SA-08. O `secrets: inherit` repassa só secrets de repositório e de organização, **não** de environment.
+O workflow do teste OIDC antigo foi removido. O environment `onedrive-backup` e as variáveis `AZURE_CLIENT_ID` e `AZURE_TENANT_ID` são obsoletos; o HITL as apaga. O `secrets: inherit` repassa só secrets de repositório e de organização, **não** de environment.
 
-## I.11 Autenticação do OneDrive (**PLANEJADO**)
+## I.11 Autenticação do OneDrive
 
 - O OneDrive é **pessoal**, o que exige permissão **delegada**: um login real, com consentimento. O workflow roda sem ninguém presente e não consegue fazer esse login.
 - Por isso o login é feito **uma vez**, no computador do HITL, por `onedrive_authorize.py` (device code). A Microsoft entrega um **refresh token**, que o script imprime **só no terminal**, nunca em arquivo, repositório, log ou chat. O HITL o grava no secret `ONEDRIVE_REFRESH_TOKEN`.
 - A cada backup, o workflow troca o refresh token por um access token de curta duração, pela autoridade `https://login.microsoftonline.com/consumers`, sem client secret e sem tenant ID (app público). O destino é `/me/drive/special/approot`, isto é, `Apps/<nome do registro>/`.
-- **Rotação:** a Microsoft devolve um refresh token novo a cada uso. O App Writer grava o novo valor no secret **antes** de qualquer outra etapa que use o OneDrive. Se a gravação falhar, o workflow para com erro claro.
+- **Rotação:** a Microsoft devolve um refresh token novo a cada uso. O `onedrive.py` grava o novo valor no secret (criptografado com a chave pública do repositório, pelo token do App Writer) **antes** de usar o access token. Se a gravação falhar, o workflow para com `SECRET_ROTATION_FAILED` (saída 23). Durante a execução o token corrente fica só em `$RUNNER_TEMP/onedrive_state.json` (permissão 600), apagado ao final mesmo em falha.
+- **Nada é impresso:** nenhum token aparece em mensagem de erro (testado).
 - Repetir o login só se o token expirar por falta de uso (cerca de 90 dias, segundo a documentação da Microsoft; **a confirmar**).
 
 ## I.12 Códigos de saída e contrato de resultado
@@ -416,9 +422,13 @@ O environment `onedrive-backup` e as variáveis `AZURE_CLIENT_ID` e `AZURE_TENAN
 | 2 | `bkp_repo.py validate-inputs`; diagnóstico | Entrada rejeitada (schema, `preflight_decision` ilegível ou reutilização de autorização). |
 | 3 | passo de LFS (bash) | Não foi possível listar os ponteiros LFS. |
 | 4, 5, 6 | passo de LFS (bash) | OID inválido, objeto LFS ausente, hash LFS divergente. |
+| 7 | passo de comparação de refs (bash) | Refs da origem diferem das do mirror. |
+| 8 | passo do pacote (bash) | Objetos LFS não encontrados no mirror. |
 | 10 | `bkp_repo.py preflight` | `BLOCKED`: lacunas materiais sem decisão do HITL. |
 | 20 | `bkp_repo.py validate-destination` | Destino não validado (falha fechado). |
 | 21 | `bkp_repo.py build-evidence` | Recusa de gerar evidência sem destino validado. |
+| 22 | `onedrive.py` | Falha do Graph, do envio ou hash divergente após o envio. |
+| 23 | `onedrive.py` | Configuração ausente, login recusado ou falha na rotação do secret. |
 | 30 | `dispatch_check.py` | Violação no push: nada é despachado. |
 | 64 | `bkp_repo.py`, `dispatch_check.py`, `validate_traceability.py` | Uso incorreto ou variável de ambiente ausente. |
 | 1 | `validate_traceability.py` | O registro não bate com o repositório (a linha `ERRO <CÓDIGO>` diz o quê). |
@@ -433,24 +443,25 @@ O workflow do `BKP_REPO` imprime, no log do job, **uma linha `BKP_RESULT {json}`
 | `BLOCKED` | Preflight com lacunas sem decisão | `reason`: `CAPABILITY_PREFLIGHT_GAPS`, `hitl_decision`: `PENDING`, `required_restrictions` |
 | `BLOCKED` | Destino não validado | `reason`: `DESTINATION_NOT_VALIDATED`, `detail` |
 | `PREFLIGHT_OK` | Preflight passou | `preflight_status`, `hitl_decision`, `accepted_restrictions` |
-| `COMPLETE`, `COMPLETE_WITH_EXCEPTIONS`, `FAILED` | Fim da preservação | `evidence_sha256`, `manifest_sha256`, `reconciliation` |
+| `COMPLETE`, `COMPLETE_WITH_EXCEPTIONS`, `FAILED` | Fim da preservação | `evidence_sha256`, `manifest_sha256`, `reconciliation`, `package_files` |
+| `FAILED` | Envio ao OneDrive falhou | `reason`: `PACKAGE_UPLOAD_FAILED` ou `EVIDENCE_UPLOAD_FAILED` (vale o **último** `BKP_RESULT` do log) |
 
 Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `DIAG_RESULT {json}` (diagnóstico da leitura Git). O log do job só fica legível depois que o job termina. A evidência bruta fica como artefato do Actions (`bkp-repo-<request_id>`, 7 dias; `diag-git-read-<run>`, 3 dias).
 
 ## I.13 Ciclo de vida dos temporários e manutenção
 
 - **`diagnostic-git-read.yml`** é TEMPORÁRIO: existe porque o gate de destino falha fechado antes do clone. Sai, com o registro dele no `capabilities.yaml`, quando o OneDrive funcionar.
-- **`onedrive-appfolder-oidc-read-test.yml`** sai no SA-08.
+- **`onedrive-appfolder-oidc-read-test.yml`** foi removido no SA-08.
 - **`backup_projects`** aparece no menu, mas não tem Mnemonic nem executor: hoje não gera comando.
 - **Registro de artefatos:** depois de alterar qualquer arquivo registrado, rode `python3 backup/scripts/validate_traceability.py --update` e confira com `--check`. O `traceability.yml` roda o `--check` em todo pull request. Um artefato só fica `VALIDATED` com evidência registrada (URL do run e commit) e a nota do que foi e do que não foi provado.
 - **Manutenção deste documento:** ao criar, mover ou remover um arquivo, um segredo ou um código de saída, atualize as seções I.9, I.10 e I.12 no mesmo PR. Itens *planejados* viram *existentes* no PR que os implementa.
 
-## I.14 Restauração e Etapa 2 (**PLANEJADO**)
+## I.14 Restauração e Etapa 2 (parcialmente **PLANEJADO**)
 
-**Objetivo.** Depois de salvo no OneDrive, o backup deve poder ser acessado direto de lá e **restituído ao GitHub**. Hoje **nada disso existe**: o plano cobre a preservação do Git e o envio ao OneDrive, mas não há capability, procedimento ou teste de restauração.
+**Objetivo.** Depois de salvo no OneDrive, o backup deve poder ser acessado direto de lá e **restituído ao GitHub**. Hoje existe o **pacote restaurável** com o roteiro `RESTAURAR.txt` (testado só localmente, com repositório de teste). **Não existe** ainda capability de restauração nem teste com o OneDrive real.
 
 **O que muda no plano**
-1. **Pacote restaurável** no passo 13: bundle de todas as refs, objetos LFS e lista das refs.
+1. **Pacote restaurável** no passo 13 (**existe**): bundle de todas as refs, objetos LFS e lista das refs. Restaura-se com `git clone --mirror source.bundle` e envio de `refs/heads/*` e `refs/tags/*`; `refs/pull/*` não podem ser devolvidas ao GitHub.
 2. **Teste de restauração** logo depois do primeiro backup real: restaurar para um repositório **novo e vazio** e registrar o resultado. Um backup só está provado quando a restauração funciona.
 3. **Capability `restore_repository`** no menu, com Mnemonic e workflow próprios, sob GO do HITL, no mesmo padrão do `BKP_REPO`.
 4. **Etapa 2: preservar e restaurar as 17 classes**, uma de cada vez. Cada classe implementada é acrescentada a `implemented_classes` no registro, e a restrição correspondente deixa de ser exigida. As classes **temporais** (que expiram) vêm primeiro, como manda o protocolo (seção II.12).
@@ -459,7 +470,7 @@ Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `
 
 | Nível | O que volta | Classes |
 |---|---|---|
-| **1. Código e histórico** | Branches, tags, histórico, LFS e submódulos, com `git push --mirror` para um repositório novo. Os arquivos de workflow vão junto, pois são arquivos Git. | `git` (**coberto** pelo plano atual) |
+| **1. Código e histórico** | Branches, tags, histórico, LFS e submódulos, com push de `refs/heads/*` e `refs/tags/*` para um repositório novo. Os arquivos de workflow vão junto, pois são arquivos Git. | `git` (**coberto** pelo plano atual) |
 | **2. Configuração** | Recriada pela API a partir dos dados preservados. Segredos de webhook são reemitidos. | `labels`, `milestones`, `rules_and_branch_protection`, `environments`, `variables`, `collaborators`, `webhooks` |
 | **3. Conteúdo colaborativo** | Recriado como **cópia equivalente**, sem a fidelidade original. | `issues`, `pull_requests`, `projects` |
 | **Sem restauração** | Fica como registro e evidência. | `actions` (execuções, logs, artefatos), `checks`, `actions_caches`, `deployments`, `codespaces_repository_state_delta` (o conteúdo pode ser recuperado como commits ou patch), `secret_metadata` (valores não são exportáveis; os segredos são criados de novo), `other_discovered_state` (depende do que for descoberto) |
