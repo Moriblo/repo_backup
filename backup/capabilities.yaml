@@ -455,8 +455,13 @@ capabilities:
       scope: "Files.ReadWrite.AppFolder offline_access"
       # Variável de repositório com o Client ID do registro no Entra (app público, sem client secret).
       client_id_variable: ONEDRIVE_CLIENT_ID
-      # Secret com o refresh token; é regravado a cada execução (rotação) pelo App Writer.
+      # Environment do GitHub que guarda a variável e os secrets abaixo; o job do workflow o declara.
+      environment: onedrive-backup
+      # Secret com o refresh token. A rotação (regravar o token novo a cada execução) só ocorre
+      # se o App Writer opcional estiver configurado; sem ele o token original vale até expirar.
       refresh_token_secret: ONEDRIVE_REFRESH_TOKEN
+      # Secret com o token fine-grained de LEITURA da origem (Contents e Metadata).
+      source_read_token_secret: SOURCE_READ_TOKEN
       # Layout no destino: <destination>/<request_id>/package/ (restaurável) e /evidence/.
       layout: "<destination>/<request_id>/{package,evidence}"
 
@@ -607,7 +612,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: ab3c06e3a03cabee6c3757a258ee9b5049e00425
+      current_sha: 750e81884190f0fcf578abfbc4a5e26dea93fe39
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -705,7 +710,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 7d1960d6f3e48b2d62358e4fdf220d2b452d0fb3
+      current_sha: 6602a24532539ee3a717240c5bc7763990c20b18
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: REVALIDATION_REQUIRED
@@ -829,7 +834,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 8d55c453d667abc45362815f7f4a0056315854ec
+      current_sha: dbcf8bb363c685ddc3a298436ac5f83822235227
     validation:
       status: NOT_VALIDATED
       scope: Provado em run real - validate-inputs, preflight e validate-destination. Não provado - build-evidence.
@@ -911,7 +916,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 147f34344678542443cb018b404c274c9e944814
+      current_sha: 561b5d4d74ee31503a974841c429dedd139c98f7
     validation:
       status: NOT_VALIDATED
       scope: Testado só contra servidores simulados (autenticação, rotação do secret, envio em partes, divergência de hash, ausência de vazamento de token). Não provado contra o Microsoft Graph real.

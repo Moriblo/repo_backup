@@ -32,7 +32,7 @@ CONTRATO DE SAÍDA
 VARIÁVEIS DE AMBIENTE (definidas pelo workflow)
     REQUEST_ID, SOURCE_REPOSITORY, DESTINATION   inputs autorizados
     PREFLIGHT_DECISION                           JSON da decisão CONTINUE_WITH_RESTRICTIONS (opcional)
-    TOKEN_OUTCOME                                resultado do passo que emite o token do GitHub App
+    TOKEN_OUTCOME                                resultado do passo que fornece o token de leitura (SOURCE_READ_TOKEN)
     EVIDENCE_DIR                                 pasta de evidências (padrão: "evidence")
     DESTINATION_VALIDATED                        "true" só depois do gate de destino
     STARTED_AT                                   início da execução (opcional)
@@ -172,7 +172,7 @@ def build_preflight():
     """
     caps = load("backup/capabilities.yaml")
     cap = next(c for c in caps["capabilities"] if c["id"] == "backup_repository")
-    # O passo do workflow que emite o token do GitHub App usa continue-on-error;
+    # O passo do workflow que fornece o token de leitura usa continue-on-error;
     # aqui o resultado dele decide se a leitura da origem está disponível.
     token_ok = os.environ.get("TOKEN_OUTCOME") == "success"
     # Classes que o executor JÁ lê e preserva, declaradas no registro (`implemented_classes`).
@@ -223,7 +223,7 @@ def build_preflight():
             # Classe implementada sem token = problema de ACESSO.
             # Classe não implementada = falta de CAPACIDADE DE EXECUÇÃO.
             cls_gap = GAP_ACCESS if implemented else GAP_EXEC
-            cause = ("Read-only GitHub App token could not be issued for the source repository."
+            cause = ("Read-only source token (SOURCE_READ_TOKEN) is missing or could not be provided for the source repository."
                      if implemented else "Executor route for this object class is not implemented yet.")
             gaps.append({
                 "object_class": cls,

@@ -31,7 +31,12 @@ CÓDIGOS DE SAÍDA
 VARIÁVEIS DE AMBIENTE
     ONEDRIVE_CLIENT_ID         Client ID do registro no Entra (variável do repositório)
     ONEDRIVE_REFRESH_TOKEN     refresh token inicial (secret do repositório)
-    SECRETS_WRITER_TOKEN       token do GitHub App Writer (permissão Secrets: write)
+    SECRETS_WRITER_TOKEN       (opcional) token do GitHub App Writer (permissão Secrets: write).
+                               Sem ele NÃO há rotação: o secret não é regravado, um aviso é impresso
+                               e o refresh token original vale até expirar (cerca de 90 dias);
+                               depois disso é preciso repetir o onedrive_authorize.py.
+    ONEDRIVE_SECRETS_ENVIRONMENT  (opcional) nome do environment que guarda o secret; vazio = secret
+                               do repositório
     GITHUB_REPOSITORY          dono/nome do repositório que guarda o secret
     GITHUB_API_URL             (opcional) base da API do GitHub
     RUNNER_TEMP                pasta temporária do runner (estado local)
@@ -186,16 +191,17 @@ class Session:
         self._refresh_token = self._load_state() or refresh_token
         self._access_token = None
         self._expires_at = 0.0
+        self._warned = False
 
     @classmethod
     def from_env(cls):
         """Monta a sessão a partir do ambiente. Sem toda a configuração, falha com CONFIG_MISSING."""
-        names = ["ONEDRIVE_CLIENT_ID", "ONEDRIVE_REFRESH_TOKEN", "SECRETS_WRITER_TOKEN", "GITHUB_REPOSITORY"]
+        names = ["ONEDRIVE_CLIENT_ID", "ONEDRIVE_REFRESH_TOKEN", "GITHUB_REPOSITORY"]
         missing = [n for n in names if not os.environ.get(n)]
         if missing:
             raise OneDriveError("CONFIG_MISSING", "configuração ausente: " + ", ".join(missing))
         return cls(os.environ["ONEDRIVE_CLIENT_ID"], os.environ["ONEDRIVE_REFRESH_TOKEN"],
-                   os.environ["SECRETS_WRITER_TOKEN"], os.environ["GITHUB_REPOSITORY"])
+                   os.environ.get("SECRETS_WRITER_TOKEN", ""), os.environ["GITHUB_REPOSITORY"])
 
     # --- estado local (refresh token corrente) ---
     def _load_state(self):
@@ -224,7 +230,13 @@ class Session:
         self._refresh_token = new_rt
         # Rotação: se o valor mudou em relação ao que está no secret, grava agora. Falhou: para tudo.
         if new_rt != self._secret_value:
-            self._write_secret(new_rt)
+            if self.writer_token:
+                self._write_secret(new_rt)
+            elif not self._warned:
+                # Sem App Writer não há como regravar o secret: segue com o token original.
+                print("AVISO: SECRETS_WRITER_TOKEN ausente; rotação do refresh token DESLIGADA "
+                      "(o token original expira em cerca de 90 dias).", file=sys.stderr)
+                self._warned = True
             self._secret_value = new_rt
         self._access_token = data["access_token"]
         self._expires_at = time.time() + int(data.get("expires_in", 3600))
@@ -244,13 +256,17 @@ class Session:
             from nacl import encoding, public           # PyNaCl: o GitHub exige "sealed box"
         except ImportError:
             raise OneDriveError("SECRET_ROTATION_FAILED", "PyNaCl não está instalado no runner")
-        st, _, body = http("GET", f"{api}/repos/{self.repo}/actions/secrets/public-key", headers=h)
+        # Secret de environment usa outro caminho da API que o secret de repositório.
+        env_name = os.environ.get("ONEDRIVE_SECRETS_ENVIRONMENT", "")
+        base = (f"{api}/repos/{self.repo}/environments/{urllib.parse.quote(env_name, safe='')}/secrets" if env_name
+                else f"{api}/repos/{self.repo}/actions/secrets")
+        st, _, body = http("GET", f"{base}/public-key", headers=h)
         key = _json(body)
         if st != 200 or "key" not in key:
             raise OneDriveError("SECRET_ROTATION_FAILED", "não foi possível ler a chave pública dos secrets: " + _safe_error(st, body))
         box = public.SealedBox(public.PublicKey(key["key"].encode(), encoding.Base64Encoder()))
         encrypted = base64.b64encode(box.encrypt(value.encode())).decode()
-        st, _, body = http("PUT", f"{api}/repos/{self.repo}/actions/secrets/{SECRET_NAME}", headers=h,
+        st, _, body = http("PUT", f"{base}/{SECRET_NAME}", headers=h,
                            json_body={"encrypted_value": encrypted, "key_id": key["key_id"]})
         if st not in (201, 204):
             raise OneDriveError("SECRET_ROTATION_FAILED", "não foi possível gravar o novo refresh token no secret: " + _safe_error(st, body))

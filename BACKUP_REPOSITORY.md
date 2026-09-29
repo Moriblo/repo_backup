@@ -114,21 +114,18 @@ Se não conseguir ler o repositório, pare e me avise. Não siga de memória.
 | **Engine** (hoje, a sessão do Claude Code; outros no futuro, ver a issue #5) | Lê este protocolo, apresenta o menu e o ECR, grava a linha no `commands.log` depois do GO e reporta o resultado. Nunca infere autorização. |
 | **Repositório `repo_backup`** (`main`) | Guarda o código, o `commands.log`, os segredos e as variáveis. Código só entra por pull request. |
 | **GitHub Actions** | Executa o Dispatcher e o workflow do `BKP_REPO` (e, temporariamente, o diagnóstico). |
-| **GitHub App "Repository Preservation Reader"** | Emite, a cada execução, um token de curta duração só de leitura (`contents: read`, `metadata: read`) para a origem. |
-| **GitHub App Writer** (código pronto; **criação pelo HITL pendente**) | Grava o novo refresh token do OneDrive no secret. Só *Secrets: Read and write*, instalado só neste repositório. |
+| **Token `SOURCE_READ_TOKEN`** | Token fine-grained (Contents e Metadata **somente leitura**, todos os repositórios), guardado como secret do environment `onedrive-backup`. É a credencial de leitura da origem. (O GitHub App "Repository Preservation Reader" continua só no workflow de diagnóstico temporário.) |
+| **GitHub App Writer** (**OPCIONAL**, não criado) | Regrava o novo refresh token do OneDrive no secret. Só *Secrets: Read and write*. Sem ele, a rotação fica desligada (seção I.11). |
 | **Repositório de origem** | É lido e **nunca alterado**. |
 | **Microsoft Entra, app público** (configuração pelo HITL pendente) | Emite os tokens do OneDrive pela autoridade `consumers` (conta pessoal). |
 | **Microsoft Graph e OneDrive** | Recebem o pacote e a evidência em `Apps/<nome do registro>/<destination>/<request_id>/{package,evidence}/`. |
 
 ## I.2 Preparação, uma única vez (feita pelo HITL)
 
-O código já está no repositório (SA-08). Falta só o HITL fazer, nesta ordem:
-- **0a.** Configurar o registro no Entra: aceitar contas pessoais, permitir fluxos de cliente público e conceder as permissões **delegadas** `Files.ReadWrite.AppFolder` e `offline_access`. Anotar o *Client ID*.
-- **0b.** Criar o GitHub App **Writer**: só *Repository permissions › Secrets: Read and write*, instalado só em `Moriblo/repo_backup`. Gravar a chave privada e o ID do app (nomes na seção I.10).
-- **0c.** Gravar a variável `ONEDRIVE_CLIENT_ID` (Settings › Secrets and variables › Actions › Variables).
-- **0d.** Rodar `python3 backup/scripts/onedrive_authorize.py --client-id <ID>` no computador do HITL e fazer o login. O script imprime o refresh token só no terminal.
-- **0e.** Gravar esse valor no secret `ONEDRIVE_REFRESH_TOKEN` e limpar o terminal.
-- **Atenção:** não rode dois backups ao mesmo tempo. Cada execução rotaciona o refresh token; duas em paralelo podem invalidar uma à outra.
+O código já está no repositório (SA-08). O HITL já fez (environment `onedrive-backup`): registro no Entra ("GitHub repo_backup", só contas pessoais, permissões delegadas `Files.ReadWrite.AppFolder` e `offline_access`), variável `ONEDRIVE_CLIENT_ID` e secrets `ONEDRIVE_REFRESH_TOKEN` e `SOURCE_READ_TOKEN`. O workflow declara `environment: onedrive-backup` para enxergá-los.
+- **Opcional (rotação):** criar o GitHub App **Writer** (só *Secrets: Read and write*, instalado só em `Moriblo/repo_backup`) e gravar a variável `REPOSITORY_PRESERVATION_SECRETS_APP_ID` e o secret `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY`. Sem isso o backup funciona, mas o refresh token **não** é renovado (seção I.11).
+- **Atenção:** não rode dois backups ao mesmo tempo. Com rotação ligada, cada execução gira o refresh token; duas em paralelo podem invalidar uma à outra.
+- **Atenção:** se o environment tiver "Required reviewers", cada execução espera aprovação no GitHub.
 
 ## I.3 Os 15 passos de cada execução (índice)
 
@@ -220,7 +217,7 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
 - **Acontece:**
   1. Baixa este repositório (scripts e schemas) e instala as bibliotecas do validador.
   2. **`validate-inputs`:** revalida os inputs contra o mesmo schema (segunda barreira). Recusa também `preflight_decision` ilegível e a reutilização de autorização (`previous_request_id` igual ao `request_id`).
-  3. **Token do App Reader:** emite um token de curta duração, só de leitura, válido só para a origem.
+  3. **Token de leitura:** o workflow usa o secret `SOURCE_READ_TOKEN` (somente leitura). Se faltar, o preflight registra a lacuna de acesso.
 - **Falha:** entrada inválida termina com saída **2** e `BKP_RESULT` **`REJECTED`**. A falha do **token não derruba** o workflow: vira uma lacuna no preflight.
 
 #### Passo 9: Capability Preflight
@@ -238,7 +235,7 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
 
 #### Passo 11: validação do destino
 - **Quem:** GitHub Actions, `bkp_repo.py validate-destination`.
-- **Antes:** o passo "Issue secrets-writer token" emite o token do App Writer (`secrets: write`).
+- **Antes:** se a variável `REPOSITORY_PRESERVATION_SECRETS_APP_ID` existir, o passo "Issue secrets-writer token" emite o token do App Writer (`secrets: write`). Sem ela, a rotação fica desligada.
 - **Acontece:** `onedrive.py` renova o access token, **grava o novo refresh token no secret** `ONEDRIVE_REFRESH_TOKEN` e faz uma escrita, uma leitura e um apagamento de arquivo de prova em `<destination>/<request_id>` no AppFolder.
 - **Falha fechado:** qualquer problema (configuração ausente, login recusado, rotação do secret falhou, escrita negada) gera saída **20**, `BKP_RESULT` **`BLOCKED`** (`DESTINATION_NOT_VALIDATED`, com o código interno no `detail`). Nada é copiado. Antes da preparação da seção I.2, é isso que acontece.
 
@@ -293,7 +290,7 @@ sequenceDiagram
     Disp->>Disp: Valida push, log, schema, request_id e Mnemonic
     Disp->>BKP: workflow_call com os 4 inputs
     BKP->>BKP: Revalida os inputs
-    BKP->>Src: Token do App Reader, somente leitura
+    BKP->>Src: Token SOURCE_READ_TOKEN, somente leitura
     BKP->>BKP: Capability Preflight
     alt lacunas sem decisao do HITL
         BKP-->>Engine: BKP_RESULT BLOCKED com required_restrictions
@@ -389,25 +386,26 @@ Estados: **EXISTE**, **TEMPORÁRIO**, **A REMOVER**, **PLANEJADO**.
 
 ## I.10 Segredos e variáveis
 
-Ficam em Settings → Secrets and variables → Actions do `repo_backup`. Os valores **nunca** aparecem em chat, log, evidência ou arquivo.
+Ficam em Settings → Environments → `onedrive-backup` (os marcados abaixo) ou em Settings → Secrets and variables → Actions do `repo_backup`. Os valores **nunca** aparecem em chat, log, evidência ou arquivo.
 
 | Nome | Tipo | Quem cria | Quem usa | Estado |
 |---|---|---|---|---|
 | `REPOSITORY_PRESERVATION_APP_ID` | variável | HITL | Token do App Reader (`backup-repository.yml`, diagnóstico) | EXISTE |
 | `REPOSITORY_PRESERVATION_APP_PRIVATE_KEY` | secret | HITL | Idem | EXISTE |
-| `ONEDRIVE_CLIENT_ID` | variável | HITL | `onedrive.py` | A CRIAR (I.2) |
-| `ONEDRIVE_REFRESH_TOKEN` | secret | HITL (valor inicial) e App Writer (rotação) | `onedrive.py` | A CRIAR (I.2) |
-| `REPOSITORY_PRESERVATION_SECRETS_APP_ID` | variável | HITL | Gravação do secret pelo App Writer | A CRIAR (I.2) |
-| `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY` | secret | HITL | Idem | A CRIAR (I.2) |
+| `ONEDRIVE_CLIENT_ID` | variável (environment `onedrive-backup`) | HITL | `onedrive.py` | EXISTE |
+| `ONEDRIVE_REFRESH_TOKEN` | secret (environment `onedrive-backup`) | HITL (valor inicial) e App Writer (rotação, opcional) | `onedrive.py` | EXISTE |
+| `SOURCE_READ_TOKEN` | secret (environment `onedrive-backup`) | HITL | Leitura da origem (`backup-repository.yml`) | EXISTE |
+| `REPOSITORY_PRESERVATION_SECRETS_APP_ID` | variável | HITL | Rotação do secret pelo App Writer | OPCIONAL |
+| `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY` | secret | HITL | Idem | OPCIONAL |
 
-O workflow do teste OIDC antigo foi removido. O environment `onedrive-backup` e as variáveis `AZURE_CLIENT_ID` e `AZURE_TENANT_ID` são obsoletos; o HITL as apaga. O `secrets: inherit` repassa só secrets de repositório e de organização, **não** de environment.
+O workflow do teste OIDC antigo foi removido. As variáveis `AZURE_CLIENT_ID` e `AZURE_TENANT_ID` são obsoletas; o HITL as apaga. O `secrets: inherit` repassa só secrets de repositório e de organização, **não** de environment; por isso o job do `BKP_REPO` declara `environment: onedrive-backup`.
 
 ## I.11 Autenticação do OneDrive
 
 - O OneDrive é **pessoal**, o que exige permissão **delegada**: um login real, com consentimento. O workflow roda sem ninguém presente e não consegue fazer esse login.
 - Por isso o login é feito **uma vez**, no computador do HITL, por `onedrive_authorize.py` (device code). A Microsoft entrega um **refresh token**, que o script imprime **só no terminal**, nunca em arquivo, repositório, log ou chat. O HITL o grava no secret `ONEDRIVE_REFRESH_TOKEN`.
 - A cada backup, o workflow troca o refresh token por um access token de curta duração, pela autoridade `https://login.microsoftonline.com/consumers`, sem client secret e sem tenant ID (app público). O destino é `/me/drive/special/approot`, isto é, `Apps/<nome do registro>/`.
-- **Rotação:** a Microsoft devolve um refresh token novo a cada uso. O `onedrive.py` grava o novo valor no secret (criptografado com a chave pública do repositório, pelo token do App Writer) **antes** de usar o access token. Se a gravação falhar, o workflow para com `SECRET_ROTATION_FAILED` (saída 23). Durante a execução o token corrente fica só em `$RUNNER_TEMP/onedrive_state.json` (permissão 600), apagado ao final mesmo em falha.
+- **Rotação (opcional, exige o App Writer):** a Microsoft devolve um refresh token novo a cada uso. Com o Writer configurado, o `onedrive.py` grava o novo valor no secret do environment (criptografado com a chave pública, pelo token do Writer) **antes** de usar o access token; se a gravação falhar, o workflow para com `SECRET_ROTATION_FAILED` (saída 23). **Sem o Writer** (situação atual) a rotação fica desligada, o log traz um AVISO e o token original vale até expirar (cerca de 90 dias, a confirmar); depois é preciso repetir `onedrive_authorize.py`. Durante a execução o token corrente fica só em `$RUNNER_TEMP/onedrive_state.json` (permissão 600), apagado ao final mesmo em falha.
 - **Nada é impresso:** nenhum token aparece em mensagem de erro (testado).
 - Repetir o login só se o token expirar por falta de uso (cerca de 90 dias, segundo a documentação da Microsoft; **a confirmar**).
 

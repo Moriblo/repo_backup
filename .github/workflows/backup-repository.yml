@@ -19,7 +19,7 @@
 #
 # SEQUÊNCIA DOS PASSOS (não reordenar; ver BACKUP_REPOSITORY.md)
 #   1. Revalidar inputs            -> rejeita valores fora do schema
-#   2. Emitir tokens               -> App Reader (leitura da origem) e App Writer (secret)
+#   2. Tokens                      -> SOURCE_READ_TOKEN (leitura da origem) e App Writer opcional (rotação)
 #   3. Capability Preflight        -> pode terminar BLOCKED (HITL decide)
 #   4. Validar destino             -> OneDrive de verdade; falha fechada (saída 20)
 #   5. Mirror Git + verificações   -> clone, comparação de refs, fsck, LFS, submódulos
@@ -85,6 +85,10 @@ jobs:
     runs-on: ubuntu-latest
     # Limite de segurança contra execução presa; ajuste se repositórios grandes precisarem.
     timeout-minutes: 120
+    # Environment que guarda ONEDRIVE_CLIENT_ID, ONEDRIVE_REFRESH_TOKEN e SOURCE_READ_TOKEN.
+    # Secrets de environment só chegam ao job que declara o environment (não via `secrets: inherit`).
+    # Se o environment tiver "Required reviewers", cada execução espera essa aprovação.
+    environment: onedrive-backup
     # Variáveis comuns a todos os passos. Os inputs entram AQUI (e não direto em
     # `run:`) para evitar injeção de comando: o shell só os lê como variáveis.
     env:
@@ -96,6 +100,8 @@ jobs:
       MIRROR_DIR: source.git
       # Pasta das evidências geradas; é o que o passo final publica.
       EVIDENCE_DIR: evidence
+      # Onde onedrive.py grava o refresh token rotacionado (só usado se houver App Writer).
+      ONEDRIVE_SECRETS_ENVIRONMENT: onedrive-backup
 
     steps:
       # Baixa ESTE repositório (execução/controle) para ter scripts e schemas.
@@ -128,35 +134,37 @@ jobs:
           echo "owner=${SOURCE_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
           echo "name=${SOURCE_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
 
-      # Emite um token de instalação do GitHub App "Repository Preservation Reader",
-      # válido só para o repositório de origem e limitado a LEITURA
-      # (contents + metadata), mesmo que o App tenha mais permissões.
-      # `continue-on-error: true`: se o token não puder ser emitido (App não
-      # instalado na origem, chave inválida...), o workflow NÃO cai aqui; o
-      # preflight registra a lacuna ACCESS_PERMISSION_GAP e o HITL decide.
-      # Dependências: variável REPOSITORY_PRESERVATION_APP_ID e secret
-      # REPOSITORY_PRESERVATION_APP_PRIVATE_KEY (Settings > Secrets and variables).
-      - name: Issue read-only source token (GitHub App)
+      # Token de LEITURA da origem: o secret SOURCE_READ_TOKEN do environment onedrive-backup
+      # (token fine-grained, Contents e Metadata somente leitura). Este passo só confere que o
+      # secret existe e o entrega aos passos seguintes como saída mascarada (`::add-mask::`).
+      # `continue-on-error: true`: se faltar, o workflow NÃO cai aqui; o preflight registra a
+      # lacuna ACCESS_PERMISSION_GAP e o HITL decide.
+      - name: Provide read-only source token (SOURCE_READ_TOKEN)
         id: token
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.REPOSITORY_PRESERVATION_APP_ID }}
-          private-key: ${{ secrets.REPOSITORY_PRESERVATION_APP_PRIVATE_KEY }}
-          owner: ${{ steps.src.outputs.owner }}
-          repositories: ${{ steps.src.outputs.name }}
-          permission-contents: read
-          permission-metadata: read
+        shell: bash
+        env:
+          SOURCE_READ_TOKEN: ${{ secrets.SOURCE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SOURCE_READ_TOKEN" ]]; then
+            echo "::error::Secret SOURCE_READ_TOKEN ausente no environment onedrive-backup."
+            exit 1
+          fi
+          echo "::add-mask::$SOURCE_READ_TOKEN"
+          echo "token=$SOURCE_READ_TOKEN" >> "$GITHUB_OUTPUT"
 
-      # Emite um token do GitHub App Writer, limitado a ESCREVER SECRETS neste repositório
-      # (permission-secrets: write). Serve só para gravar o novo refresh token do OneDrive.
-      # `continue-on-error: true`: se não puder ser emitido, o gate de destino falha fechado
-      # (saída 20) informando que falta SECRETS_WRITER_TOKEN.
+      # OPCIONAL. Emite um token do GitHub App Writer, limitado a ESCREVER SECRETS neste
+      # repositório (permission-secrets: write), só para regravar o novo refresh token do
+      # OneDrive (rotação). Só roda se a variável REPOSITORY_PRESERVATION_SECRETS_APP_ID existir.
+      # Sem o Writer a rotação fica DESLIGADA (aviso no log): o refresh token original vale
+      # até expirar (cerca de 90 dias) e então é preciso repetir o onedrive_authorize.py.
+      # Se o Writer estiver configurado e falhar, o gate de destino falha fechado (saída 20).
       # Dependências: variável REPOSITORY_PRESERVATION_SECRETS_APP_ID e secret
       # REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY.
       - name: Issue secrets-writer token (GitHub App Writer)
         id: writer
-        continue-on-error: true
+        if: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_APP_ID != '' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_APP_ID }}
