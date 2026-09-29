@@ -612,7 +612,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 750e81884190f0fcf578abfbc4a5e26dea93fe39
+      current_sha: 1db20c3ed53700c1381d939de25672a53e170f53
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -710,7 +710,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 6602a24532539ee3a717240c5bc7763990c20b18
+      current_sha: 584becaa6b8548c1ef13ff9f68d65bbc9c65b0e8
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: REVALIDATION_REQUIRED
@@ -916,7 +916,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 561b5d4d74ee31503a974841c429dedd139c98f7
+      current_sha: bba29bcd27b86433fed62c6625cabd06ec811d6a
     validation:
       status: NOT_VALIDATED
       scope: Testado só contra servidores simulados (autenticação, rotação do secret, envio em partes, divergência de hash, ausência de vazamento de token). Não provado contra o Microsoft Graph real.
