@@ -1,0 +1,130 @@
+# =============================================================================
+# Dispatcher - dispara os workflows dos Mnemonics a partir do commands.log
+# =============================================================================
+# O QUE É
+#   Passo 5 do "Governed command flow" (BACKUP_REPOSITORY.md). Depois que o HITL
+#   dá GO, o engine acrescenta UMA linha JSON no commands.log (no main). Este
+#   workflow é disparado por esse push, lê SÓ as linhas novas, valida e chama o
+#   workflow do Mnemonic por um mapeamento FIXO (workflow_call, secrets: inherit).
+#
+# COMO É ACIONADO
+#   Em todo push no main. Não filtra por caminho de propósito: precisa enxergar
+#   também pushes que NÃO tocam o commands.log para aplicar o controle de escrita
+#   (só o commands.log pode ser escrito direto; o resto, só via pull request).
+#   OBS.: pushes feitos com o GITHUB_TOKEN de outro workflow não disparam este
+#   workflow. O engine deve gravar o commands.log com uma identidade normal
+#   (usuário ou GitHub App), nunca com o GITHUB_TOKEN.
+#
+# JOBS
+#   guard        Valida o push e produz a matriz de despacho (dispatch_check.py).
+#                Qualquer violação falha o job e NADA é despachado (fail-closed).
+#   run-bkp-repo Chama o workflow do BKP_REPO uma vez por linha nova válida.
+#
+# MAPEAMENTO FIXO (Mnemonic -> workflow)
+#   BKP_REPO -> .github/workflows/backup-repository.yml
+#   Um Mnemonic novo exige: (1) entrada em MNEMONIC_WORKFLOWS no dispatch_check.py,
+#   (2) um job `run-<mnemonic>` aqui, (3) registro em backup/capabilities.yaml.
+#   `uses:` precisa ser um caminho literal, por isso um job por Mnemonic (não há
+#   despacho dinâmico por nome; isso é uma garantia de segurança, não uma limitação).
+#
+# REGRAS QUE ESTE WORKFLOW RESPEITA
+#   - Não escreve nada no repositório: permissões somente de leitura.
+#   - Nunca despacha linha que não passou em todas as verificações.
+#   - request_id repetido é recusado: a autorização não é reutilizável.
+#   - Não executa nenhum valor vindo do log como comando: valores só trafegam
+#     como inputs do workflow chamado.
+# =============================================================================
+name: Dispatcher
+
+on:
+  push:
+    branches: [main]
+
+# Permissões do GITHUB_TOKEN deste workflow:
+#   contents: read       ler o histórico e o commands.log
+#   pull-requests: read  perguntar à API se um commit pertence a um PR mergeado
+# O workflow chamado recebe no máximo estas permissões (contents: read basta a ele).
+permissions:
+  contents: read
+  pull-requests: read
+
+# SEM `concurrency` no nível do workflow, de propósito. O GitHub cancela execuções
+# PENDENTES do mesmo grupo (mesmo com cancel-in-progress: false); com dois pushes
+# seguidos, o comando do primeiro poderia nunca ser despachado, pois cada execução
+# só lê as linhas do PRÓPRIO push (before..after). Sem serialização, a checagem de
+# request_id repetido continua correta: o `before` de um push já contém as linhas
+# dos pushes anteriores.
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # guard: valida o push e decide o que despachar.
+  # ---------------------------------------------------------------------------
+  guard:
+    name: Validate push and new command lines
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      # Matriz JSON ({"include":[...]}) com uma entrada por linha nova do BKP_REPO.
+      bkp_repo_matrix: ${{ steps.check.outputs.bkp_repo_matrix }}
+      # Quantidade de linhas do BKP_REPO a despachar (0 = nenhuma; o job seguinte é pulado).
+      bkp_repo_count: ${{ steps.check.outputs.bkp_repo_count }}
+    steps:
+      # Histórico completo (fetch-depth: 0): o script compara o commit anterior do
+      # push com o novo, e o anterior pode estar fora de um clone raso.
+      - name: Checkout with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Bibliotecas do dispatch_check.py: PyYAML (lê schema/capabilities) e jsonschema.
+      - name: Install validator dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install --quiet pyyaml jsonschema
+
+      # Executa as verificações (ver o cabeçalho de backup/scripts/dispatch_check.py).
+      # Saída 30 = violação: o job falha e o run-bkp-repo não roda.
+      # BEFORE/AFTER vão por variável de ambiente (não interpolados no script).
+      - name: Check push and extract new command lines
+        id: check
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          BASE_BRANCH: main
+        run: python3 backup/scripts/dispatch_check.py
+
+  # ---------------------------------------------------------------------------
+  # run-bkp-repo: chama o workflow do Mnemonic BKP_REPO.
+  # Uma execução por linha nova (matrix). Só roda se houver ao menos uma.
+  # ---------------------------------------------------------------------------
+  run-bkp-repo:
+    name: BKP_REPO ${{ matrix.request_id }}
+    needs: guard
+    # Sem linhas a despachar, a matriz seria vazia e o GitHub recusaria o job.
+    if: needs.guard.outputs.bkp_repo_count != '0'
+    strategy:
+      # Uma linha com problema não cancela as outras do mesmo push.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.guard.outputs.bkp_repo_matrix) }}
+    # Impede duas execuções simultâneas do MESMO request_id (defesa em profundidade;
+    # a unicidade já é garantida pelo guard, então um grupo nunca tem mais de um item).
+    concurrency:
+      group: bkp-repo-${{ matrix.request_id }}
+      cancel-in-progress: false
+    # Mínimo que o workflow chamado precisa: ler este repositório (checkout dos scripts).
+    permissions:
+      contents: read
+    # Chamada do workflow reutilizável. O caminho é LITERAL (mapeamento fixo).
+    uses: ./.github/workflows/backup-repository.yml
+    # Repassa os secrets do repositório (a chave do GitHub App Reader, etc.).
+    secrets: inherit
+    # Os quatro inputs do ECR do BKP_REPO, vindos da linha validada do commands.log.
+    with:
+      request_id: ${{ matrix.request_id }}
+      source_repository: ${{ matrix.source_repository }}
+      destination: ${{ matrix.destination }}
+      preflight_decision: ${{ matrix.preflight_decision }}

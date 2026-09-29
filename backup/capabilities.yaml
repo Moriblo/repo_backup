@@ -593,19 +593,20 @@ implementation_artifacts:
   # ---------------------------------------------------------------------------
   # dispatcher.yml: disparado por push no commands.log. Lê só as linhas novas, valida
   # e chama o workflow do Mnemonic por mapeamento fixo (workflow_call, secrets: inherit).
-  # NOT_MATERIALIZED: ainda não existe (PR 3); manter o registro permite rastrear o
-  # artefato futuro sem tratá-lo como ORPHAN_ARTIFACT quando ele chegar.
+  # MATERIALIZED: existe desde o PR do dispatcher. `current_sha` é o SHA de blob Git do
+  # arquivo; a validação ponta a ponta só é possível depois do primeiro push no commands.log.
   # ---------------------------------------------------------------------------
   - artifact_id: command_dispatcher
     artifact_type: GITHUB_ACTIONS_WORKFLOW
     location:
       repository: Moriblo/repo_backup
       path: .github/workflows/dispatcher.yml
-    purpose: Triggered by pushes to commands.log; validates new lines and calls the mnemonic workflow through a fixed mapping.
+    purpose: Triggered by pushes to main; enforces the direct-write control, validates new commands.log lines and calls the mnemonic workflow through a fixed mapping.
     materialization:
-      status: NOT_MATERIALIZED
+      status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      current_sha: 88306e642fa644277723e60380554197d1e45300
     validation:
       status: NOT_VALIDATED
     relationships:
@@ -623,6 +624,27 @@ implementation_artifacts:
       repository: Moriblo/repo_backup
       path: backup/scripts/bkp_repo.py
     purpose: Deterministic helper for backup_repository - input revalidation, Capability Preflight, destination gate, and schema 2.0 evidence/manifest building.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: EXECUTES}
+
+  # ---------------------------------------------------------------------------
+  # Script auxiliar do dispatcher: verifica o intervalo do push, o controle de escrita
+  # direta no main, o append-only do commands.log, o schema das linhas novas e a
+  # unicidade de request_id; produz a matriz de despacho. Fica em backup/scripts/ (local
+  # gerenciado), por isso precisa de artifact_id (orphan_detection).
+  # ---------------------------------------------------------------------------
+  - artifact_id: command_dispatcher_helper_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/dispatch_check.py
+    purpose: Deterministic push and command-line checks for the dispatcher; emits the dispatch matrix.
     materialization:
       status: MATERIALIZED
     integrity:
