@@ -86,12 +86,14 @@ This sequence MUST NOT be shortened, reordered, or silently bypassed for `backup
 2. `backup/capabilities.yaml` maps the capability to its Mnemonic (`backup_repository` → `BKP_REPO`) and required parameters; HITL supplies the values.
 3. The workflow bound to the Mnemonic (`command_workflow.path`) fully defines the Exact Command Request: the `on: workflow_call` inputs plus the constraints stated in their descriptions. The engine reads the workflow and presents the ECR exactly as defined.
 4. Only after `GO`, the engine appends one JSON line to `commands.log` on `main` (`backup/schemas/commands-log-line.schema.yaml`): `request_id`, `mnemonic`, `ts`, `authorization` and the authorized `params`. The set of `params` varies per Mnemonic schema. `commands.log` is append-only, and it is the only file written directly on `main`.
-5. `dispatcher.yml` runs on pushes touching `commands.log`, reads only the new lines, validates them (schema, unique `request_id`, no edits to existing lines, and no direct push of files other than `commands.log` unless the commit belongs to a merged pull request; any violation fails the whole push and dispatches nothing) and calls the Mnemonic's workflow through a fixed mapping (`workflow_call`, `secrets: inherit`).
+5. `dispatcher.yml` runs on every push to `main` (so the direct-write control also sees pushes that do not touch `commands.log`), dispatches only when `commands.log` changed, reads only the new lines, validates them (schema, unique `request_id`, no edits to existing lines, and no direct push of files other than `commands.log` unless the commit belongs to a merged pull request; any violation fails the whole push and dispatches nothing) and calls the Mnemonic's workflow through a fixed mapping (`workflow_call`, `secrets: inherit`).
 6. The workflow revalidates its inputs, runs Capability Preflight, executes and produces schema 2.0 evidence. The engine reports the result to HITL.
 
 The workflow reports every outcome as one `BKP_RESULT {json}` line in its job log (statuses `REJECTED`, `BLOCKED`, `PREFLIGHT_OK`, `COMPLETE`, `COMPLETE_WITH_EXCEPTIONS`, `FAILED`); the engine reads that line to report to HITL. A `BLOCKED` result for preflight gaps lists `required_restrictions`; the follow-up `commands.log` line must accept every one of them. Destination validation fails closed before Source Inventory, and evidence is built only after it passes.
 
 Capability Preflight gaps: the workflow is unattended, so a material gap ends the run as `BLOCKED` with `GAPS_IDENTIFIED` evidence. HITL then decides `STOP` or `CONTINUE_WITH_RESTRICTIONS`; the latter requires a new `commands.log` line carrying `preflight_decision` with stable `restriction_id` values. Authorization is never reused.
+
+The operational guide (players, files, secrets, exit codes), in Portuguese, is at the end of this document.
 
 Boundaries: code changes only through pull request; direct writes to `main` only to `commands.log` and only after `GO`; the source is always READ-ONLY; OneDrive uses delegated OAuth (`Files.ReadWrite.AppFolder`), never OIDC.
 
@@ -106,6 +108,8 @@ Canonical definitions are in `backup/capabilities.yaml`.
 - `help`
 
 The engine MUST NOT silently select a preservation capability.
+
+Only a capability that has a Mnemonic and a bound workflow can produce a `commands.log` line. Today that is `backup_repository` (`BKP_REPO`) only. `backup_projects` has no Mnemonic and no executor (`NOT_MATERIALIZED`); the informational and validation capabilities are answered by the engine in the conversation and never produce a command line.
 
 ## HITL parameter acquisition
 Execution-specific values MUST be supplied or explicitly confirmed by the human. Conversation context MAY propose a value but MUST NOT replace confirmation.
@@ -146,7 +150,7 @@ Each route MUST be assessed separately. The aggregate assessment determines whet
 
 A deterministic executor MAY implement a route but is not the definition of the capability itself.
 
-References to `github_actions:backup-repository.yml` and `github_actions:backup-projects.yml` describe deterministic executor references whose current materialization is `NOT_MATERIALIZED` and whose historical existence is `NOT_DETERMINED`. Their absence MUST NOT be treated by itself as proof that an architectural capability is absent.
+References to deterministic executors are registered in `backup/capabilities.yaml`. `github_actions:backup-repository.yml` is `MATERIALIZED` (workflow `.github/workflows/backup-repository.yml`, executor of the `BKP_REPO` Mnemonic). `github_actions:backup-projects.yml` is `NOT_MATERIALIZED` and its historical existence is `NOT_DETERMINED`. The absence of an executor MUST NOT be treated by itself as proof that an architectural capability is absent.
 
 ### Routing terminology
 Routing outcomes are:
@@ -430,3 +434,143 @@ No engine may rely on hidden conversation state, prior runs, remembered reposito
 Execution context is established by the current Exact Command Request and its HITL authorization.
 
 The protocol is engine-agnostic: capability is the effective authorized execution capability, not the native capability set of whichever engine happens to be interacting with the human.
+
+
+---
+
+# Guia operacional (pt-BR)
+
+> **O que é esta parte.** Guia para quem opera e mantém o sistema (o HITL e futuros mantenedores). O protocolo acima, em inglês, é o texto **normativo**; este guia explica **quem faz o quê, com quais arquivos e segredos**, e como ler os resultados. Se houver conflito, vale o protocolo.
+>
+> **Estado descrito:** `main` em 29/09/2026. Itens ainda inexistentes estão marcados como **PLANEJADO** e serão atualizados quando o PR do OneDrive (SA-08 da issue #7) for mergeado.
+
+## 1. Players
+
+| Player | Papel |
+|---|---|
+| **HITL** (humano) | Escolhe a capability, informa os parâmetros, dá GO/NO-GO, decide `STOP` ou `CONTINUE_WITH_RESTRICTIONS` no preflight e faz o merge dos PRs. |
+| **Engine** (hoje, a sessão do Claude Code; outros no futuro, ver issue #5) | Lê este protocolo, apresenta o menu e o ECR, grava a linha no `commands.log` após o GO e reporta o resultado ao HITL. Nunca infere autorização. |
+| **Repositório `repo_backup`** (`main`) | Guarda o código, o `commands.log`, os segredos e as variáveis. Código só entra por pull request. |
+| **GitHub Actions** | Executa o Dispatcher e o workflow do `BKP_REPO` (e, temporariamente, o diagnóstico). |
+| **GitHub App "Repository Preservation Reader"** | Emite, a cada execução, um token de curta duração só de leitura (`contents: read`, `metadata: read`) para a origem. |
+| **GitHub App Writer** (**PLANEJADO**) | Grava o novo refresh token do OneDrive no secret. Só *Secrets: Read and write*, instalado só neste repositório. |
+| **Repositório de origem** | É lido e **nunca alterado** (READ-ONLY). |
+| **Microsoft Entra (app público)** (**PLANEJADO**) | Emite os tokens do OneDrive pela autoridade `consumers` (conta pessoal). |
+| **Microsoft Graph / OneDrive** (**PLANEJADO**) | Recebe o pacote e a evidência em `Apps/<nome do registro>/…`. |
+
+## 2. Fluxo operacional
+
+### 2.1 Preparação, uma única vez (**PLANEJADO**, ver SA-08)
+0a. O HITL configura o registro no Entra: aceitar contas pessoais, permitir fluxos de cliente público, permissões **delegadas** `Files.ReadWrite.AppFolder` e `offline_access`.
+0b. O HITL cria o GitHub App Writer.
+0c. O HITL roda `onedrive_authorize.py` no computador dele, faz o login, e o script imprime o refresh token só no terminal.
+0d. O HITL grava os segredos e as variáveis (seção 4).
+
+### 2.2 A cada execução
+
+| # | Quem | O que acontece | Situação hoje |
+|---|---|---|---|
+| 1 | Engine | Lê este protocolo e o `capabilities.yaml` e apresenta o **Capability Menu**. | Existe |
+| 2 | HITL | Escolhe `backup_repository` e informa `source_repository` e `destination` (caminho **relativo ao AppFolder**). | Existe |
+| 3 | Engine | Lê o `backup-repository.yml` e apresenta o **ECR** exatamente como o workflow define. | Existe |
+| 4 | HITL | Dá **GO** ou NO-GO. A autorização vale só para esse ECR exato. | Existe |
+| 5 | Engine | Acrescenta **uma linha** no `commands.log` do `main`. É a única escrita direta permitida no `main`. | Existe |
+| 6 | Actions | O push dispara o **Dispatcher**: valida intervalo do push, controle de escrita direta, append-only, schema, `request_id` único e Mnemonic. | Existe |
+| 7 | Actions | O Dispatcher chama o `BKP_REPO` (`workflow_call`, `secrets: inherit`). | Existe |
+| 8 | Actions | O `BKP_REPO` revalida os inputs e emite o token do App Reader. | Existe |
+| 9 | Actions | **Capability Preflight.** Com lacunas materiais e sem decisão do HITL, termina `BLOCKED`. | Existe |
+| 10 | Engine → HITL | O engine lê a linha `BKP_RESULT` no log do job e reporta. O HITL decide `STOP` ou `CONTINUE_WITH_RESTRICTIONS`. Se continuar, volta ao passo 3 com **nova linha** (`preflight_decision` e novo `request_id`). | Existe |
+| 11 | Actions | **Valida o destino.** Hoje sempre falha fechado (saída 20). Depois do SA-08: renova o access token, grava o novo refresh token no secret e faz escrita e leitura de teste no AppFolder. | Falha fechado; validação real **PLANEJADA** |
+| 12 | Actions | **Lê a origem:** mirror, fsck, LFS e submódulos. A comparação das refs da origem com as do mirror é **PLANEJADA**. | Parcial |
+| 13 | Actions | Gera o pacote (`git bundle`) e envia ao OneDrive em blocos, conferindo o SHA-256. | **PLANEJADO** |
+| 14 | Actions | Gera `evidence.json` e `manifest.json` (schemas 2.0), valida e publica o artefato. O envio da evidência ao OneDrive é **PLANEJADO**. | Parcial |
+| 15 | Engine → HITL | Lê o resultado e reporta estado, restrições aceitas e reconciliação. | Existe |
+
+**Observações**
+- Com as 17 restrições atuais (todas as classes, menos o Git), toda execução exige **duas linhas** no `commands.log`: a primeira termina `BLOCKED`; a segunda carrega a decisão do HITL.
+- O `request_id` de uma linha rejeitada ou bloqueada fica **queimado**: o log é append-only e a autorização não é reutilizável.
+- Enquanto o passo 11 falhar fechado, nada é copiado e nenhuma evidência é gerada.
+
+## 3. Inventário de arquivos
+
+**Legenda de estado:** EXISTE · TEMPORÁRIO · A REMOVER · PLANEJADO.
+
+| Arquivo | Papel | Estado |
+|---|---|---|
+| `BACKUP_REPOSITORY.md` | Protocolo normativo e este guia. | EXISTE |
+| `README.md` | Apresentação do repositório. | EXISTE |
+| `commands.log` | Fila append-only de comandos autorizados (JSON Lines). O push nele dispara o Dispatcher. | EXISTE |
+| `backup/capabilities.yaml` | Registro canônico: capabilities, Mnemonics, rotas, políticas e artefatos. | EXISTE |
+| `backup/schemas/commands-log-line.schema.yaml` | Formato de cada linha do `commands.log`. | EXISTE |
+| `backup/schemas/command-request.schema.yaml` | Formato do Exact Command Request, incluindo o Capability Preflight. | EXISTE |
+| `backup/schemas/evidence.schema.yaml` | Formato da evidência de preservação (2.0). | EXISTE |
+| `backup/schemas/backup-manifest.schema.yaml` | Formato do manifest e da reconciliação (2.0). | EXISTE |
+| `.github/workflows/dispatcher.yml` | Dispara no push do `main`; valida e chama o workflow do Mnemonic. | EXISTE |
+| `backup/scripts/dispatch_check.py` | Verificações do Dispatcher; produz a matriz de despacho. | EXISTE |
+| `.github/workflows/backup-repository.yml` | Executor do `BKP_REPO`. Seus inputs são o ECR. | EXISTE |
+| `backup/scripts/bkp_repo.py` | Revalidação, preflight, gate de destino e montagem da evidência. | EXISTE |
+| `.github/workflows/diagnostic-git-read.yml` | Teste manual da leitura Git. Não faz parte do fluxo e não prova preservação. | TEMPORÁRIO |
+| `.github/workflows/onedrive-appfolder-oidc-read-test.yml` | Teste OIDC antigo, contrário à regra "sem OIDC". | A REMOVER (SA-08) |
+| `backup/scripts/onedrive.py` | Access token, rotação do secret, destino, upload em blocos e SHA-256. | PLANEJADO (SA-08) |
+| `backup/scripts/onedrive_authorize.py` | Login local único (device code) que entrega o refresh token. | PLANEJADO (SA-08) |
+| Script de rastreabilidade | Confere existência, SHA e órfãos dos artefatos registrados. | PLANEJADO (SA-05) |
+
+## 4. Segredos e variáveis
+
+Ficam em Settings → Secrets and variables → Actions do `repo_backup`. Os valores **nunca** aparecem em chat, log, evidência ou arquivo.
+
+| Nome | Tipo | Quem cria | Quem usa | Estado |
+|---|---|---|---|---|
+| `REPOSITORY_PRESERVATION_APP_ID` | variável | HITL | Emissão do token do App Reader (`backup-repository.yml`, diagnóstico) | EXISTE |
+| `REPOSITORY_PRESERVATION_APP_PRIVATE_KEY` | secret | HITL | Idem | EXISTE |
+| `ONEDRIVE_CLIENT_ID` | variável | HITL | `onedrive.py` | PLANEJADO |
+| `ONEDRIVE_REFRESH_TOKEN` | secret | HITL (valor inicial) e App Writer (rotação) | `onedrive.py` | PLANEJADO |
+| `REPOSITORY_PRESERVATION_SECRETS_APP_ID` | variável | HITL | Gravação do secret pelo App Writer | PLANEJADO |
+| `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY` | secret | HITL | Idem | PLANEJADO |
+
+O environment `onedrive-backup` e as variáveis `AZURE_CLIENT_ID` e `AZURE_TENANT_ID` pertencem ao teste OIDC antigo e ficam obsoletos; o HITL as apaga depois do SA-08. O `secrets: inherit` repassa só secrets de repositório e de organização, **não** de environment.
+
+## 5. Autenticação do OneDrive (**PLANEJADO**)
+
+- O OneDrive é **pessoal**. Isso exige permissão **delegada**, ou seja, um login real com consentimento. O workflow roda sem ninguém presente e não consegue fazer esse login.
+- Por isso o login é feito **uma vez**, no computador do HITL, por `onedrive_authorize.py` (device code). A Microsoft entrega um **refresh token**, e o script o imprime **só no terminal** (nunca em arquivo, repositório, log ou chat). O HITL o grava no secret `ONEDRIVE_REFRESH_TOKEN`.
+- A cada backup, o workflow troca o refresh token por um access token de curta duração, com a autoridade `https://login.microsoftonline.com/consumers`, sem client secret e sem tenant ID (app público). O destino é `/me/drive/special/approot`, isto é, `Apps/<nome do registro>/`.
+- **Rotação:** a Microsoft devolve um refresh token novo a cada uso. O App Writer grava o novo valor no secret **antes** de qualquer outra etapa que use o OneDrive; se a gravação falhar, o workflow para com erro claro.
+- Repetir o login só se o token expirar por falta de uso (cerca de 90 dias, segundo a documentação da Microsoft; **a confirmar**).
+
+## 6. Códigos de saída e contrato de resultado
+
+### 6.1 Códigos de saída
+
+| Código | Onde | Significado |
+|---|---|---|
+| 0 | todos | Etapa concluída. |
+| 1 | `bkp_repo.py build-evidence` | Preservação com objeto `FAILED`. |
+| 2 | `bkp_repo.py validate-inputs`; diagnóstico | Entrada rejeitada (schema, `preflight_decision` ilegível ou reutilização de autorização). |
+| 3 | passo de LFS (bash) | Não foi possível listar os ponteiros LFS. |
+| 4, 5, 6 | passo de LFS (bash) | OID inválido, objeto LFS ausente, hash LFS divergente. |
+| 10 | `bkp_repo.py preflight` | `BLOCKED`: lacunas materiais sem decisão do HITL. |
+| 20 | `bkp_repo.py validate-destination` | Destino não validado (falha fechado). |
+| 21 | `bkp_repo.py build-evidence` | Recusa de gerar evidência sem destino validado. |
+| 30 | `dispatch_check.py` | Violação no push: nada é despachado. |
+| 64 | `bkp_repo.py`, `dispatch_check.py` | Uso incorreto ou variável de ambiente ausente. |
+
+### 6.2 Linhas `BKP_RESULT` e afins
+O workflow do `BKP_REPO` imprime, no log do job, **uma linha `BKP_RESULT {json}`** por desfecho (a mesma vai para o resumo do job). É ela que o engine lê.
+
+| `status` | Quando | Campos principais |
+|---|---|---|
+| `REJECTED` | Entrada inválida | `reason`: `INPUT_VALIDATION` ou `AUTHORIZATION_REUSE` |
+| `BLOCKED` | Preflight com lacunas sem decisão | `reason`: `CAPABILITY_PREFLIGHT_GAPS`, `hitl_decision`: `PENDING`, `required_restrictions` |
+| `BLOCKED` | Destino não validado | `reason`: `DESTINATION_NOT_VALIDATED`, `detail` |
+| `PREFLIGHT_OK` | Preflight passou | `preflight_status`, `hitl_decision`, `accepted_restrictions` |
+| `COMPLETE`, `COMPLETE_WITH_EXCEPTIONS`, `FAILED` | Fim da preservação | `evidence_sha256`, `manifest_sha256`, `reconciliation` |
+
+Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher: lista dos `request_id` aceitos) e `DIAG_RESULT {json}` (diagnóstico da leitura Git: refs, fsck, LFS, submódulos). O log do job só fica legível depois que o job termina. A evidência bruta fica como artefato do Actions (`bkp-repo-<request_id>`, 7 dias; `diag-git-read-<run>`, 3 dias).
+
+## 7. Ciclo de vida dos artefatos temporários e nota final
+
+- **`diagnostic-git-read.yml`** é TEMPORÁRIO: existe só porque o gate de destino falha fechado antes do clone. Deve ser removido, junto com o registro dele no `capabilities.yaml`, quando o destino OneDrive estiver funcionando.
+- **`onedrive-appfolder-oidc-read-test.yml`** será removido no SA-08.
+- **`backup_projects`** aparece no menu, mas não tem Mnemonic nem executor: hoje não gera comando.
+- **Como manter este guia:** ao criar, mover ou remover um arquivo, um segredo ou um código de saída, atualize as seções 3, 4 e 6 no mesmo PR. Itens *planejados* viram *existentes* no PR que os implementa.
