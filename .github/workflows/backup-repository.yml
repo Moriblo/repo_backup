@@ -1,36 +1,90 @@
-name: Backup Repository - Git Capability Validation
+name: Backup Repository (BKP_REPO)
 
+# ECR of BKP_REPO: the inputs below are the complete Exact Command Request.
+# Known constraints are stated in each description and revalidated in the
+# "Revalidate inputs" step. Invoked only by dispatcher.yml (workflow_call).
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      source_repository:
-        description: "GitHub source repository in owner/name form (required; READ-ONLY)"
+      request_id:
+        description: "Unique request id from commands.log, 8-64 chars [A-Za-z0-9._-] (required)"
         required: true
         type: string
+      source_repository:
+        description: "GitHub source repository in owner/name form, pattern ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ (required; READ-ONLY)"
+        required: true
+        type: string
+      destination:
+        description: "OneDrive AppFolder-relative path, no leading slash and no '..' (required)"
+        required: true
+        type: string
+      preflight_decision:
+        description: "JSON of the HITL CONTINUE_WITH_RESTRICTIONS decision (previous_request_id, hitl_decision, accepted_restrictions); empty on a first run (optional)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
-  validate-git-capability:
-    name: Validate full Git preservation route
+  backup-repository:
+    name: BKP_REPO ${{ inputs.request_id }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     env:
+      REQUEST_ID: ${{ inputs.request_id }}
       SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+      DESTINATION: ${{ inputs.destination }}
+      PREFLIGHT_DECISION: ${{ inputs.preflight_decision }}
       MIRROR_DIR: source.git
       EVIDENCE_DIR: evidence
 
     steps:
-      - name: Validate explicit source parameter
+      - name: Checkout execution repository
+        uses: actions/checkout@v4
+
+      - name: Install validator dependencies
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            echo "::error::source_repository must be explicitly supplied in owner/name form."
-            exit 2
-          fi
-          printf 'Validated explicit source: %s\n' "$SOURCE_REPOSITORY"
+          pip install --quiet pyyaml jsonschema
+
+      - name: Revalidate inputs
+        shell: bash
+        run: python3 backup/scripts/bkp_repo.py validate-inputs
+
+      - name: Split source repository
+        id: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "owner=${SOURCE_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${SOURCE_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Issue read-only source token (GitHub App)
+        id: token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.REPOSITORY_PRESERVATION_APP_ID }}
+          private-key: ${{ secrets.REPOSITORY_PRESERVATION_APP_PRIVATE_KEY }}
+          owner: ${{ steps.src.outputs.owner }}
+          repositories: ${{ steps.src.outputs.name }}
+          permission-contents: read
+          permission-metadata: read
+
+      - name: Capability Preflight
+        id: preflight
+        shell: bash
+        env:
+          TOKEN_OUTCOME: ${{ steps.token.outcome }}
+        run: python3 backup/scripts/bkp_repo.py preflight
+
+      - name: Validate destination (fail closed before Source Inventory)
+        id: destination
+        shell: bash
+        run: python3 backup/scripts/bkp_repo.py validate-destination
 
       - name: Install Git LFS
         shell: bash
@@ -41,8 +95,13 @@ jobs:
 
       - name: Clone source with full mirror semantics
         shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           set -euo pipefail
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$SOURCE_TOKEN" | base64 -w0)"
           # Source operation is intentionally fetch/clone-only. No push command or
           # source mutation operation is present in this executor.
           git clone --mirror "https://github.com/${SOURCE_REPOSITORY}.git" "$MIRROR_DIR"
@@ -58,8 +117,13 @@ jobs:
 
       - name: Detect and validate Git LFS
         shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           set -euo pipefail
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$SOURCE_TOKEN" | base64 -w0)"
           mkdir -p "$EVIDENCE_DIR"
           cd "$MIRROR_DIR"
 
@@ -121,41 +185,17 @@ jobs:
           sort -u -o "$EVIDENCE_DIR/gitmodules-history.tsv"             "$EVIDENCE_DIR/gitmodules-history.tsv"
           sort -u -o "$EVIDENCE_DIR/gitlinks-history.tsv"             "$EVIDENCE_DIR/gitlinks-history.tsv"
 
-      - name: Produce diagnostic evidence
-        if: always()
+      - name: Build schema 2.0 evidence and manifest
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$EVIDENCE_DIR"
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess
-          evidence = pathlib.Path(os.environ["EVIDENCE_DIR"])
-          mirror = pathlib.Path(os.environ["MIRROR_DIR"])
-          def lines(name):
-              p = evidence / name
-              return p.read_text(errors="replace").splitlines() if p.exists() else []
-          payload = {
-              "mode": "CAPABILITY_VALIDATION",
-              "source_repository": os.environ["SOURCE_REPOSITORY"],
-              "source_mode": "READ_ONLY",
-              "mirror_created": mirror.is_dir(),
-              "refs_count": len(lines("refs.tsv")),
-              "lfs_applicable": os.environ.get("LFS_APPLICABLE", "NOT_DETERMINED"),
-              "lfs_oid_count": len(lines("lfs-oids.txt")),
-              "lfs_verified_count": sum("\tVERIFIED\t" in x for x in lines("lfs-verification.tsv")),
-              "gitmodules_history_entries": len(lines("gitmodules-history.tsv")),
-              "gitlink_history_entries": len(lines("gitlinks-history.tsv")),
-          }
-          (evidence / "capability-validation.json").write_text(
-              json.dumps(payload, indent=2, sort_keys=True) + "\n"
-          )
-          PY
+        env:
+          DESTINATION_VALIDATED: ${{ steps.destination.outputs.destination_validated }}
+        run: python3 backup/scripts/bkp_repo.py build-evidence
 
-      - name: Publish diagnostic evidence
+      - name: Publish evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: git-capability-validation
+          name: bkp-repo-${{ inputs.request_id }}
           path: evidence/
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 7

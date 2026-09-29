@@ -308,6 +308,7 @@ capabilities:
       invocation: workflow_call
       secrets: inherit
       ecr_source: WORKFLOW_ON_WORKFLOW_CALL_INPUTS
+      result_log_marker: BKP_RESULT
     command_log:
       path: commands.log
       line_schema: backup/schemas/commands-log-line.schema.yaml
@@ -503,10 +504,10 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
-      current_sha: 5184db171776de1b61ffced5ef57926bce046cad
+      current_sha: ef4d0957b6440c476cadddd44cf83bef554f25d4
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
-      status: NOT_VALIDATED
+      status: REVALIDATION_REQUIRED
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
@@ -563,6 +564,21 @@ implementation_artifacts:
     purpose: Triggered by pushes to commands.log; validates new lines and calls the mnemonic workflow through a fixed mapping.
     materialization:
       status: NOT_MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+    validation:
+      status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: EXECUTES}
+
+  - artifact_id: backup_repository_helper_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/bkp_repo.py
+    purpose: Deterministic helper for backup_repository - input revalidation, Capability Preflight, destination gate, and schema 2.0 evidence/manifest building.
+    materialization:
+      status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
     validation:
