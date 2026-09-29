@@ -58,7 +58,8 @@ LOG = "commands.log"
 ZEROS = "0" * 40
 
 # Mapeamento FIXO Mnemonic -> workflow. É a única forma de um comando executar algo.
-# Deve refletir os jobs do dispatcher.yml e o `command_workflow.path` do capabilities.yaml.
+# Deve refletir os jobs do dispatcher.yml e o caminho que o registro de artefatos do capabilities.yaml
+# declara para o `command_workflow.artifact_id` do Mnemonic (a conferência é feita em validate_lines).
 # Para novo Mnemonic: acrescente aqui, um job no dispatcher.yml e o registro no capabilities.yaml.
 MNEMONIC_WORKFLOWS = {"BKP_REPO": ".github/workflows/backup-repository.yml"}
 
@@ -205,8 +206,11 @@ def validate_lines(old_ids, lines):
     # O registro é lido para conferir a coerência do Mnemonic com o workflow declarado.
     caps = load_yaml("backup/capabilities.yaml")
     # Coerência com o registro: Mnemonic -> workflow declarado em capabilities.yaml.
-    # Mapa Mnemonic -> caminho do workflow, como o capabilities.yaml declara.
-    registry = {c["mnemonic"]: c["command_workflow"]["path"] for c in caps["capabilities"] if "mnemonic" in c}
+    # Mapa Mnemonic -> caminho do workflow, como o registro declara. O caminho NÃO fica na
+    # capability: vem do registro de artefatos, pelo `command_workflow.artifact_id` (fonte única).
+    paths = {a["artifact_id"]: a["location"]["path"] for a in caps["implementation_artifacts"]}
+    registry = {c["mnemonic"]: paths.get(c["command_workflow"]["artifact_id"])
+                for c in caps["capabilities"] if "mnemonic" in c}
 
     # seen: ids já vistos (log antigo + linhas deste push); accepted: linhas aprovadas nesta rodada.
     seen, accepted = set(old_ids), []

@@ -75,7 +75,7 @@ Endereço: `https://github.com/Moriblo/repo_backup/blob/main/<caminho>`. O engin
 
 | Capability | Lê também | Observação |
 |---|---|---|
-| `backup_repository` | `.github/workflows/backup-repository.yml` (o ECR, nos `inputs`); `backup/schemas/commands-log-line.schema.yaml` (formato da linha); `commands.log` (ids já usados) | O caminho do workflow vem do campo `command_workflow.path` da capability, no registro. |
+| `backup_repository` | `.github/workflows/backup-repository.yml` (o ECR, nos `inputs`); `backup/schemas/commands-log-line.schema.yaml` (formato da linha); `commands.log` (ids já usados) | O caminho do workflow vem do registro: `command_workflow.artifact_id` da capability, resolvido em `implementation_artifacts[].location.path`. |
 | `backup_projects` | Nada além dos dois iniciais | **Ainda não tem Mnemonic nem executor.** O engine informa que não consegue gerar comando e aponta a seção II.15. |
 | `list_capabilities`, `show_status`, `validate_evidence`, `help` | Só os dois iniciais | O engine responde na conversa. Não geram linha de comando. |
 | `restore_repository` (**PLANEJADA**) | Ainda não existe no registro | Restaurar a partir do OneDrive para o GitHub (seção I.14). Quando existir, terá Mnemonic e workflow próprios, sob GO do HITL. |
@@ -223,7 +223,7 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
 #### Passo 9: Capability Preflight
 - **Quem:** GitHub Actions, `bkp_repo.py preflight`.
 - **Acontece:** avalia as **18 classes** de objeto do `backup_repository`, cada rota separadamente. Hoje só a classe **`git`** tem rota implementada. As outras **17** viram lacuna `EXECUTION_CAPABILITY_GAP`. Se o token não foi emitido, o `git` também vira lacuna (`ACCESS_PERMISSION_GAP`), e são **18**. O resultado é validado contra o schema do command-request e gravado em `evidence/preflight.json`.
-- **De onde vêm as restrições:** não são uma lista fixa. São **calculadas** a cada execução: as classes de `includes` (em `backup/capabilities.yaml`) menos as de `IMPLEMENTED_CLASSES` (em `backup/scripts/bkp_repo.py`). Hoje, 18 menos 1 (`git`) dá **17**. Cada uma tem o nome `RST-<classe>-<tipo da lacuna>`. A lista completa aparece no `BKP_RESULT`, no `preflight.json` e, depois de aceita, no `commands.log`. Implementar uma classe a retira das restrições (seção I.14).
+- **De onde vêm as restrições:** não são uma lista fixa. São **calculadas** a cada execução: as classes de `includes` (em `backup/capabilities.yaml`) menos as de `implemented_classes` (também em `backup/capabilities.yaml`, na capability). Hoje, 18 menos 1 (`git`) dá **17**. Cada uma tem o nome `RST-<classe>-<tipo da lacuna>`. A lista completa aparece no `BKP_RESULT`, no `preflight.json` e, depois de aceita, no `commands.log`. Implementar uma classe a retira das restrições (seção I.14).
 - **Decisão:** a execução só segue se **todas** as restrições exigidas estiverem em `preflight_decision.accepted_restrictions`. Aceitar menos mantém o bloqueio.
 - **Sai:** saída **10**, `BKP_RESULT` **`BLOCKED`** (`CAPABILITY_PREFLIGHT_GAPS`) com a lista `required_restrictions`, e os passos seguintes são pulados. Ou saída **0**, `BKP_RESULT` **`PREFLIGHT_OK`**. O artefato `bkp-repo-<request_id>` é publicado sempre.
 
@@ -378,7 +378,8 @@ Estados: **EXISTE**, **TEMPORÁRIO**, **A REMOVER**, **PLANEJADO**.
 | `.github/workflows/onedrive-appfolder-oidc-read-test.yml` | Teste OIDC antigo, contrário à regra "sem OIDC". | A REMOVER (SA-08) |
 | `backup/scripts/onedrive.py` | Access token, rotação do secret, destino, upload em blocos e SHA-256. | PLANEJADO (SA-08) |
 | `backup/scripts/onedrive_authorize.py` | Login local único (device code) que entrega o refresh token. | PLANEJADO (SA-08) |
-| Script de rastreabilidade | Confere existência, SHA e órfãos dos artefatos registrados. | PLANEJADO (SA-05) |
+| `backup/scripts/validate_traceability.py` | Confere o registro contra o repositório (existência, SHA, órfãos, caminhos, evidência de `VALIDATED`) e atualiza os SHAs com `--update`. | EXISTE |
+| `.github/workflows/traceability.yml` | Roda o script em todo pull request. | EXISTE |
 
 ## I.10 Segredos e variáveis
 
@@ -418,7 +419,8 @@ O environment `onedrive-backup` e as variáveis `AZURE_CLIENT_ID` e `AZURE_TENAN
 | 20 | `bkp_repo.py validate-destination` | Destino não validado (falha fechado). |
 | 21 | `bkp_repo.py build-evidence` | Recusa de gerar evidência sem destino validado. |
 | 30 | `dispatch_check.py` | Violação no push: nada é despachado. |
-| 64 | `bkp_repo.py`, `dispatch_check.py` | Uso incorreto ou variável de ambiente ausente. |
+| 64 | `bkp_repo.py`, `dispatch_check.py`, `validate_traceability.py` | Uso incorreto ou variável de ambiente ausente. |
+| 1 | `validate_traceability.py` | O registro não bate com o repositório (a linha `ERRO <CÓDIGO>` diz o quê). |
 
 ### Linhas `BKP_RESULT` e afins
 
@@ -439,6 +441,7 @@ Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `
 - **`diagnostic-git-read.yml`** é TEMPORÁRIO: existe porque o gate de destino falha fechado antes do clone. Sai, com o registro dele no `capabilities.yaml`, quando o OneDrive funcionar.
 - **`onedrive-appfolder-oidc-read-test.yml`** sai no SA-08.
 - **`backup_projects`** aparece no menu, mas não tem Mnemonic nem executor: hoje não gera comando.
+- **Registro de artefatos:** depois de alterar qualquer arquivo registrado, rode `python3 backup/scripts/validate_traceability.py --update` e confira com `--check`. O `traceability.yml` roda o `--check` em todo pull request. Um artefato só fica `VALIDATED` com evidência registrada (URL do run e commit) e a nota do que foi e do que não foi provado.
 - **Manutenção deste documento:** ao criar, mover ou remover um arquivo, um segredo ou um código de saída, atualize as seções I.9, I.10 e I.12 no mesmo PR. Itens *planejados* viram *existentes* no PR que os implementa.
 
 ## I.14 Restauração e Etapa 2 (**PLANEJADO**)
@@ -449,7 +452,7 @@ Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `
 1. **Pacote restaurável** no passo 13: bundle de todas as refs, objetos LFS e lista das refs.
 2. **Teste de restauração** logo depois do primeiro backup real: restaurar para um repositório **novo e vazio** e registrar o resultado. Um backup só está provado quando a restauração funciona.
 3. **Capability `restore_repository`** no menu, com Mnemonic e workflow próprios, sob GO do HITL, no mesmo padrão do `BKP_REPO`.
-4. **Etapa 2: preservar e restaurar as 17 classes**, uma de cada vez. Cada classe implementada sai de `IMPLEMENTED_CLASSES`, e a restrição correspondente deixa de ser exigida. As classes **temporais** (que expiram) vêm primeiro, como manda o protocolo (seção II.12).
+4. **Etapa 2: preservar e restaurar as 17 classes**, uma de cada vez. Cada classe implementada é acrescentada a `implemented_classes` no registro, e a restrição correspondente deixa de ser exigida. As classes **temporais** (que expiram) vêm primeiro, como manda o protocolo (seção II.12).
 
 **Níveis de restauração**
 
@@ -566,7 +569,7 @@ Caminho: engine → `commands.log` → dispatcher → workflow.
 
 1. O engine lê este documento e apresenta o Capability Menu. O HITL escolhe uma capability.
 2. O `backup/capabilities.yaml` associa a capability ao seu Mnemonic (`backup_repository` → `BKP_REPO`) e aos parâmetros requeridos. O HITL informa os valores.
-3. O workflow ligado ao Mnemonic (`command_workflow.path`) define integralmente o Exact Command Request: os `inputs` do `on: workflow_call` mais as restrições declaradas em suas descrições. O engine lê o workflow e apresenta o ECR exatamente como definido.
+3. O workflow ligado ao Mnemonic (`command_workflow.artifact_id`, cujo caminho é resolvido no registro de artefatos) define integralmente o Exact Command Request: os `inputs` do `on: workflow_call` mais as restrições declaradas em suas descrições. O engine lê o workflow e apresenta o ECR exatamente como definido.
 4. Somente depois do `GO`, o engine acrescenta uma linha JSON ao `commands.log`, no `main` (`backup/schemas/commands-log-line.schema.yaml`): `request_id`, `mnemonic`, `ts`, `authorization` e os `params` autorizados. O conjunto de `params` varia conforme o schema de cada Mnemonic. O `commands.log` só recebe acréscimos e é o único arquivo escrito diretamente no `main`.
 5. O `dispatcher.yml` roda em todo push no `main` (para que o controle de escrita direta também veja pushes que não tocam o `commands.log`), despacha somente quando o `commands.log` mudou, lê só as linhas novas, valida-as (schema, `request_id` único, nenhuma edição de linhas existentes e nenhum push direto de arquivos além do `commands.log`, exceto se o commit pertencer a um pull request mergeado; qualquer violação falha o push inteiro e não despacha nada) e chama o workflow do Mnemonic por um mapeamento fixo (`workflow_call`, `secrets: inherit`).
 6. O workflow revalida seus inputs, executa o Capability Preflight, executa e produz evidência no schema 2.0. O engine reporta o resultado ao HITL.
@@ -965,6 +968,7 @@ O protocolo é agnóstico quanto ao engine: a capacidade é a capacidade efetiva
 | **MRBI** | Maximum Recommended Backup Interval: intervalo máximo recomendado entre backups, dado pela menor janela de retenção. |
 | **O-24** | Controle de descoberta de conjunto aberto: todo estado novo descoberto deve ser classificado, evidenciado e reconciliado. |
 | **Órfão (`ORPHAN_ARTIFACT`)** | Arquivo de implementação numa pasta gerenciada, sem `artifact_id` registrado. |
+| **SHA de blob** | Identificador do conteúdo de um arquivo no Git. O registro guarda o `current_sha` de cada artefato para detectar mudanças. |
 | **Refresh token** | Credencial de longa duração que renova o access token. Obtida uma vez por login do HITL. |
 | **Registro** | O `backup/capabilities.yaml`, fonte canônica de capabilities, Mnemonics, políticas e artefatos. |
 | **restriction_id** | Identificador estável de uma restrição aceita (ex.: `RST-issues-EXECUTION_CAPABILITY_GAP`). |

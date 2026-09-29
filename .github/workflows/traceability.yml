@@ -1,0 +1,57 @@
+# =============================================================================
+# Check de rastreabilidade do registro de artefatos
+# =============================================================================
+# O QUE É
+#   Roda backup/scripts/validate_traceability.py --check e falha se o registro
+#   (backup/capabilities.yaml) não bater com o repositório: artefato registrado que
+#   não existe, SHA desatualizado, arquivo sem registro (órfão), caminhos do Mnemonic
+#   incoerentes ou estado VALIDATED sem evidência.
+#
+# QUANDO RODA
+#   Em todo pull request (é o check que impede o registro de ficar desatualizado) e
+#   sob demanda (workflow_dispatch).
+#
+# COMO CORRIGIR UMA FALHA
+#   Localmente: `python3 backup/scripts/validate_traceability.py --update` atualiza os
+#   SHAs. Os demais problemas (órfão, caminho, evidência) são corrigidos à mão no
+#   capabilities.yaml. Depois, commit no mesmo pull request.
+#
+# REGRAS QUE ESTE WORKFLOW RESPEITA
+#   - Só lê o repositório (permissions: contents: read). Não escreve nada.
+#   - Não usa segredos.
+#   - Não bloqueia o merge sozinho: vira bloqueio apenas se você exigir este check
+#     na proteção de branch.
+# =============================================================================
+name: Traceability check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+# Somente leitura do repositório.
+permissions:
+  contents: read
+
+jobs:
+  traceability:
+    name: Registry traceability
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Baixa o repositório na versão do pull request.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # PyYAML lê o registro; jsonschema é importado pelo dispatch_check.py, que o script
+      # carrega para ler a lista de permissão de Mnemonics.
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install --quiet pyyaml jsonschema
+
+      # Confere o registro. Saída 1 = há problemas (listados no log, um por linha, com o
+      # código do problema); saída 0 = registro coerente.
+      - name: Check registry traceability
+        shell: bash
+        run: python3 backup/scripts/validate_traceability.py --check
