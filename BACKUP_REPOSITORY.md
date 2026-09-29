@@ -468,25 +468,25 @@ The protocol is engine-agnostic: capability is the effective authorized executio
 
 ### 2.2 A cada execução (resumo)
 
-Esta tabela é o resumo. O detalhe de cada passo, o diagrama e o caminho do Mnemonic estão nas seções 2.3 a 2.7.
+Índice dos 15 passos, com a situação de cada um. O texto de cada passo, com o que entra, o que acontece, o que pode falhar e o que sai, está na seção 2.3.
 
-| # | Quem | O que acontece | Situação hoje |
+| # | Passo | Quem | Hoje |
 |---|---|---|---|
-| 1 | Engine | Lê este protocolo e o `capabilities.yaml` e apresenta o **Capability Menu**. | Existe |
-| 2 | HITL | Escolhe `backup_repository` e informa `source_repository` e `destination` (caminho **relativo ao AppFolder**). | Existe |
-| 3 | Engine | Lê o `backup-repository.yml` e apresenta o **ECR** exatamente como o workflow define. | Existe |
-| 4 | HITL | Dá **GO** ou NO-GO. A autorização vale só para esse ECR exato. | Existe |
-| 5 | Engine | Acrescenta **uma linha** no `commands.log` do `main`, com o **Mnemonic copiado do registro**. É a única escrita direta permitida no `main`. | Existe |
-| 6 | Actions | O push dispara o **Dispatcher**: valida intervalo do push, controle de escrita direta, append-only, schema, `request_id` único e Mnemonic (conhecido e coerente com o registro). | Existe |
-| 7 | Actions | O Dispatcher **traduz o Mnemonic em workflow** (mapeamento fixo) e chama o `BKP_REPO` (`workflow_call`, `secrets: inherit`). | Existe |
-| 8 | Actions | O `BKP_REPO` revalida os inputs e emite o token do App Reader. | Existe |
-| 9 | Actions | **Capability Preflight.** Com lacunas materiais e sem decisão do HITL, termina `BLOCKED`. | Existe |
-| 10 | Engine → HITL | O engine lê a linha `BKP_RESULT` no log do job e reporta. O HITL decide `STOP` ou `CONTINUE_WITH_RESTRICTIONS`. Se continuar, volta ao passo 3 com **nova linha** (`preflight_decision` e novo `request_id`). | Existe |
-| 11 | Actions | **Valida o destino.** Hoje sempre falha fechado (saída 20). Depois do SA-08: renova o access token, grava o novo refresh token no secret e faz escrita e leitura de teste no AppFolder. | Falha fechado; validação real **PLANEJADA** |
-| 12 | Actions | **Lê a origem:** mirror, fsck, LFS e submódulos. A comparação das refs da origem com as do mirror é **PLANEJADA**. | Parcial |
-| 13 | Actions | Gera o pacote (`git bundle`) e envia ao OneDrive em blocos, conferindo o SHA-256. | **PLANEJADO** |
-| 14 | Actions | Gera `evidence.json` e `manifest.json` (schemas 2.0), valida e publica o artefato. O envio da evidência ao OneDrive é **PLANEJADO**. | Parcial |
-| 15 | Engine → HITL | Lê o resultado e reporta estado, restrições aceitas e reconciliação. | Existe |
+| 1 | [O engine apresenta o Capability Menu](#passo-1-o-engine-apresenta-o-capability-menu) | Engine | Existe |
+| 2 | [O HITL escolhe a capability e informa os parâmetros](#passo-2-o-hitl-escolhe-a-capability-e-informa-os-parâmetros) | HITL | Existe |
+| 3 | [O engine apresenta o ECR (Exact Command Request)](#passo-3-o-engine-apresenta-o-ecr-exact-command-request) | Engine | Existe |
+| 4 | [O HITL dá GO ou NO-GO](#passo-4-o-hitl-dá-go-ou-no-go) | HITL | Existe |
+| 5 | [O engine grava a linha no `commands.log`](#passo-5-o-engine-grava-a-linha-no-commandslog) | Engine | Existe |
+| 6 | [O Dispatcher valida o push e as linhas novas](#passo-6-o-dispatcher-valida-o-push-e-as-linhas-novas) | Actions | Existe |
+| 7 | [O Dispatcher chama o workflow do Mnemonic](#passo-7-o-dispatcher-chama-o-workflow-do-mnemonic) | Actions | Existe |
+| 8 | [O `BKP_REPO` começa](#passo-8-o-bkp_repo-começa) | Actions | Existe |
+| 9 | [Capability Preflight](#passo-9-capability-preflight) | Actions | Existe |
+| 10 | [O engine reporta e o HITL decide](#passo-10-o-engine-reporta-e-o-hitl-decide) | Engine → HITL | Existe |
+| 11 | [Validação do destino](#passo-11-validação-do-destino) | Actions | Falha fechado; validação real **PLANEJADA** |
+| 12 | [Leitura da origem](#passo-12-leitura-da-origem) | Actions | Parcial |
+| 13 | [Pacote e envio ao OneDrive (PLANEJADO)](#passo-13-pacote-e-envio-ao-onedrive-planejado) | Actions | **PLANEJADO** |
+| 14 | [Evidência e manifest](#passo-14-evidência-e-manifest) | Actions | Parcial |
+| 15 | [O engine reporta o resultado](#passo-15-o-engine-reporta-o-resultado) | Engine → HITL | Existe |
 
 **Observações**
 - Com as 17 restrições atuais (todas as classes, menos o Git), toda execução exige **duas linhas** no `commands.log`: a primeira termina `BLOCKED`; a segunda carrega a decisão do HITL.
