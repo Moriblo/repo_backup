@@ -484,13 +484,25 @@ Quando a restauração existir, esses limites entram no relatório final como li
 1. Settings → Branches → **Add branch protection rule** (ou Settings → Rules → Rulesets → New branch ruleset).
 2. Em "Branch name pattern", informe `main`.
 3. Marque **Require status checks to pass before merging**.
-4. Em "Search for status checks", escolha **Registry traceability**. O check só aparece na lista depois de ter rodado ao menos uma vez no repositório, nos últimos dias: abra ou atualize um pull request para ele rodar.
+4. Em "Search for status checks", escolha **Registry traceability**. O check só aparece na lista se tiver **concluído com sucesso** no repositório nos **últimos 7 dias**: abra ou atualize um pull request para ele rodar e passar.
 5. Salve.
 
-**Cuidado: não quebre a gravação do `commands.log`.** O engine grava o `commands.log` direto no `main`, sem pull request. Regras que exigem pull request ou checks em todo push podem **recusar essa gravação** e parar o fluxo. Por isso:
+**Cuidado: não quebre a gravação do `commands.log`.** O engine grava o `commands.log` direto no `main`, sem pull request. Regras que exigem pull request ou checks podem recusar essa gravação e parar o fluxo.
+
+| Ponto | Situação |
+|---|---|
+| Por padrão, as restrições da regra **não se aplicam a quem tem permissão de administrador** no repositório | **Confirmado** na documentação do GitHub |
+| A opção **"Do not allow bypassing the above settings"** faz as restrições valerem também para administradores | **Confirmado** na documentação |
+| "Require a pull request before merging" impede push direto em condições normais | **Confirmado** na documentação (com a exceção de administradores acima) |
+| O check só pode ser exigido se tiver concluído com sucesso nos últimos 7 dias | **Confirmado** na documentação |
+| A credencial que o engine usa para gravar o `commands.log` é tratada como **administrador** e passa pela regra | **NÃO confirmado**: depende do tipo da credencial e só um teste real responde |
+
+Por isso:
 - **não** marque "Require a pull request before merging";
-- **não** marque "Do not allow bypassing the above settings" (ou "Include administrators"), para o administrador (`Moriblo`, a identidade que o engine usa hoje) continuar podendo gravar o log;
-- depois de ativar, **confirme com uma gravação real de teste** do `commands.log` antes de depender da regra. O comportamento exato depende das opções marcadas. Se a gravação for recusada, desative a regra ou ajuste-a.
+- **não** marque "Do not allow bypassing the above settings", para o administrador (`Moriblo`, a identidade que o engine usa hoje) continuar podendo gravar o log;
+- depois de ativar, **faça uma gravação real de teste** do `commands.log` antes de depender da regra. Se for recusada, desative a regra ou ajuste-a.
+
+Fontes (documentação do GitHub): [Sobre branches protegidos](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches), [Gerenciar uma regra de proteção de branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/managing-a-branch-protection-rule) e [Solução de problemas de status checks obrigatórios](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks).
 
 **Como desativar.** Remova a regra em Settings → Branches.
 
