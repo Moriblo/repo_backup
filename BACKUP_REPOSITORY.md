@@ -27,6 +27,7 @@
 
 | Preciso de… | Vá para |
 |---|---|
+| Abrir um chat novo (o primeiro prompt e os arquivos a ler) | **I.0** |
 | Operar um backup, passo a passo | Parte I, seções I.3 e I.4 |
 | Saber quem faz o quê | I.1 |
 | Entender uma linha do `commands.log` | I.6 |
@@ -53,6 +54,52 @@
 ---
 
 # Parte I: Operação
+
+## I.0 Como iniciar: o primeiro prompt de um chat novo
+
+**Princípio.** O engine não tem memória. Tudo o que ele precisa está no repositório **`Moriblo/repo_backup`**, branch **`main`**. Ele **deve** ler a versão **atual** de lá, e nunca confiar em conversas anteriores. Por isso o primeiro prompt só precisa dizer **onde ler**.
+
+**1. Arquivos que o engine lê no início (sempre os dois, nesta ordem)**
+
+| Ordem | Arquivo (no `main`) | Para quê |
+|---|---|---|
+| 1 | `BACKUP_REPOSITORY.md` | O protocolo: regras, fluxo e guia operacional. |
+| 2 | `backup/capabilities.yaml` | O registro: a lista de capabilities do **menu**, o Mnemonic e os parâmetros de cada uma. |
+
+Endereço: `https://github.com/Moriblo/repo_backup/blob/main/<caminho>`. O engine precisa de acesso de leitura ao repositório (conector do GitHub ou clone).
+
+**2. Arquivos que o engine lê depois que você escolhe uma capability**
+
+| Capability | Lê também | Observação |
+|---|---|---|
+| `backup_repository` | `.github/workflows/backup-repository.yml` (o ECR, nos `inputs`); `backup/schemas/commands-log-line.schema.yaml` (formato da linha); `commands.log` (ids já usados) | O caminho do workflow vem do campo `command_workflow.path` da capability, no registro. |
+| `backup_projects` | Nada além dos dois iniciais | **Ainda não tem Mnemonic nem executor.** O engine informa que não consegue gerar comando e aponta a seção II.15. |
+| `list_capabilities`, `show_status`, `validate_evidence`, `help` | Só os dois iniciais | O engine responde na conversa. Não geram linha de comando. |
+| Capability nova no futuro | O que o registro indicar para ela | O menu vem do registro: **o prompt inicial não muda** quando uma capability é acrescentada. |
+
+**Regra geral.** Se a capability escolhida tem `mnemonic` no registro, o engine lê o workflow apontado em `command_workflow` e apresenta o ECR a partir dele. Se não tem, responde na conversa e não grava nada.
+
+**3. Prompt inicial (copie e cole)**
+
+```text
+Você é o engine do processo de backup de repositórios.
+Repositório: Moriblo/repo_backup, branch main.
+
+Leia, nesta ordem, a versão ATUAL do main:
+1) BACKUP_REPOSITORY.md   (protocolo e guia operacional)
+2) backup/capabilities.yaml   (registro; lista as capabilities do menu)
+
+Depois apresente o Capability Menu e aguarde a minha escolha.
+Não escolha por mim, não infira parâmetros e não grave nada até eu dar GO
+para o pedido exato (ECR). Quando eu escolher uma capability, leia também os
+arquivos que o registro indicar para ela.
+Se não conseguir ler o repositório, pare e me avise. Não siga de memória.
+```
+
+**4. Pré-requisitos do chat**
+- Acesso de **leitura** ao repositório, para todas as capabilities.
+- Para gravar o `commands.log` (passo 5): acesso de escrita ao `main` e **autorização explícita do HITL**. O engine não grava sem ela.
+- Nenhum token, chave ou segredo é colado no chat.
 
 ## I.1 Players
 
@@ -110,7 +157,7 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
 #### Passo 1: o engine apresenta o Capability Menu
 - **Quem:** engine.
 - **Entra:** o pedido do HITL para iniciar um backup.
-- **Acontece:** o engine lê este documento e o `backup/capabilities.yaml` e apresenta as seis capabilities. Ele **não escolhe** por conta própria.
+- **Acontece:** o engine lê, na versão atual do `main` de `Moriblo/repo_backup`, este documento e o `backup/capabilities.yaml` (seção I.0) e apresenta as capabilities que o registro lista (hoje, seis). Ele **não escolhe** por conta própria.
 - **Falha:** se não conseguir ler o registro, o engine para e avisa. Nada é inferido de conversas anteriores.
 - **Sai:** o menu.
 
@@ -119,7 +166,8 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
 - **Acontece:**
   1. O HITL escolhe `backup_repository`.
   2. O engine consulta o registro e descobre o **Mnemonic** (`mnemonic: BKP_REPO`) e os **parâmetros requeridos** (`source_repository` e `destination`).
-  3. O HITL informa ou confirma cada valor. O engine pode **propor**, nunca substituir a confirmação, e nada é herdado de execuções anteriores.
+  3. Se a capability não tem Mnemonic no registro (ex.: `backup_projects`), o engine informa que não consegue gerar comando e para.
+  4. O HITL informa ou confirma cada valor. O engine pode **propor**, nunca substituir a confirmação, e nada é herdado de execuções anteriores.
 - **Falha:** valor fora do formato é recusado. Exemplo real: o `destination` dado como URL do OneDrive foi recusado, porque o destino é um caminho **relativo ao AppFolder** (sem `/` inicial e sem `..`).
 - **Sai:** capability, Mnemonic e valores.
 
@@ -459,7 +507,7 @@ Esta sequência **NÃO DEVE** ser encurtada, reordenada nem ignorada em silênci
 
 ## II.4 Procedimento de início
 
-1. Ler este documento e `backup/capabilities.yaml`.
+1. Ler este documento e `backup/capabilities.yaml`, na versão atual do `main` do repositório `Moriblo/repo_backup` (nunca de memória de conversas anteriores).
 2. Apresentar o Capability Menu.
 3. Aguardar o humano escolher uma capability.
 4. Obter, ou confirmar explicitamente, todo parâmetro de execução requerido.
