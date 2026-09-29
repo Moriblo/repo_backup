@@ -354,8 +354,11 @@ jobs:
       #   source.bundle   git bundle de TODAS as refs (verificado com `git bundle verify`)
       #   lfs-objects.tar objetos Git LFS (o bundle não os carrega); só se a origem usa LFS
       #   refs.tsv        lista das refs e dos SHAs preservados, para conferência
+      #   arquivos-<branch>.zip  INSTANTÂNEO LEGÍVEL: os arquivos da branch padrão (HEAD do mirror)
+      #                   no estado atual, para abrir sem git. NÃO é a base da restauração (o
+      #                   bundle é): não tem histórico e, se a origem usa LFS, traz só os ponteiros.
       #   RESTAURAR.txt   como restaurar para um repositório novo e vazio
-      # Códigos de saída: 8 = objetos LFS não encontrados no mirror.
+      # Códigos de saída: 8 = objetos LFS não encontrados no mirror; 9 = instantâneo não gerado.
       - name: Build restorable package
         shell: bash
         run: |
@@ -375,6 +378,14 @@ jobs:
             tar -C "$(dirname "$lfs_dir")" -cf package/lfs-objects.tar "$(basename "$lfs_dir")/objects"
           fi
           cp "$EVIDENCE_DIR/refs.tsv" package/refs.tsv
+          # Instantâneo legível da branch padrão. `git archive` lê o mirror (nada é escrito nele).
+          # O nome da branch vira parte do arquivo, com "/" trocado por "_".
+          default_branch="$(git -C "$MIRROR_DIR" symbolic-ref --short HEAD)"
+          snapshot="package/arquivos-${default_branch//\//_}.zip"
+          if ! git -C "$MIRROR_DIR" archive --format=zip -o "$PWD/$snapshot" HEAD; then
+            echo "::error::Não foi possível gerar o instantâneo da branch padrão."
+            exit 9
+          fi
           cat > package/RESTAURAR.txt <<'EOF'
           COMO RESTAURAR ESTE BACKUP PARA UM REPOSITORIO NOVO E VAZIO NO GITHUB
 
@@ -388,6 +399,10 @@ jobs:
              (cria lfs/objects) e rode: git lfs push --all origin
 
           refs.tsv lista as refs preservadas e seus SHAs, para conferir depois.
+
+          arquivos-<branch>.zip e um instantaneo LEGIVEL: os arquivos da branch padrao no
+          estado atual, para abrir sem git. Nao tem historico e, se o repositorio usa Git LFS,
+          traz apenas os ponteiros. A restauracao usa o source.bundle, nao este zip.
           EOF
 
       # Envia o pacote ao OneDrive em <destination>/<request_id>/package/ e confere o hash de
