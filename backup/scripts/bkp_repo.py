@@ -63,12 +63,6 @@ GAP_ACCESS = "ACCESS_PERMISSION_GAP"
 # EXECUTION_CAPABILITY_GAP: a arquitetura existe, mas esta execução não tem rota operacional.
 GAP_EXEC = "EXECUTION_CAPABILITY_GAP"
 
-# Classes de objeto que este executor realmente lê e preserva.
-# Toda outra classe listada em `includes` de capabilities.yaml vira
-# EXECUTION_CAPABILITY_GAP até existir uma rota implementada. Nunca é tratada
-# como ausente nem como preservada (regra 9 do protocolo).
-# Para implementar uma nova classe: acrescente aqui E implemente a leitura no workflow.
-IMPLEMENTED_CLASSES = {"git"}
 
 
 def load(path):
@@ -179,13 +173,19 @@ def build_preflight():
     # O passo do workflow que emite o token do GitHub App usa continue-on-error;
     # aqui o resultado dele decide se a leitura da origem está disponível.
     token_ok = os.environ.get("TOKEN_OUTCOME") == "success"
+    # Classes que o executor JÁ lê e preserva, declaradas no registro (`implemented_classes`).
+    # Toda outra classe de `includes` vira EXECUTION_CAPABILITY_GAP até existir uma rota
+    # implementada; nunca é tratada como ausente nem como preservada (regra 9 do protocolo).
+    # Para implementar uma nova classe: implemente a leitura no workflow E acrescente-a
+    # a `implemented_classes` no capabilities.yaml.
+    implemented_classes = set(cap.get("implemented_classes", []))
     assessments, gaps, pending = [], [], []
     # Uma avaliação por classe de objeto que o backup_repository cobre (lista `includes` do capabilities.yaml).
     for cls in cap["includes"]:
         # spec = definição da classe: leituras exigidas e rotas aprovadas.
         spec = caps["object_classes"][cls]
         # True só para classes com rota realmente implementada neste executor.
-        implemented = cls in IMPLEMENTED_CLASSES
+        implemented = cls in implemented_classes
         # Rotas avaliadas desta classe; cada tipo de rota aprovado é avaliado separadamente.
         routes = []
         # Cada tipo de rota aprovado é avaliado separadamente (BACKUP_REPOSITORY.md).

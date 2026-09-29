@@ -390,10 +390,10 @@ capabilities:
     # Workflow associado ao Mnemonic. Ele define INTEGRALMENTE o ECR (Exact Command Request):
     # os inputs do seu `on: workflow_call` mais as restrições descritas neles.
     command_workflow:
-      # Liga este bloco ao registro de artefatos (implementation_artifacts, no fim do arquivo).
+      # Único vínculo com o workflow: o `artifact_id` no registro de artefatos
+      # (implementation_artifacts, no fim do arquivo). O CAMINHO do workflow não é repetido
+      # aqui: ele vem de `implementation_artifacts[].location.path` (fonte única, SA-04).
       artifact_id: backup_repository_executor
-      # Caminho do workflow que o dispatcher chama.
-      path: .github/workflows/backup-repository.yml
       # Forma de chamada: reutilização de workflow (não workflow_dispatch), para que só o
       # dispatcher, disparado pelo commands.log, consiga executar o backup.
       invocation: workflow_call
@@ -420,9 +420,9 @@ capabilities:
     # Executor determinístico. `artifact_id` liga ao registro de artefatos no fim do arquivo. `required_for_capability_definition: false` = a capability existe mesmo sem este executor.
     deterministic_executor:
       artifact_id: backup_repository_executor
+      # Nome de referência do executor no vocabulário do protocolo. Deve ser "github_actions:" +
+      # nome do arquivo do workflow (conferido por validate_traceability.py).
       reference: github_actions:backup-repository.yml
-      current_materialization: MATERIALIZED
-      historical_existence: MATERIALIZED_IN_CURRENT_GOVERNED_CHANGE
       required_for_capability_definition: false
     # Capability Preflight: roda APÓS o GO e ANTES do Source Inventory; avalia se a execução AUTORIZADA consegue ler tudo que importa.
     capability_preflight:
@@ -443,6 +443,10 @@ capabilities:
       additional_parameters: {type: object, required: false, source: HITL_WHEN_APPLICABLE}
     # Classes de objeto (de object_classes) que este backup cobre.
     includes: [git, issues, pull_requests, actions, projects, environments, variables, secret_metadata, deployments, rules_and_branch_protection, collaborators, webhooks, labels, milestones, checks, actions_caches, codespaces_repository_state_delta, other_discovered_state]
+    # Classes (de `includes`) que o executor JÁ sabe ler e preservar. É a fonte única: o preflight
+    # (bkp_repo.py) calcula as restrições como `includes` menos `implemented_classes`.
+    # Ao implementar uma classe, acrescente-a aqui: a restrição correspondente deixa de ser exigida.
+    implemented_classes: [git]
 
   # Backup de Projects. Chamável sozinho e também incluído pelo backup_repository. SEM Mnemonic e SEM executor materializado: hoje não gera comando.
   - id: backup_projects
@@ -453,7 +457,7 @@ capabilities:
     deterministic_executor:
       artifact_id: backup_projects_executor
       reference: github_actions:backup-projects.yml
-      current_materialization: NOT_MATERIALIZED
+      # Não se sabe se este executor já existiu antes (informação que o registro sozinho não dá).
       historical_existence: NOT_DETERMINED
       required_for_capability_definition: false
     # Relação com o backup_repository: Projects relacionados entram no backup do repositório; também pode ser chamado isoladamente.
@@ -496,8 +500,15 @@ artifact_traceability:
   relationship_types: [EXECUTES, VALIDATES, SCHEMATIZES, CONFIGURES, SUPPORTS]
   # MATERIALIZED = o arquivo existe hoje; NOT_MATERIALIZED = registrado, mas ainda não existe.
   materialization_states: [MATERIALIZED, NOT_MATERIALIZED]
-  # Estado de validação, distinto de existir. VALIDATED exigirá evidência registrada (URL do run e commit), conforme a issue #7 (SA-06).
+  # Estado de validação, distinto de existir. VALIDATED exige evidência registrada
+  # (`validation.evidence` com URL do run e SHA completo do commit) e `validation.scope`.
   validation_states: [VALIDATED, NOT_VALIDATED, REVALIDATION_REQUIRED]
+  # Política do SHA de cada artefato: TRACKED (current_sha obrigatório e conferido),
+  # SELF_EXEMPT (o próprio registro, que não embute o próprio SHA) e MUTABLE_DATA (dados que
+  # mudam a cada comando, como o commands.log).
+  sha_policies: [TRACKED, SELF_EXEMPT, MUTABLE_DATA]
+  # Ciclo de vida do artefato: ACTIVE (padrão), TEMPORARY (existe por um tempo) ou TO_BE_REMOVED.
+  lifecycle_states: [ACTIVE, TEMPORARY, TO_BE_REMOVED]
   # Integridade: o SHA de blob Git do arquivo é o identificador da versão; o SHA do commit é a proveniência. Um artefato não embute o próprio SHA.
   integrity:
     materialized_version_identifier: GIT_BLOB_SHA
@@ -527,11 +538,24 @@ artifact_traceability:
 #   artifact_id        identificador lógico estável (não muda quando o arquivo muda).
 #   artifact_type      tipo (schema, protocolo, workflow, script...).
 #   location           repositório e caminho.
+#   lifecycle          (opcional) ACTIVE (padrão), TEMPORARY ou TO_BE_REMOVED.
 #   materialization    MATERIALIZED ou NOT_MATERIALIZED.
-#   integrity          como a versão é rastreada (current_sha = SHA de blob Git).
-#   validation         estado de validação.
+#   integrity          como a versão é rastreada:
+#                        current_sha  SHA de blob Git do arquivo (mantido por
+#                                     `validate_traceability.py --update`).
+#                        sha_policy   TRACKED (padrão: current_sha obrigatório),
+#                                     SELF_EXEMPT (este arquivo: não embute o próprio SHA) ou
+#                                     MUTABLE_DATA (arquivo de dados que muda a cada comando).
+#   validation         estado de validação. VALIDATED exige `evidence` (lista de
+#                      {run, commit}: URL do run no Actions e SHA completo do commit)
+#                      e `scope` (o que foi e o que NÃO foi provado).
 #   relationships      capabilities atendidas e tipo da relação.
+# A conferência automática de tudo isto é feita por backup/scripts/validate_traceability.py.
 implementation_artifacts:
+  # ---------------------------------------------------------------------------
+  # Este arquivo. Não embute o próprio SHA (regra do protocolo), por isso SELF_EXEMPT.
+  # Foi lido por dispatch_check.py e bkp_repo.py em todos os runs reais.
+  # ---------------------------------------------------------------------------
   - artifact_id: capability_registry
     artifact_type: CAPABILITY_REGISTRY
     location:
@@ -542,8 +566,13 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: SELF_EXEMPT
     validation:
       status: VALIDATED
+      scope: Lido pelo dispatcher e pelo preflight nos runs reais (Mnemonic, classes de objeto e artefatos). Regras de rastreabilidade ainda não conferidas em run.
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
     relationships:
       - {capability_id: backup_repository, relationship: CONFIGURES}
       - {capability_id: backup_projects, relationship: CONFIGURES}
@@ -552,6 +581,9 @@ implementation_artifacts:
       - {capability_id: validate_evidence, relationship: CONFIGURES}
       - {capability_id: help, relationship: CONFIGURES}
 
+  # ---------------------------------------------------------------------------
+  # Protocolo e guia operacional (BACKUP_REPOSITORY.md). Documento: não há run que o valide.
+  # ---------------------------------------------------------------------------
   - artifact_id: backup_repository_protocol
     artifact_type: PROTOCOL
     location:
@@ -562,6 +594,8 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: eb7f29fd65329f5dfe4af4a810dfea256efd10d9
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -572,6 +606,10 @@ implementation_artifacts:
       - {capability_id: validate_evidence, relationship: SUPPORTS}
       - {capability_id: help, relationship: SUPPORTS}
 
+  # ---------------------------------------------------------------------------
+  # Schema do ECR. VALIDATED: o preflight valida o seu resultado contra o sub-schema
+  # `capability_preflight` a cada execução real (bkp_repo.py preflight).
+  # ---------------------------------------------------------------------------
   - artifact_id: command_request_schema
     artifact_type: SCHEMA
     location:
@@ -582,12 +620,22 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 1031e6ccf2490240f77a035fca41d0dc8f0d1cce
     validation:
       status: VALIDATED
+      scope: Só o sub-schema capability_preflight, exercitado pelo preflight (bloqueado e liberado). O ECR completo ainda não é validado em run.
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
     relationships:
       - {capability_id: backup_repository, relationship: CONFIGURES}
       - {capability_id: backup_projects, relationship: CONFIGURES}
 
+  # ---------------------------------------------------------------------------
+  # Schema da evidência. REVALIDATION_REQUIRED: o build-evidence nunca rodou no Actions
+  # (o destino falha fechado antes); só foi testado localmente.
+  # ---------------------------------------------------------------------------
   - artifact_id: evidence_schema
     artifact_type: SCHEMA
     location:
@@ -598,13 +646,18 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 773b4e6b9230bae82504f9de2766d5a1dcdc5cc3
     validation:
-      status: VALIDATED
+      status: REVALIDATION_REQUIRED
     relationships:
       - {capability_id: backup_repository, relationship: SCHEMATIZES}
       - {capability_id: backup_projects, relationship: SCHEMATIZES}
       - {capability_id: validate_evidence, relationship: SUPPORTS}
 
+  # ---------------------------------------------------------------------------
+  # Schema do manifest. Mesma situação do schema da evidência.
+  # ---------------------------------------------------------------------------
   - artifact_id: backup_manifest_schema
     artifact_type: SCHEMA
     location:
@@ -615,19 +668,19 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 195afd8baf36c8c8f4eec70c698a81866a2d6177
     validation:
-      status: VALIDATED
+      status: REVALIDATION_REQUIRED
     relationships:
       - {capability_id: backup_repository, relationship: SCHEMATIZES}
       - {capability_id: backup_projects, relationship: SCHEMATIZES}
 
   # ---------------------------------------------------------------------------
-  # Executor do BKP_REPO: workflow_call chamado pelo dispatcher.yml (PR 3).
+  # Executor do BKP_REPO: workflow_call chamado pelo dispatcher.yml.
   # Os inputs do `on: workflow_call` dele definem o ECR apresentado ao HITL.
-  # `current_sha` é o SHA de blob Git do arquivo; muda a cada alteração do
-  # workflow e dispara nova validação (impact analysis, ver artifact_traceability).
-  # validation REVALIDATION_REQUIRED: o arquivo mudou e ainda não foi revalidado
-  # ponta a ponta (depende do dispatcher e do destino OneDrive).
+  # REVALIDATION_REQUIRED: só o início (inputs, token, preflight e gate de destino) rodou
+  # de verdade; clone, LFS, submódulos e evidência dependem do destino OneDrive.
   # ---------------------------------------------------------------------------
   - artifact_id: backup_repository_executor
     artifact_type: GITHUB_ACTIONS_WORKFLOW
@@ -639,13 +692,21 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
       current_sha: c774c84daeba46a107d58e130168dc7b87ff36a2
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: REVALIDATION_REQUIRED
+      scope: Provado em run real - revalidação de inputs, token do App Reader, preflight (bloqueado e liberado) e gate de destino. Não provado - clone, fsck, LFS, submódulos, evidência e manifest.
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
+  # ---------------------------------------------------------------------------
+  # Executor do backup_projects: só registrado (arquivo ainda não existe).
+  # ---------------------------------------------------------------------------
   - artifact_id: backup_projects_executor
     artifact_type: GITHUB_ACTIONS_WORKFLOW
     location:
@@ -664,6 +725,7 @@ implementation_artifacts:
   # ---------------------------------------------------------------------------
   # commands.log: fila append-only de comandos autorizados. O push nele dispara o
   # dispatcher.yml. Alterar ou apagar linhas existentes é proibido (o dispatcher rejeita).
+  # MUTABLE_DATA: o arquivo muda a cada comando gravado direto no main, então não tem SHA fixo.
   # ---------------------------------------------------------------------------
   - artifact_id: commands_log
     artifact_type: COMMAND_LOG
@@ -675,8 +737,13 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: MUTABLE_DATA
     validation:
-      status: NOT_VALIDATED
+      status: VALIDATED
+      scope: Duas linhas aceitas pelo dispatcher e consumidas pelo BKP_REPO (linha inicial e linha de continuação).
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
     relationships:
       - {capability_id: backup_repository, relationship: CONFIGURES}
 
@@ -695,16 +762,20 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: f1492b1f55118f7bc7ea948d672a9340ffdedd73
     validation:
-      status: NOT_VALIDATED
+      status: VALIDATED
+      scope: Linha inicial e linha de continuação validadas pelo dispatcher e revalidadas pelo BKP_REPO. Casos de rejeição só testados localmente.
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
     relationships:
       - {capability_id: backup_repository, relationship: SCHEMATIZES}
 
   # ---------------------------------------------------------------------------
-  # dispatcher.yml: disparado por push no commands.log. Lê só as linhas novas, valida
-  # e chama o workflow do Mnemonic por mapeamento fixo (workflow_call, secrets: inherit).
-  # MATERIALIZED: existe desde o PR do dispatcher. `current_sha` é o SHA de blob Git do
-  # arquivo; a validação ponta a ponta só é possível depois do primeiro push no commands.log.
+  # dispatcher.yml: disparado em todo push no main. Lê só as linhas novas do commands.log,
+  # valida e chama o workflow do Mnemonic por mapeamento fixo (workflow_call, secrets: inherit).
   # ---------------------------------------------------------------------------
   - artifact_id: command_dispatcher
     artifact_type: GITHUB_ACTIONS_WORKFLOW
@@ -716,9 +787,15 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
       current_sha: 88306e642fa644277723e60380554197d1e45300
     validation:
-      status: NOT_VALIDATED
+      status: VALIDATED
+      scope: Caminho feliz (uma linha aceita e despachada, linha de continuação) e push sem mudança no log (merge de PR). Recusas por violação só testadas localmente.
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36520216638", commit: 37fae536b5eebcc26eb42a35de20bba86db2b6e0}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
@@ -727,6 +804,7 @@ implementation_artifacts:
   # aplica o gate de destino e monta evidence.json/manifest.json (schemas 2.0).
   # Fica em backup/scripts/ (local gerenciado): todo script ali precisa de
   # artifact_id, senão é ORPHAN_ARTIFACT (orphan_detection).
+  # NOT_VALIDATED: o build-evidence nunca rodou em run real.
   # ---------------------------------------------------------------------------
   - artifact_id: backup_repository_helper_script
     artifact_type: SCRIPT
@@ -738,8 +816,14 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: b7cdc6d9c34199d6ba5c0174e236db36b9b01f46
     validation:
       status: NOT_VALIDATED
+      scope: Provado em run real - validate-inputs, preflight e validate-destination. Não provado - build-evidence.
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
@@ -759,8 +843,15 @@ implementation_artifacts:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: bf0abb9af73adcd9825837de66d493c0f80888cb
     validation:
-      status: NOT_VALIDATED
+      status: VALIDATED
+      scope: Caminho feliz e push sem mudança no log em runs reais. Verificações de violação só testadas localmente.
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36520216638", commit: 37fae536b5eebcc26eb42a35de20bba86db2b6e0}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
@@ -775,13 +866,81 @@ implementation_artifacts:
     location:
       repository: Moriblo/repo_backup
       path: .github/workflows/diagnostic-git-read.yml
+    lifecycle: TEMPORARY
     purpose: Temporary manual diagnostic of the Git read route; removed once the OneDrive destination works.
     materialization:
       status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
       current_sha: 6f51ac45d541e630776764b7d20a49fbbc49eeb3
+    validation:
+      status: VALIDATED
+      scope: Leitura Git de Moriblo/Minha_Caixinha_de_Saude (1 ref, fsck OK, sem LFS, sem submódulos). Ramo com LFS não exercitado.
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36523321108", commit: 53568e6551ed17e8046457daebdbf638c62b2f54}
+    relationships:
+      - {capability_id: backup_repository, relationship: SUPPORTS}
+
+  # ---------------------------------------------------------------------------
+  # Teste OIDC antigo (Azure login por OIDC). Contraria a regra "sem OIDC" e falhou nos
+  # runs. Registrado só para não aparecer como órfão até ser removido no PR do OneDrive.
+  # ---------------------------------------------------------------------------
+  - artifact_id: onedrive_oidc_read_test
+    artifact_type: GITHUB_ACTIONS_WORKFLOW
+    location:
+      repository: Moriblo/repo_backup
+      path: .github/workflows/onedrive-appfolder-oidc-read-test.yml
+    lifecycle: TO_BE_REMOVED
+    purpose: Obsolete OIDC diagnostic for the OneDrive AppFolder; to be removed by the OneDrive pull request (SA-08).
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: c22d25b1b11510a18b396455b7f7b6e14cde41e7
     validation:
       status: NOT_VALIDATED
     relationships:
       - {capability_id: backup_repository, relationship: SUPPORTS}
+
+  # ---------------------------------------------------------------------------
+  # Script de rastreabilidade: confere este registro contra o repositório (existência,
+  # SHA, órfãos, coerência de caminhos, regra de VALIDATED). Modos --check e --update.
+  # ---------------------------------------------------------------------------
+  - artifact_id: traceability_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/validate_traceability.py
+    purpose: Validates the implementation-artifact registry against the repository and updates the tracked blob SHAs.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 9c812d0b16fc670314068e1882d657b89d38ec25
+    validation:
+      status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: VALIDATES}
+
+  # ---------------------------------------------------------------------------
+  # Workflow do check de rastreabilidade: roda o script em todo pull request.
+  # ---------------------------------------------------------------------------
+  - artifact_id: traceability_workflow
+    artifact_type: GITHUB_ACTIONS_WORKFLOW
+    location:
+      repository: Moriblo/repo_backup
+      path: .github/workflows/traceability.yml
+    purpose: Runs the traceability check on every pull request and on demand.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 430ca6130aeaf70c1d0d1ef6735a7f99498f84cd
+    validation:
+      status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: VALIDATES}
