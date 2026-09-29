@@ -1,0 +1,238 @@
+# =============================================================================
+# Diagnóstico TEMPORÁRIO - teste de leitura Git da origem
+# =============================================================================
+# O QUE É
+#   Workflow de teste, executado À MÃO (workflow_dispatch), que exercita SOMENTE a
+#   leitura Git do BKP_REPO: token do GitHub App Reader, clone espelho (mirror),
+#   fsck, Git LFS e submódulos. Serve para validar a leitura da origem enquanto o
+#   destino OneDrive ainda não existe (no fluxo real, o gate de destino falha
+#   fechado ANTES do clone).
+#
+# O QUE ELE NÃO É
+#   - Não faz parte do fluxo do BKP_REPO: não passa pelo commands.log, nem pelo
+#     dispatcher, nem gera evidência/manifest 2.0. Nada aqui prova preservação.
+#   - Não copia nada para o OneDrive e não valida destino.
+#   - Não substitui nenhuma regra do protocolo (BACKUP_REPOSITORY.md).
+#
+# USO E CICLO DE VIDA
+#   Actions > "Diagnostic - Git read test (temporary)" > Run workflow, informando
+#   `source_repository` (dono/nome). TEMPORÁRIO: deve ser REMOVIDO, junto com o seu
+#   registro no capabilities.yaml, quando o destino OneDrive estiver funcionando.
+#
+# REGRAS QUE ESTE WORKFLOW RESPEITA
+#   - A origem é READ-ONLY: só clone/fetch; nenhum push.
+#   - Token do App limitado a contents:read + metadata:read, só na origem.
+#   - O token nunca é impresso nem gravado na config do mirror.
+#   - Os passos Git são CÓPIA LITERAL dos do backup-repository.yml, para o teste
+#     exercitar exatamente o mesmo código. Se um lado mudar, atualize o outro.
+# =============================================================================
+name: Diagnostic - Git read test (temporary)
+
+on:
+  workflow_dispatch:
+    inputs:
+      # Repositório a ler, no formato dono/nome. Revalidado no primeiro passo.
+      source_repository:
+        description: "GitHub source repository in owner/name form, pattern ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ (required; READ-ONLY)"
+        required: true
+        type: string
+
+# GITHUB_TOKEN: só leitura deste repositório (checkout). O acesso à ORIGEM usa o
+# token do GitHub App, emitido no passo abaixo.
+permissions:
+  contents: read
+
+jobs:
+  git-read-test:
+    name: Git read test ${{ inputs.source_repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # O input entra por variável de ambiente (e não direto em `run:`) para evitar
+    # injeção de comando.
+    env:
+      SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+      MIRROR_DIR: source.git
+      EVIDENCE_DIR: evidence
+
+    steps:
+      # Rejeita valores fora do formato dono/nome antes de qualquer uso.
+      - name: Validate source repository input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::source_repository must be in owner/name form."
+            exit 2
+          fi
+
+      # Separa "dono/nome" para o passo do token, que pede as duas partes.
+      - name: Split source repository
+        id: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "owner=${SOURCE_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${SOURCE_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+      # Token do GitHub App "Repository Preservation Reader", só para a origem e só
+      # leitura. Aqui, diferente do BKP_REPO, uma falha NÃO é tolerada: sem token não
+      # há o que testar, então o job falha e mostra o erro.
+      - name: Issue read-only source token (GitHub App)
+        id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.REPOSITORY_PRESERVATION_APP_ID }}
+          private-key: ${{ secrets.REPOSITORY_PRESERVATION_APP_PRIVATE_KEY }}
+          owner: ${{ steps.src.outputs.owner }}
+          repositories: ${{ steps.src.outputs.name }}
+          permission-contents: read
+          permission-metadata: read
+
+      # Confirma que git e git-lfs existem no runner (ubuntu-latest já os traz).
+      - name: Install Git LFS
+        shell: bash
+        run: |
+          set -euo pipefail
+          git --version
+          git lfs version
+
+      # Clona a origem com semântica de espelho completo (todas as refs, incluindo
+      # as de pull request). O token vai por GIT_CONFIG_* (cabeçalho HTTP) apenas
+      # neste processo: não aparece na URL, nos logs nem na config do mirror.
+      - name: Clone source with full mirror semantics
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$SOURCE_TOKEN" | base64 -w0)"
+          # Source operation is intentionally fetch/clone-only. No push command or
+          # source mutation operation is present in this executor.
+          git clone --mirror "https://github.com/${SOURCE_REPOSITORY}.git" "$MIRROR_DIR"
+
+      # Evidência de integridade do mirror:
+      #   refs.tsv              lista de refs com SHA e tipo (base da reconciliação)
+      #   git-fsck.txt          verificação completa dos objetos (falha = job falha)
+      #   git-count-objects.txt tamanho/contagem dos objetos
+      - name: Validate refs and Git object database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          git -C "$MIRROR_DIR" for-each-ref             --format='%(refname)%09%(objectname)%09%(objecttype)'             | sort > "$EVIDENCE_DIR/refs.tsv"
+          git -C "$MIRROR_DIR" fsck --full --strict             > "$EVIDENCE_DIR/git-fsck.txt" 2>&1
+          git -C "$MIRROR_DIR" count-objects -vH             > "$EVIDENCE_DIR/git-count-objects.txt"
+
+      # Detecta e verifica Git LFS em todas as refs. Se houver objetos LFS, baixa
+      # todos e confere o SHA-256 de cada um contra o OID.
+      # Códigos de saída: 3 = não conseguiu listar LFS; 4 = OID inválido;
+      #                   5 = objeto LFS ausente; 6 = hash não confere.
+      # Sem LFS: registra isso explicitamente (ausência comprovada, não presumida).
+      - name: Detect and validate Git LFS
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$SOURCE_TOKEN" | base64 -w0)"
+          mkdir -p "$EVIDENCE_DIR"
+          cd "$MIRROR_DIR"
+
+          git lfs ls-files --all --long > "../$EVIDENCE_DIR/lfs-files.txt" || {
+            echo "::error::Unable to enumerate Git LFS pointers across refs."
+            exit 3
+          }
+
+          if [[ -s "../$EVIDENCE_DIR/lfs-files.txt" ]]; then
+            echo "LFS_APPLICABLE=true" >> "$GITHUB_ENV"
+            git lfs fetch --all 2>&1 | tee "../$EVIDENCE_DIR/lfs-fetch.txt"
+
+            awk '{print $1}' "../$EVIDENCE_DIR/lfs-files.txt" | sort -u               > "../$EVIDENCE_DIR/lfs-oids.txt"
+
+            : > "../$EVIDENCE_DIR/lfs-verification.tsv"
+            while IFS= read -r oid; do
+              [[ "$oid" =~ ^[0-9a-fA-F]{64}$ ]] || {
+                printf '%s\tINVALID_OID\n' "$oid" >> "../$EVIDENCE_DIR/lfs-verification.tsv"
+                exit 4
+              }
+              object=".git/lfs/objects/${oid:0:2}/${oid:2:2}/$oid"
+              # Bare repositories may use either <mirror>/lfs or <mirror>/.git/lfs
+              # depending on Git LFS version/configuration.
+              [[ -f "$object" ]] || object="lfs/objects/${oid:0:2}/${oid:2:2}/$oid"
+              if [[ ! -f "$object" ]]; then
+                printf '%s\tMISSING\n' "$oid" >> "../$EVIDENCE_DIR/lfs-verification.tsv"
+                exit 5
+              fi
+              actual="$(sha256sum "$object" | awk '{print $1}')"
+              if [[ "$actual" != "$oid" ]]; then
+                printf '%s\tHASH_MISMATCH\t%s\n' "$oid" "$actual"                   >> "../$EVIDENCE_DIR/lfs-verification.tsv"
+                exit 6
+              fi
+              size="$(stat -c '%s' "$object")"
+              printf '%s\tVERIFIED\t%s\n' "$oid" "$size"                 >> "../$EVIDENCE_DIR/lfs-verification.tsv"
+            done < "../$EVIDENCE_DIR/lfs-oids.txt"
+          else
+            echo "LFS_APPLICABLE=false" >> "$GITHUB_ENV"
+            printf 'No Git LFS pointers discovered across reachable refs.\n'               > "../$EVIDENCE_DIR/lfs-fetch.txt"
+            : > "../$EVIDENCE_DIR/lfs-oids.txt"
+            : > "../$EVIDENCE_DIR/lfs-verification.tsv"
+          fi
+
+      # Procura submódulos em TODO o histórico alcançável (não só no commit atual):
+      #   gitmodules-history.tsv  commits que possuem .gitmodules
+      #   gitlinks-history.tsv    entradas de modo 160000 (gitlinks) por commit
+      # Arquivos vazios significam "nenhum encontrado". O conteúdo dos submódulos
+      # NÃO é copiado; se houver gitlinks, o manifest marca PARTIALLY-PRESERVED.
+      - name: Detect submodules across reachable history
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          : > "$EVIDENCE_DIR/gitmodules-history.tsv"
+          : > "$EVIDENCE_DIR/gitlinks-history.tsv"
+
+          while IFS= read -r commit; do
+            if git -C "$MIRROR_DIR" cat-file -e "$commit:.gitmodules" 2>/dev/null; then
+              printf '%s\t.gitmodules\n' "$commit"                 >> "$EVIDENCE_DIR/gitmodules-history.tsv"
+            fi
+            git -C "$MIRROR_DIR" ls-tree -r "$commit"               | awk -v c="$commit" '$1=="160000" {print c "\t" $0}'               >> "$EVIDENCE_DIR/gitlinks-history.tsv"
+          done < <(git -C "$MIRROR_DIR" rev-list --all)
+
+          sort -u -o "$EVIDENCE_DIR/gitmodules-history.tsv"             "$EVIDENCE_DIR/gitmodules-history.tsv"
+          sort -u -o "$EVIDENCE_DIR/gitlinks-history.tsv"             "$EVIDENCE_DIR/gitlinks-history.tsv"
+
+      # Resumo do teste: contagens lidas dos arquivos gerados pelos passos acima e
+      # uma linha DIAG_RESULT em JSON (o engine/você podem copiá-la do log). Só roda
+      # se todos os passos anteriores passaram (fsck, LFS e submódulos incluídos).
+      - name: Summarize Git read test
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs=$(grep -c . "$EVIDENCE_DIR/refs.tsv" || true)
+          lfs_objects=$(grep -c . "$EVIDENCE_DIR/lfs-oids.txt" || true)
+          gitmodules=$(grep -c . "$EVIDENCE_DIR/gitmodules-history.tsv" || true)
+          gitlinks=$(grep -c . "$EVIDENCE_DIR/gitlinks-history.tsv" || true)
+          json=$(printf '{"source_repository":"%s","refs":%s,"fsck":"OK","lfs_applicable":"%s","lfs_objects":%s,"gitmodules_commits":%s,"gitlinks":%s}' \
+            "$SOURCE_REPOSITORY" "$refs" "${LFS_APPLICABLE:-NOT_DETERMINED}" "$lfs_objects" "$gitmodules" "$gitlinks")
+          echo "DIAG_RESULT $json"
+          {
+            echo "### Git read test: $SOURCE_REPOSITORY"
+            echo '```json'
+            echo "$json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Publica as evidências brutas (refs, fsck, LFS, submódulos) por poucos dias,
+      # mesmo se o teste falhou, para diagnóstico.
+      - name: Publish diagnostic files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-git-read-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: ignore
+          retention-days: 3
