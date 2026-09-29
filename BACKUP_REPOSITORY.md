@@ -37,6 +37,7 @@
 | Interpretar um resultado ou um código de saída | I.8 e I.12 |
 | Saber onde ficam segredos e variáveis | I.10 |
 | Saber o que dá para restaurar e o que não dá | **I.14** |
+| Fazer o check de rastreabilidade bloquear merges (opcional) | **I.15** |
 | Ver as regras obrigatórias | Parte II |
 | Saber o significado de um termo | Parte III |
 
@@ -472,6 +473,28 @@ O modo de restauração de cada classe é **previsto** e será confirmado no tes
 - Os valores de segredos.
 
 Quando a restauração existir, esses limites entram no relatório final como limitações explícitas, e não como falhas.
+
+## I.15 Facilidades opcionais
+
+### Fazer o check de rastreabilidade bloquear merges (opcional, hoje **não ativado**)
+
+**O que é.** O check **"Registry traceability"** (workflow `traceability.yml`) roda em todo pull request e mostra ✔ ou ✘. Por padrão ele **não impede o merge**. Se você quiser que um PR com o registro incoerente não possa ser mergeado, exija esse check na proteção de branch.
+
+**Como ativar (uma vez)**
+1. Settings → Branches → **Add branch protection rule** (ou Settings → Rules → Rulesets → New branch ruleset).
+2. Em "Branch name pattern", informe `main`.
+3. Marque **Require status checks to pass before merging**.
+4. Em "Search for status checks", escolha **Registry traceability**. O check só aparece na lista depois de ter rodado ao menos uma vez no repositório, nos últimos dias: abra ou atualize um pull request para ele rodar.
+5. Salve.
+
+**Cuidado: não quebre a gravação do `commands.log`.** O engine grava o `commands.log` direto no `main`, sem pull request. Regras que exigem pull request ou checks em todo push podem **recusar essa gravação** e parar o fluxo. Por isso:
+- **não** marque "Require a pull request before merging";
+- **não** marque "Do not allow bypassing the above settings" (ou "Include administrators"), para o administrador (`Moriblo`, a identidade que o engine usa hoje) continuar podendo gravar o log;
+- depois de ativar, **confirme com uma gravação real de teste** do `commands.log` antes de depender da regra. O comportamento exato depende das opções marcadas. Se a gravação for recusada, desative a regra ou ajuste-a.
+
+**Como desativar.** Remova a regra em Settings → Branches.
+
+**Lembrete.** O controle de escrita direta no `main` continua sendo detectivo (passo 6): ele avisa com um run vermelho, mas não impede o push.
 
 ---
 

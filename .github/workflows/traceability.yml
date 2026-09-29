@@ -20,7 +20,8 @@
 #   - Só lê o repositório (permissions: contents: read). Não escreve nada.
 #   - Não usa segredos.
 #   - Não bloqueia o merge sozinho: vira bloqueio apenas se você exigir este check
-#     na proteção de branch.
+#     na proteção de branch. Passo a passo, e o cuidado para não quebrar a gravação do
+#     commands.log, em BACKUP_REPOSITORY.md, seção I.15.
 # =============================================================================
 name: Traceability check
 
