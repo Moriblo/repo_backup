@@ -397,10 +397,16 @@ jobs:
                                    historico; com Git LFS traz so os ponteiros. NAO restaura.
             lfs-objects.tar        (so se a origem usa Git LFS) objetos LFS, que o bundle nao leva.
 
-          ANTES DE COMECAR
+          ANTES DE COMECAR (o que voce precisa fazer com as proprias maos)
             - Restaure para um repositorio NOVO e VAZIO. Nunca sobre o repositorio original.
-            - Precisa de git (e git-lfs se existir lfs-objects.tar). Use bash (Git Bash no Windows).
-            - Baixe os arquivos desta pasta para uma pasta local e entre nela.
+            - Instale o git (e o git-lfs se existir lfs-objects.tar). Use bash (Git Bash no Windows).
+            - Baixe TODOS os arquivos desta pasta (package) do OneDrive para uma pasta local
+              vazia, por exemplo "restauro", e abra o terminal dentro dela.
+            - Tenha em maos uma forma de autenticar no GitHub para ENVIAR (passo 5): o proprio
+              git abre o login no navegador, ou use um token pessoal (GitHub > Settings >
+              Developer settings > Personal access tokens) com permissao de escrita em
+              "Contents" no repositorio novo. O token vale como senha: nunca o cole em chat,
+              arquivo ou log.
 
           PASSO A PASSO
             1. Clone o bundle como espelho:
@@ -412,12 +418,15 @@ jobs:
                  git -C restaurado.git for-each-ref --format='%(refname)%09%(objectname)%09%(objecttype)' | sort > refs-restauradas.tsv
                  sort refs.tsv > refs-originais.tsv
                  diff refs-originais.tsv refs-restauradas.tsv && echo IGUAIS
-            4. No GitHub, crie o repositorio vazio (sem README, licenca ou .gitignore), por
-               exemplo DONO/NOME_restaurado.
+            4. No GitHub (github.com > "+" > New repository): escolha o dono, o nome (por
+               exemplo NOME_restaurado) e a visibilidade; deixe TODAS as opcoes de arquivos
+               iniciais desmarcadas (sem README, sem licenca, sem .gitignore) e clique em
+               Create repository. O repositorio precisa nascer vazio.
             5. Envie branches e tags DIRETO para a URL do repositorio novo (o remote "origin" de
                um clone --mirror recusa refspecs, por isso nao o use):
                  cd restaurado.git
                  git push https://github.com/DONO/NOME_restaurado.git 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
+               Se pedir usuario e senha: usuario = seu login do GitHub; senha = o token pessoal.
                NAO envie refs/pull/*: o GitHub as gerencia e nao aceita o envio.
             6. Se existir lfs-objects.tar: extraia-o DENTRO de restaurado.git (cria lfs/objects)
                e rode: git lfs push --all https://github.com/DONO/NOME_restaurado.git
