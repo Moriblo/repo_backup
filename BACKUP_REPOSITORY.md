@@ -23,7 +23,7 @@
 - Segredo em texto puro nunca aparece em chat, log ou evidência.
 - Código só entra por pull request. A única escrita direta no `main` é o `commands.log`, e só depois do GO.
 
-**Estado atual (29/09/2026).** A leitura do GitHub e o fluxo até o preflight estão validados em execuções reais. O código do destino OneDrive (validação, rotação do token, pacote restaurável, envio com conferência de hash) está **implementado e testado só contra servidores simulados**; **ainda não foi provado contra o OneDrive real**. Até o HITL fazer a preparação da seção I.2, toda execução termina `BLOCKED` no passo do destino (seção I.4, passo 11). Hoje o backup cobre só o **código Git**; as demais 17 classes são restrições aceitas (seção I.14). **A restauração ainda não foi testada de ponta a ponta** (o procedimento foi testado só localmente).
+**Estado atual (30/09/2026).** O fluxo foi **provado de ponta a ponta em execução real** para um repositório pequeno (1 ref, sem LFS, sem submódulos): a escolha da capability, o GO, o `commands.log`, o Dispatcher, o preflight, o gate do destino no OneDrive real (com rotação do refresh token pelo App Writer), o mirror, o pacote e a evidência no OneDrive terminaram `COMPLETE_WITH_EXCEPTIONS`, e o **pacote restaurou para um repositório novo no GitHub** (bundle verificado, refs iguais ao `refs.tsv`, arquivos iguais ao zip, exceto o fim de linha do Windows). Hoje o backup cobre só o **código Git**; as demais 17 classes são restrições aceitas (seção I.14). **Não provado:** Git LFS, submódulos, repositórios grandes, envio em blocos (>4 MiB) e conferência de hash no destino (hoje só por tamanho).
 
 **Onde encontrar cada coisa**
 
@@ -143,9 +143,9 @@ O texto de cada passo, com o que entra, o que acontece, o que pode falhar e o qu
 | 8 | O `BKP_REPO` começa | Actions | Existe |
 | 9 | Capability Preflight | Actions | Existe |
 | 10 | O engine reporta e o HITL decide | Engine e HITL | Existe |
-| 11 | Validação do destino | Actions | Implementado; falha fechado até a preparação (I.2) |
+| 11 | Validação do destino | Actions | Existe; provado em run real |
 | 12 | Leitura da origem | Actions | Existe (com conferência de refs origem × mirror) |
-| 13 | Pacote e envio ao OneDrive | Actions | Implementado; testado só com simulação |
+| 13 | Pacote e envio ao OneDrive | Actions | Existe; provado em run real (hash só por tamanho) |
 | 14 | Evidência e manifest | Actions | Existe (evidência também enviada ao OneDrive) |
 | 15 | O engine reporta o resultado | Engine e HITL | Existe |
 
@@ -378,8 +378,7 @@ Estados: **EXISTE**, **TEMPORÁRIO**, **A REMOVER**, **PLANEJADO**.
 | `backup/scripts/dispatch_check.py` | Verificações do Dispatcher; produz a matriz de despacho. | EXISTE |
 | `.github/workflows/backup-repository.yml` | Executor do `BKP_REPO`. Seus inputs são o ECR. | EXISTE |
 | `backup/scripts/bkp_repo.py` | Revalidação, preflight, gate de destino e montagem da evidência. | EXISTE |
-| `.github/workflows/diagnostic-git-read.yml` | Teste manual da leitura Git. Não faz parte do fluxo e não prova preservação. | TEMPORÁRIO |
-| `backup/scripts/onedrive.py` | Access token, rotação do secret, validação do destino, envio (simples ou em blocos) e conferência de hash. Testado só com simulação. | EXISTE |
+| `backup/scripts/onedrive.py` | Access token, rotação do secret, validação do destino, envio (simples ou em blocos) e conferência de hash. Provado em run real, exceto envio em blocos e hash (só tamanho). | EXISTE |
 | `backup/scripts/onedrive_authorize.py` | Login local único (device code) que entrega o refresh token. Roda no computador do HITL. | EXISTE |
 | `backup/scripts/validate_traceability.py` | Confere o registro contra o repositório (existência, SHA, órfãos, caminhos, evidência de `VALIDATED`) e atualiza os SHAs com `--update`. | EXISTE |
 | `.github/workflows/traceability.yml` | Roda o script em todo pull request. | EXISTE |
@@ -449,7 +448,7 @@ Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `
 
 ## I.13 Ciclo de vida dos temporários e manutenção
 
-- **`diagnostic-git-read.yml`** é TEMPORÁRIO: existe porque o gate de destino falha fechado antes do clone. Sai, com o registro dele no `capabilities.yaml`, quando o OneDrive funcionar.
+- **`diagnostic-git-read.yml`** foi removido: era o diagnóstico temporário da leitura Git, e o fluxo completo agora funciona.
 - **`onedrive-appfolder-oidc-read-test.yml`** foi removido no SA-08.
 - **`backup_projects`** aparece no menu, mas não tem Mnemonic nem executor: hoje não gera comando.
 - **Registro de artefatos:** depois de alterar qualquer arquivo registrado, rode `python3 backup/scripts/validate_traceability.py --update` e confira com `--check`. O `traceability.yml` roda o `--check` em todo pull request. Um artefato só fica `VALIDATED` com evidência registrada (URL do run e commit) e a nota do que foi e do que não foi provado.
@@ -457,7 +456,7 @@ Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `
 
 ## I.14 Restauração e Etapa 2 (parcialmente **PLANEJADO**)
 
-**Objetivo.** Depois de salvo no OneDrive, o backup deve poder ser acessado direto de lá e **restituído ao GitHub**. Hoje existe o **pacote restaurável** com o roteiro `RESTAURAR.txt` (testado só localmente, com repositório de teste). **Não existe** ainda capability de restauração nem teste com o OneDrive real.
+**Objetivo.** Depois de salvo no OneDrive, o backup deve poder ser acessado direto de lá e **restituído ao GitHub**. Hoje existe o **pacote restaurável** com o roteiro `RESTAURAR.txt`, **provado em teste real** (30/09/2026): pacote baixado do OneDrive e restaurado para um repositório novo (`Moriblo/restaurado`) seguindo o `RESTAURAR.txt` literalmente, sem nenhum passo fora dele e sem problemas (relato do HITL), com `bundle verify` okay, refs iguais ao `refs.tsv` (`main` = `ec548ea1…`) e arquivos iguais ao zip. No Windows, o `git clone` converte o fim de linha (LF para CRLF), então a comparação com o zip deve ignorar o fim de linha (`diff --strip-trailing-cr`). **Não existe** ainda capability de restauração automatizada.
 
 **O que muda no plano**
 1. **Pacote restaurável** no passo 13 (**existe**): bundle de todas as refs, objetos LFS e lista das refs. Restaura-se com `git clone --mirror source.bundle` e envio de `refs/heads/*` e `refs/tags/*`; `refs/pull/*` não podem ser devolvidas ao GitHub. O roteiro completo (clone, `bundle verify`, comparação com o `refs.tsv`, envio à URL do repositório novo e conferência) vai dentro do pacote, em `RESTAURAR.txt`. Cuidados testados localmente: `git bundle verify` só roda dentro de um repositório, e um clone `--mirror` recusa `git push origin` com refspecs, então o envio é feito direto à URL.
