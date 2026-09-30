@@ -612,7 +612,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 310a5fd15fde81fe5e3c0653985c12ab0f409965
+      current_sha: 058fa5485420e86070b97725e990939484dfe3da
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -666,7 +666,11 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: 773b4e6b9230bae82504f9de2766d5a1dcdc5cc3
     validation:
-      status: REVALIDATION_REQUIRED
+      status: VALIDATED
+      scope: evidence.json gerado e validado contra este schema em run real (build-evidence valida antes de gravar). Não provado - classes diferentes de git em disposição PRESERVED.
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
     relationships:
       - {capability_id: backup_repository, relationship: SCHEMATIZES}
       - {capability_id: backup_projects, relationship: SCHEMATIZES}
@@ -688,7 +692,11 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: 195afd8baf36c8c8f4eec70c698a81866a2d6177
     validation:
-      status: REVALIDATION_REQUIRED
+      status: VALIDATED
+      scope: manifest.json gerado e validado contra este schema em run real, com os arquivos do pacote listados. Não provado - manifest com status COMPLETE e sem limitações.
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
     relationships:
       - {capability_id: backup_repository, relationship: SCHEMATIZES}
       - {capability_id: backup_projects, relationship: SCHEMATIZES}
@@ -710,14 +718,14 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 942eb6ea5bb0d21379c0b60958d7b30e5f0062c7
+      current_sha: 08d24cc4a2c37fd18a589ef4b4ba9b36a04bb8a4
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
-      status: REVALIDATION_REQUIRED
-      scope: Provado em run real - revalidação de inputs, token do App Reader, preflight (bloqueado e liberado) e gate de destino. Não provado - clone, fsck, LFS, submódulos, evidência e manifest.
+      status: VALIDATED
+      scope: "Run real completo de um repositório pequeno (1 ref, sem LFS, sem submódulos): COMPLETE_WITH_EXCEPTIONS (git PRESERVED, 17 classes NOT-VERIFIED), pacote e evidência enviados ao OneDrive real, e o pacote restaurou para um repositório novo no GitHub (bundle verify okay, refs iguais ao refs.tsv, arquivos iguais ao zip exceto fim de linha). Não provado - Git LFS, submódulos, repositórios grandes, envio em blocos (>4 MiB), conferência de hash no destino (hoje só por tamanho)."
       evidence:
-        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
-        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
@@ -836,11 +844,11 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: dbcf8bb363c685ddc3a298436ac5f83822235227
     validation:
-      status: NOT_VALIDATED
-      scope: Provado em run real - validate-inputs, preflight e validate-destination. Não provado - build-evidence.
+      status: VALIDATED
+      scope: "Run real completo de um repositório pequeno (1 ref, sem LFS, sem submódulos): COMPLETE_WITH_EXCEPTIONS (git PRESERVED, 17 classes NOT-VERIFIED), pacote e evidência enviados ao OneDrive real, e o pacote restaurou para um repositório novo no GitHub (bundle verify okay, refs iguais ao refs.tsv, arquivos iguais ao zip exceto fim de linha). Não provado - Git LFS, submódulos, repositórios grandes, envio em blocos (>4 MiB), conferência de hash no destino (hoje só por tamanho)."
       evidence:
-        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
-        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
@@ -872,32 +880,6 @@ implementation_artifacts:
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
-  # ---------------------------------------------------------------------------
-  # Workflow de DIAGNÓSTICO TEMPORÁRIO (workflow_dispatch): exercita só a leitura Git
-  # (token do App Reader, mirror, fsck, LFS, submódulos) enquanto o destino OneDrive
-  # não existe. Não faz parte do fluxo do BKP_REPO e não prova preservação.
-  # REMOVER (arquivo e este registro) quando o destino OneDrive estiver funcionando.
-  # ---------------------------------------------------------------------------
-  - artifact_id: diagnostic_git_read_test
-    artifact_type: GITHUB_ACTIONS_WORKFLOW
-    location:
-      repository: Moriblo/repo_backup
-      path: .github/workflows/diagnostic-git-read.yml
-    lifecycle: TEMPORARY
-    purpose: Temporary manual diagnostic of the Git read route; removed once the OneDrive destination works.
-    materialization:
-      status: MATERIALIZED
-    integrity:
-      tracking: GIT_BLOB_SHA
-      sha_policy: TRACKED
-      current_sha: 6f51ac45d541e630776764b7d20a49fbbc49eeb3
-    validation:
-      status: VALIDATED
-      scope: Leitura Git de Moriblo/Minha_Caixinha_de_Saude (1 ref, fsck OK, sem LFS, sem submódulos). Ramo com LFS não exercitado.
-      evidence:
-        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36523321108", commit: 53568e6551ed17e8046457daebdbf638c62b2f54}
-    relationships:
-      - {capability_id: backup_repository, relationship: SUPPORTS}
 
   # ---------------------------------------------------------------------------
   # Biblioteca/CLI do OneDrive (SA-08): renova o refresh token (OAuth delegado), grava o
@@ -918,8 +900,11 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: bba29bcd27b86433fed62c6625cabd06ec811d6a
     validation:
-      status: NOT_VALIDATED
-      scope: Testado só contra servidores simulados (autenticação, rotação do secret, envio em partes, divergência de hash, ausência de vazamento de token). Não provado contra o Microsoft Graph real.
+      status: VALIDATED
+      scope: "Provado em run real - login na Microsoft, rotação do refresh token no secret do environment pelo App Writer, escrita/leitura/apagamento de prova no AppFolder, envio simples (<4 MiB) de 4 arquivos de pacote e 16 de evidência. Não provado - envio em blocos (>4 MiB), conferência de hash (o OneDrive não devolveu SHA-256/SHA-1: verified_by size-only), expiração do refresh token."
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 

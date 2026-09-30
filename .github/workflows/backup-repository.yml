@@ -431,8 +431,14 @@ jobs:
             6. Se existir lfs-objects.tar: extraia-o DENTRO de restaurado.git (cria lfs/objects)
                e rode: git lfs push --all https://github.com/DONO/NOME_restaurado.git
             7. Confira no GitHub: as branches e tags existem e o ultimo commit de cada branch
-               tem o mesmo SHA do refs.tsv. Os arquivos devem bater com o arquivos-<branch>.zip
-               (exceto ponteiros LFS).
+               tem o mesmo SHA do refs.tsv (compare com: git ls-remote URL-DO-REPOSITORIO-NOVO).
+               Para comparar os arquivos com o arquivos-<branch>.zip: extraia o zip numa pasta
+               (unzip arquivos-<branch>.zip -d zip-conf), clone o repositorio novo (git clone URL
+               conf-restaurado) e rode:
+                 diff -r --exclude=.git --strip-trailing-cr zip-conf conf-restaurado && echo ARQUIVOS-IGUAIS
+               O --strip-trailing-cr e necessario no Windows: o git troca o fim de linha (LF por
+               CRLF) ao clonar, e sem ele todas as linhas de arquivos de texto aparecem como
+               diferentes. Ponteiros LFS, se houver, tambem diferem do conteudo real.
 
           O QUE ESTE BACKUP NAO RESTAURA
             Issues, pull requests, actions, projects, environments, variaveis, metadados de
