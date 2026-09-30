@@ -387,23 +387,60 @@ jobs:
             exit 9
           fi
           cat > package/RESTAURAR.txt <<'EOF'
-          COMO RESTAURAR ESTE BACKUP PARA UM REPOSITORIO NOVO E VAZIO NO GITHUB
+          ROTEIRO DE RESTAURACAO - backup de @ORIGEM@ (pedido @PEDIDO@)
 
-          1. Crie o repositorio vazio no GitHub (sem README, sem licenca).
-          2. git clone --mirror source.bundle restaurado.git
-          3. cd restaurado.git
-          4. git remote set-url origin https://github.com/DONO/NOVO.git
-          5. git push origin 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
-             (NAO envie refs/pull/*: o GitHub as gerencia e nao aceita o envio.)
-          6. Se existir lfs-objects.tar: extraia-o dentro de restaurado.git
-             (cria lfs/objects) e rode: git lfs push --all origin
+          O QUE HA NESTA PASTA
+            source.bundle          Copia completa do repositorio (todos os commits, branches,
+                                   tags e arquivos), em formato git. E a BASE da restauracao.
+            refs.tsv               Lista das refs e dos SHAs preservados (para conferir).
+            arquivos-<branch>.zip  Instantaneo LEGIVEL da branch padrao: abre sem git. Sem
+                                   historico; com Git LFS traz so os ponteiros. NAO restaura.
+            lfs-objects.tar        (so se a origem usa Git LFS) objetos LFS, que o bundle nao leva.
 
-          refs.tsv lista as refs preservadas e seus SHAs, para conferir depois.
+          ANTES DE COMECAR (o que voce precisa fazer com as proprias maos)
+            - Restaure para um repositorio NOVO e VAZIO. Nunca sobre o repositorio original.
+            - Instale o git (e o git-lfs se existir lfs-objects.tar). Use bash (Git Bash no Windows).
+            - Baixe TODOS os arquivos desta pasta (package) do OneDrive para uma pasta local
+              vazia, por exemplo "restauro", e abra o terminal dentro dela.
+            - Tenha em maos uma forma de autenticar no GitHub para ENVIAR (passo 5): o proprio
+              git abre o login no navegador, ou use um token pessoal (GitHub > Settings >
+              Developer settings > Personal access tokens) com permissao de escrita em
+              "Contents" no repositorio novo. O token vale como senha: nunca o cole em chat,
+              arquivo ou log.
 
-          arquivos-<branch>.zip e um instantaneo LEGIVEL: os arquivos da branch padrao no
-          estado atual, para abrir sem git. Nao tem historico e, se o repositorio usa Git LFS,
-          traz apenas os ponteiros. A restauracao usa o source.bundle, nao este zip.
+          PASSO A PASSO
+            1. Clone o bundle como espelho:
+                 git clone --mirror source.bundle restaurado.git
+            2. Confira o bundle (o "verify" precisa rodar DENTRO de um repositorio; deve
+               terminar com "okay"):
+                 git -C restaurado.git bundle verify ../source.bundle
+            3. Compare as refs restauradas com o refs.tsv (nao deve haver diferenca):
+                 git -C restaurado.git for-each-ref --format='%(refname)%09%(objectname)%09%(objecttype)' | sort > refs-restauradas.tsv
+                 sort refs.tsv > refs-originais.tsv
+                 diff refs-originais.tsv refs-restauradas.tsv && echo IGUAIS
+            4. No GitHub (github.com > "+" > New repository): escolha o dono, o nome (por
+               exemplo NOME_restaurado) e a visibilidade; deixe TODAS as opcoes de arquivos
+               iniciais desmarcadas (sem README, sem licenca, sem .gitignore) e clique em
+               Create repository. O repositorio precisa nascer vazio.
+            5. Envie branches e tags DIRETO para a URL do repositorio novo (o remote "origin" de
+               um clone --mirror recusa refspecs, por isso nao o use):
+                 cd restaurado.git
+                 git push https://github.com/DONO/NOME_restaurado.git 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
+               Se pedir usuario e senha: usuario = seu login do GitHub; senha = o token pessoal.
+               NAO envie refs/pull/*: o GitHub as gerencia e nao aceita o envio.
+            6. Se existir lfs-objects.tar: extraia-o DENTRO de restaurado.git (cria lfs/objects)
+               e rode: git lfs push --all https://github.com/DONO/NOME_restaurado.git
+            7. Confira no GitHub: as branches e tags existem e o ultimo commit de cada branch
+               tem o mesmo SHA do refs.tsv. Os arquivos devem bater com o arquivos-<branch>.zip
+               (exceto ponteiros LFS).
+
+          O QUE ESTE BACKUP NAO RESTAURA
+            Issues, pull requests, actions, projects, environments, variaveis, metadados de
+            secrets, deployments, regras de protecao, colaboradores, webhooks, labels, milestones,
+            checks, caches e demais estados do GitHub fora do Git NAO estao neste pacote (ver
+            preflight.json e manifest.json na pasta evidence). Segredos nunca sao preservados.
           EOF
+          sed -i "s|@ORIGEM@|${SOURCE_REPOSITORY}|; s|@PEDIDO@|${REQUEST_ID}|" package/RESTAURAR.txt
 
       # Envia o pacote ao OneDrive em <destination>/<request_id>/package/ e confere o hash de
       # cada arquivo. Grava evidence/onedrive-package.json (o build-evidence lê esta lista).
