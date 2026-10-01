@@ -612,7 +612,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 89766e03fcf96cefd9da7fff9fff50ec420ae53d
+      current_sha: 50c25cf3b3c93d063d4eb411e12c122121fbfe0c
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -898,7 +898,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: bba29bcd27b86433fed62c6625cabd06ec811d6a
+      current_sha: d6c976c98f383d5b50bb6777202fcd68cf6249f6
     validation:
       status: VALIDATED
       scope: "Provado em run real - login na Microsoft, rotação do refresh token no secret do environment pelo App Writer, escrita/leitura/apagamento de prova no AppFolder, envio simples (<4 MiB) de 4 arquivos de pacote e 16 de evidência. Não provado - envio em blocos (>4 MiB), conferência de hash (o OneDrive não devolveu SHA-256/SHA-1: verified_by size-only), expiração do refresh token."
