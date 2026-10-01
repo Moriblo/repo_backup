@@ -612,7 +612,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 8ddc2cfdc2deac9ff0681569d5424205f4b5057c
+      current_sha: 253d037d64bd9e02c3bea1c92a6b2bddc555847b
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -956,6 +956,30 @@ implementation_artifacts:
       scope: "Executado pelo HITL contra o GitHub real (Moriblo/backup_teste): 4 refs, 1 objeto LFS, 1 submódulo, arquivo de ~25 MiB. O backup do repositório resultante é o run de evidência."
       evidence:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36802676819", commit: bf64abf66558347ec10fc517b665638dae2878e5}
+    relationships:
+      - {capability_id: backup_repository, relationship: SUPPORTS}
+
+  # ---------------------------------------------------------------------------
+  # Script de TESTE (roda no computador do HITL com o GitHub CLI): cria um repositório
+  # privado com issues, comentários, etiquetas, marco e um Project (quadro) conhecidos,
+  # para desenvolver e provar o backup de issues, labels, milestones e projects.
+  # ---------------------------------------------------------------------------
+  - artifact_id: backup_test_issues_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/montar_repo_teste_issues.sh
+    lifecycle: TEMPORARY
+    purpose: Local helper (GitHub CLI) that creates a private test repository with issues, comments, labels, a milestone and a Project board to exercise the issues and projects backup.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 5176cd44bec23a9a98a656c51321bed0faab3da8
+    validation:
+      status: NOT_VALIDATED
+      scope: Só o fluxo do script foi testado, com um gh simulado (6 issues, 5 comentários, 3 etiquetas, 7 itens do quadro). Não executado contra o GitHub real.
     relationships:
       - {capability_id: backup_repository, relationship: SUPPORTS}
 
