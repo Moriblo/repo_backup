@@ -48,7 +48,8 @@ NOME="$1"
 
 # ---- 2. Pré-requisitos: gh instalado e logado, com permissão de quadros ------------------
 command -v gh >/dev/null 2>&1 || { echo "Falta o GitHub CLI (gh). Instale: winget install --id GitHub.cli"; exit 1; }
-gh auth status >/dev/null 2>&1 || { echo "Você não está logado no gh. Rode: gh auth login"; exit 1; }
+# Testa o login pela própria API (o `gh auth status` pode estourar o tempo no chaveiro do Windows).
+gh api user --jq .login >/dev/null 2>&1 || { echo "Não foi possível usar o login do gh (sem login ou rede lenta). Rode: gh auth login e tente de novo."; exit 1; }
 # `gh project list` falha se a permissão "project" não foi liberada.
 gh project list --owner "@me" >/dev/null 2>&1 || { echo "Falta a permissão de quadros. Rode: gh auth refresh -s project"; exit 1; }
 
