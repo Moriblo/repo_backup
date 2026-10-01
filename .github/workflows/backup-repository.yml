@@ -356,7 +356,8 @@ jobs:
       #   refs.tsv        lista das refs e dos SHAs preservados, para conferência
       #   arquivos-<branch>.zip  INSTANTÂNEO LEGÍVEL: os arquivos da branch padrão (HEAD do mirror)
       #                   no estado atual, para abrir sem git. NÃO é a base da restauração (o
-      #                   bundle é): não tem histórico e, se a origem usa LFS, traz só os ponteiros.
+      #                   bundle é): não tem histórico e, se a origem usa LFS, pode trazer só os ponteiros ou o
+      #                   conteúdo real (depende do LFS do runner; a confirmar no teste real).
       #   RESTAURAR.txt   como restaurar para um repositório novo e vazio
       # Códigos de saída: 8 = objetos LFS não encontrados no mirror; 9 = instantâneo não gerado.
       - name: Build restorable package
@@ -394,7 +395,7 @@ jobs:
                                    tags e arquivos), em formato git. E a BASE da restauracao.
             refs.tsv               Lista das refs e dos SHAs preservados (para conferir).
             arquivos-<branch>.zip  Instantaneo LEGIVEL da branch padrao: abre sem git. Sem
-                                   historico; com Git LFS traz so os ponteiros. NAO restaura.
+                                   historico; com Git LFS pode trazer so os ponteiros ou o conteudo real. NAO restaura.
             lfs-objects.tar        (so se a origem usa Git LFS) objetos LFS, que o bundle nao leva.
 
           ANTES DE COMECAR (o que voce precisa fazer com as proprias maos)

@@ -612,7 +612,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 50c25cf3b3c93d063d4eb411e12c122121fbfe0c
+      current_sha: 43cabb16633f327dd3628fea2a0c80848454f0ae
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -718,7 +718,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 08d24cc4a2c37fd18a589ef4b4ba9b36a04bb8a4
+      current_sha: d1cb8a4559b63d10fbb43fdc4c48e3cb05084e75
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
@@ -927,6 +927,30 @@ implementation_artifacts:
     validation:
       status: NOT_VALIDATED
       scope: Testado só contra servidor simulado. Não provado contra a Microsoft real.
+    relationships:
+      - {capability_id: backup_repository, relationship: SUPPORTS}
+
+  # ---------------------------------------------------------------------------
+  # Script de TESTE (roda no computador do HITL, não no Actions): monta e envia um
+  # repositório com arquivo grande, Git LFS, submódulo, arquivo vazio, nomes com acento,
+  # branches e tags, para provar em run real o que o backup ainda não provou.
+  # ---------------------------------------------------------------------------
+  - artifact_id: backup_test_repo_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/montar_repo_teste.sh
+    lifecycle: TEMPORARY
+    purpose: Local helper that builds and pushes a test repository (large file, Git LFS, submodule, empty file, accented names, branches and tags) to exercise the backup.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: aee9c3720d765eaff3e226ba3288c715eaa7ef9f
+    validation:
+      status: NOT_VALIDATED
+      scope: Executado localmente contra um repositório vazio local (4 refs, 1 objeto LFS, 1 submódulo, ~25 MiB); a saída passou pelos passos do workflow (fsck, LFS, submódulos, pacote) e o pacote restaurou. Não executado contra o GitHub.
     relationships:
       - {capability_id: backup_repository, relationship: SUPPORTS}
 
