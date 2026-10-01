@@ -174,6 +174,41 @@ def _safe_error(status, body, headers=None):
 
 # --- Hash -----------------------------------------------------------------------------
 
+def quickxor_hash(path, block=160 * 65536):
+    """quickXorHash da Microsoft (base64), o hash que o OneDrive pessoal costuma devolver.
+
+    Algoritmo (160 bits): o byte de índice i é combinado por XOR no registrador de 160 bits,
+    deslocado de (11 * i) mod 160 bits e "dobrado" (rotação circular); no fim, o tamanho do
+    arquivo (64 bits, little-endian) é combinado por XOR nos 8 últimos bytes e o resultado
+    (20 bytes) sai em base64. Como 11 e 160 são primos entre si, cada resíduo (i mod 160) tem
+    um deslocamento próprio: por isso basta acumular o XOR dos bytes de cada resíduo, o que se
+    faz dobrando blocos de 160 bytes (rápido, sem laço por byte).
+    """
+    width = 160
+    acc, size = 0, 0                                       # acc: XOR dos blocos de 160 bytes (1280 bits)
+    # `block` deve ser múltiplo de 160: assim o índice global de cada bloco mantém o resíduo.
+    assert block % width == 0
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(block), b""):
+            size += len(chunk)
+            chunk += bytes(-len(chunk) % width)            # completa o último bloco com zeros (não altera o XOR)
+            folded = 0
+            for i in range(0, len(chunk), width):
+                folded ^= int.from_bytes(chunk[i:i + width], "little")
+            acc ^= folded
+    reg = 0
+    mask = (1 << 160) - 1
+    for r in range(width):                                 # r = resíduo do índice do byte
+        b = (acc >> (8 * r)) & 0xFF
+        if b:
+            v = b << ((11 * r) % width)
+            reg ^= (v & mask) | (v >> 160)                 # rotação circular de 160 bits
+    out = bytearray(reg.to_bytes(20, "little"))
+    for k, byte in enumerate((size & (2 ** 64 - 1)).to_bytes(8, "little")):
+        out[12 + k] ^= byte
+    return base64.b64encode(bytes(out)).decode()
+
+
 def file_hashes(path):
     """(tamanho, sha256, sha1) de um arquivo, lidos em blocos de 1 MiB."""
     sha256, sha1, size = hashlib.sha256(), hashlib.sha1(), 0
@@ -330,8 +365,8 @@ class Session:
                 raise OneDriveError("UPLOAD_FAILED", f"envio de {rel} recusado: " + _safe_error(st, body))
         else:
             item = self._upload_session(local, rel, size)
-        method = self._verify(item, rel, size, sha256, sha1)
-        return {"remote_path": rel, "bytes": size, "sha256": sha256, "verified_by": method, "item_id": item.get("id")}
+        method, info = self._verify(item, rel, size, sha256, sha1, local)
+        return {"remote_path": rel, "bytes": size, "sha256": sha256, "verified_by": method, "item_id": item.get("id"), **info}
 
     def _upload_session(self, local, rel, size):
         """Upload em blocos (sessão de upload do Graph). Devolve o driveItem final."""
@@ -358,8 +393,18 @@ class Session:
                     raise OneDriveError("UPLOAD_FAILED", f"bloco final de {rel} recusado: " + _safe_error(st, body))
         return _json(body)
 
-    def _verify(self, item, rel, size, sha256, sha1):
-        """Confere tamanho e hash do item enviado. Devolve o método usado (sha256, sha1 ou size-only)."""
+    def _verify(self, item, rel, size, sha256, sha1, local):
+        """Confere tamanho e hash do item enviado.
+
+        Devolve (método, info). Método: sha256, sha1, quickXorHash ou size-only. `info` traz os
+        NOMES dos hashes que o OneDrive devolveu (nunca valores sensíveis) para diagnóstico.
+
+        quickXorHash: o OneDrive pessoal costuma devolvê-lo. Enquanto a implementação local não
+        for confirmada contra o serviço real, uma divergência NÃO derruba o backup: o método
+        fica "size-only" e `info` registra "quickxor_mismatch". Depois de confirmada num run real,
+        a divergência passa a ser erro (HASH_MISMATCH).
+        """
+        hashes = {}
         for attempt in range(3):
             hashes = (item.get("file") or {}).get("hashes") or {}
             if hashes or attempt == 2:
@@ -368,17 +413,24 @@ class Session:
             time.sleep(float(os.environ.get("ONEDRIVE_RETRY_DELAY", "2")))
             st, _, body = self.graph("GET", f"/me/drive/items/{item['id']}")
             item = _json(body) if st == 200 else item
+        info = {"remote_hash_algorithms": sorted(hashes)}
         if int(item.get("size", -1)) != size:
             raise OneDriveError("HASH_MISMATCH", f"tamanho de {rel} no OneDrive ({item.get('size')}) difere do local ({size})")
         if hashes.get("sha256Hash"):
             if hashes["sha256Hash"].lower() != sha256:
                 raise OneDriveError("HASH_MISMATCH", f"sha256 de {rel} difere do local")
-            return "sha256"
+            return "sha256", info
         if hashes.get("sha1Hash"):
             if hashes["sha1Hash"].lower() != sha1:
                 raise OneDriveError("HASH_MISMATCH", f"sha1 de {rel} difere do local")
-            return "sha1"
-        return "size-only"        # o serviço não devolveu hash: só o tamanho foi conferido
+            return "sha1", info
+        if hashes.get("quickXorHash"):
+            if hashes["quickXorHash"] == quickxor_hash(local):
+                return "quickXorHash", info
+            info["quickxor_mismatch"] = True
+            print(f"AVISO: quickXorHash de {rel} difere do calculado localmente (implementação ainda não confirmada).",
+                  file=sys.stderr)
+        return "size-only", info          # sem hash conferido: só o tamanho foi conferido
 
 
 # --- Linha de comando -----------------------------------------------------------------
@@ -390,7 +442,7 @@ def cmd_upload(args):
     for path in args.files:
         rel = f"{args.prefix.strip('/')}/{pathlib.Path(path).name}"
         results.append(session.upload_file(path, rel))
-        print(f"ONEDRIVE_UPLOAD {json.dumps({k: results[-1][k] for k in ('remote_path', 'bytes', 'verified_by')}, sort_keys=True)}", flush=True)
+        print(f"ONEDRIVE_UPLOAD {json.dumps({k: results[-1][k] for k in ('remote_path', 'bytes', 'verified_by', 'remote_hash_algorithms')}, sort_keys=True)}", flush=True)
     pathlib.Path(args.result).write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
 
 
