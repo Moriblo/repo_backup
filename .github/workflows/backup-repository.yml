@@ -401,6 +401,9 @@ jobs:
           ANTES DE COMECAR (o que voce precisa fazer com as proprias maos)
             - Restaure para um repositorio NOVO e VAZIO. Nunca sobre o repositorio original.
             - Instale o git (e o git-lfs se existir lfs-objects.tar). Use bash (Git Bash no Windows).
+            - Se o terminal mostrar "^[[200~" ou "~" colados em volta do comando e der "command not
+              found", a colagem trouxe marcas invisiveis: cole com o botao direito do mouse ou
+              digite o comando.
             - Baixe TODOS os arquivos desta pasta (package) do OneDrive para uma pasta local
               vazia, por exemplo "restauro", e abra o terminal dentro dela.
             - Tenha em maos uma forma de autenticar no GitHub para ENVIAR (passo 5): o proprio
@@ -422,24 +425,33 @@ jobs:
             4. No GitHub (github.com > "+" > New repository): escolha o dono, o nome (por
                exemplo NOME_restaurado) e a visibilidade; deixe TODAS as opcoes de arquivos
                iniciais desmarcadas (sem README, sem licenca, sem .gitignore) e clique em
-               Create repository. O repositorio precisa nascer vazio.
-            5. Envie branches e tags DIRETO para a URL do repositorio novo (o remote "origin" de
+               Create repository. O repositorio precisa nascer vazio e com um nome que ainda
+               NAO exista (nao reuse o de uma restauracao anterior).
+               A partir daqui, em TODOS os comandos com URL, troque DONO/NOME_restaurado pelo
+               dono e pelo nome do repositorio que voce acabou de criar.
+            5. Entre no clone: cd restaurado.git
+               Se existir lfs-objects.tar, extraia-o AGORA, dentro de restaurado.git (cria
+               lfs/objects), antes de enviar:
+                 tar -xf ../lfs-objects.tar
+            6. Envie branches e tags DIRETO para a URL do repositorio novo (o remote "origin" de
                um clone --mirror recusa refspecs, por isso nao o use):
-                 cd restaurado.git
                  git push https://github.com/DONO/NOME_restaurado.git 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
                Se pedir usuario e senha: usuario = seu login do GitHub; senha = o token pessoal.
                NAO envie refs/pull/*: o GitHub as gerencia e nao aceita o envio.
-            6. Se existir lfs-objects.tar: extraia-o DENTRO de restaurado.git (cria lfs/objects)
-               e rode: git lfs push --all https://github.com/DONO/NOME_restaurado.git
-            7. Confira no GitHub: as branches e tags existem e o ultimo commit de cada branch
-               tem o mesmo SHA do refs.tsv (compare com: git ls-remote URL-DO-REPOSITORIO-NOVO).
+               Se existir lfs-objects.tar, envie tambem os objetos LFS (so depois da extracao):
+                 git lfs push --all https://github.com/DONO/NOME_restaurado.git
+            7. Volte a pasta anterior (cd ..) e confira no GitHub: as branches e tags existem e o
+               ultimo commit de cada branch tem o mesmo SHA do refs.tsv (compare com: git ls-remote URL-DO-REPOSITORIO-NOVO).
                Para comparar os arquivos com o arquivos-<branch>.zip: extraia o zip numa pasta
                (unzip arquivos-<branch>.zip -d zip-conf), clone o repositorio novo (git clone URL
                conf-restaurado) e rode:
                  diff -r --exclude=.git --strip-trailing-cr zip-conf conf-restaurado && echo ARQUIVOS-IGUAIS
                O --strip-trailing-cr e necessario no Windows: o git troca o fim de linha (LF por
                CRLF) ao clonar, e sem ele todas as linhas de arquivos de texto aparecem como
-               diferentes. Ponteiros LFS, se houver, tambem diferem do conteudo real.
+               diferentes. Com Git LFS o zip pode trazer o conteudo real ou so os ponteiros: se o
+               diff apontar diferenca apenas nos arquivos LFS, e isso.
+               Com LFS, confira que o arquivo LFS restaurado tem o tamanho real, e nao o de um
+               ponteiro (~130 bytes): ls -la conf-restaurado/NOME-DO-ARQUIVO-LFS
 
           O QUE ESTE BACKUP NAO RESTAURA
             Issues, pull requests, actions, projects, environments, variaveis, metadados de

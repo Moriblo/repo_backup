@@ -399,10 +399,8 @@ class Session:
         Devolve (método, info). Método: sha256, sha1, quickXorHash ou size-only. `info` traz os
         NOMES dos hashes que o OneDrive devolveu (nunca valores sensíveis) para diagnóstico.
 
-        quickXorHash: o OneDrive pessoal costuma devolvê-lo. Enquanto a implementação local não
-        for confirmada contra o serviço real, uma divergência NÃO derruba o backup: o método
-        fica "size-only" e `info` registra "quickxor_mismatch". Depois de confirmada num run real,
-        a divergência passa a ser erro (HASH_MISMATCH).
+        quickXorHash: o OneDrive pessoal o devolve (confirmado em run real: 21 arquivos conferidos,
+        incluindo envios em blocos). Divergência é erro (HASH_MISMATCH), como nos demais hashes.
         """
         hashes = {}
         for attempt in range(3):
@@ -425,11 +423,9 @@ class Session:
                 raise OneDriveError("HASH_MISMATCH", f"sha1 de {rel} difere do local")
             return "sha1", info
         if hashes.get("quickXorHash"):
-            if hashes["quickXorHash"] == quickxor_hash(local):
-                return "quickXorHash", info
-            info["quickxor_mismatch"] = True
-            print(f"AVISO: quickXorHash de {rel} difere do calculado localmente (implementação ainda não confirmada).",
-                  file=sys.stderr)
+            if hashes["quickXorHash"] != quickxor_hash(local):
+                raise OneDriveError("HASH_MISMATCH", f"quickXorHash de {rel} difere do local")
+            return "quickXorHash", info
         return "size-only", info          # sem hash conferido: só o tamanho foi conferido
 
 
