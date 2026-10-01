@@ -46,6 +46,28 @@ if [[ $# -ne 1 || "$1" == */* ]]; then
 fi
 NOME="$1"
 
+# ---- 1b. Repetição automática em falha de REDE -----------------------------------------------
+# Em algumas redes (ex.: IPv6 com tradutor NAT64) o gh perde a conexão ao acaso
+# ("TLS handshake timeout", "forcibly closed"). Esta função substitui o comando `gh` neste
+# script: roda o gh de verdade e, se a falha for só de rede, repete até 6 vezes (3 s de pausa).
+# Qualquer outro erro (permissão, repositório inexistente etc.) é devolvido na hora, sem repetir.
+gh() {
+  local tentativa saida erro rc
+  for tentativa in 1 2 3 4 5 6; do
+    erro="$(mktemp)"
+    if saida="$(command gh "$@" 2>"$erro")"; then rc=0; else rc=$?; fi
+    if [[ $rc -eq 0 ]] || ! grep -qiE 'TLS handshake timeout|forcibly closed|connection reset|i/o timeout|unexpected EOF' "$erro"; then
+      [[ -n "$saida" ]] && printf '%s\n' "$saida"
+      cat "$erro" >&2; rm -f "$erro"; return "$rc"
+    fi
+    rm -f "$erro"
+    echo "  (falha de rede, tentativa $tentativa/6; repetindo em 3 s...)" >&2
+    sleep 3
+  done
+  echo "Rede instável: desisti após 6 tentativas." >&2
+  return 1
+}
+
 # ---- 2. Pré-requisitos: gh instalado e logado, com permissão de quadros ------------------
 command -v gh >/dev/null 2>&1 || { echo "Falta o GitHub CLI (gh). Instale: winget install --id GitHub.cli"; exit 1; }
 # Testa o login pela própria API (o `gh auth status` pode estourar o tempo no chaveiro do Windows).
