@@ -11,7 +11,7 @@
 #
 # O QUE O SCRIPT CRIA (o backup deverá preservar tudo isto)
 #   Repositório   <seu-usuario>/<nome informado> (privado), com um README.
-#   Etiquetas     3 etiquetas novas: teste-backup, prioridade-alta, documentacao-teste.
+#   Etiquetas     4 etiquetas novas: bug, teste-backup, prioridade-alta, documentacao-teste.
 #   Marco         1 marco (milestone): "Marco de teste".
 #   Issues        6 issues, com texto com acentuação, bloco de código e lista; 2 delas com
 #                 etiquetas e marco; 1 editada depois de criada; 1 fechada com comentário.
@@ -90,6 +90,8 @@ gh repo create "$REPO" --private --add-readme \
 
 # ---- 4. Etiquetas e marco ------------------------------------------------------------------
 echo "Criando etiquetas e marco..."
+# A etiqueta "bug" não vem pronta em repositório novo; --force não falha se ela já existir.
+gh label create "bug" --repo "$REPO" --color "D73A4A" --description "Algo não está funcionando (teste)" --force >/dev/null
 gh label create "teste-backup" --repo "$REPO" --color "0E8A16" --description "Etiqueta de teste do backup" >/dev/null
 gh label create "prioridade-alta" --repo "$REPO" --color "B60205" --description "Prioridade alta (teste)" >/dev/null
 gh label create "documentacao-teste" --repo "$REPO" --color "1D76DB" --description "Documentação (teste)" >/dev/null
@@ -172,7 +174,7 @@ echo "Repositório de teste criado: https://github.com/$REPO"
 echo "Quadro: https://github.com/users/$DONO/projects/$PROJ"
 echo "Esperado no backup:"
 echo "  6 issues (5 abertas, 1 fechada; a de número $N5 foi editada)"
-echo "  5 comentários, 3 etiquetas novas, 1 marco (\"Marco de teste\")"
+echo "  5 comentários, 4 etiquetas novas, 1 marco (\"Marco de teste\")"
 echo "  Quadro número $PROJ: 7 itens (6 issues + 1 rascunho), campos Status e Prioridade"
 echo "Para apagar depois: gh repo delete $REPO --yes   e   gh project delete $PROJ --owner $DONO"
 echo "=========================================================================="
