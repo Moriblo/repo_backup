@@ -65,6 +65,15 @@ GAP_ACCESS = "ACCESS_PERMISSION_GAP"
 # EXECUTION_CAPABILITY_GAP: a arquitetura existe, mas esta execução não tem rota operacional.
 GAP_EXEC = "EXECUTION_CAPABILITY_GAP"
 
+# Classes lidas por github_api_read.py (API REST). Só valem se estiverem em `implemented_classes`.
+API_CLASSES = ("labels", "milestones", "issues")
+# O que cada classe de API NÃO devolve idêntico (vai para as limitações do manifest).
+API_LIMITATION = {
+    "labels": "Labels are preserved as API JSON (equivalent representation); restoring them requires recreating them through the API.",
+    "milestones": "Milestones are preserved as API JSON (equivalent representation); restoring them requires recreating them through the API.",
+    "issues": "Issues, comments, events and reactions are preserved as API JSON (equivalent representation): original numbers, authors and dates cannot be restored identically; relationships are limited to fields in the issue JSON; pull requests are not included.",
+}
+
 
 
 def load(path):
@@ -358,6 +367,11 @@ def cmd_build_evidence():
       git            PRESERVED; PARTIALLY-PRESERVED se há submódulos (só os gitlinks
                      são registrados); FAILED se nenhuma ref foi enumerada ou se nenhum
                      pacote foi enviado ao OneDrive (evidence/onedrive-package.json).
+      labels, milestones, issues
+                     lidas por github_api_read.py (evidence/api-status.json):
+                     PRESERVED-AS-EQUIVALENT-REPRESENTATION se a leitura passou nas
+                     conferências; PRESERVED (sem objetos) se o recurso está desativado na
+                     origem; FAILED se a leitura falhou ou alguma conferência reprovou.
       demais classes NOT-VERIFIED, ligadas ao restriction_id aceito pelo HITL.
     Status final: COMPLETE só sem restrições, limitações ou falhas; senão
     COMPLETE_WITH_EXCEPTIONS (ou FAILED).
@@ -401,9 +415,33 @@ def cmd_build_evidence():
     if git_lim:
         limitations.append({"limitation_id": "LIM-git-submodules", "description": git_lim,
                             "restriction_id": None, "object_class": "git"})
+    # --- Classes lidas pela API (labels, milestones, issues) ---
+    # Só entram aqui as que estão em `implemented_classes` do registro e que este leitor cobre.
+    # A leitura nunca vira sucesso por omissão: sem api-status.json a classe é FAILED.
+    caps = load("backup/capabilities.yaml")
+    implemented = set(next(c for c in caps["capabilities"] if c["id"] == "backup_repository").get("implemented_classes", []))
+    api_classes = [c for c in API_CLASSES if c in implemented]
+    api_status_file = EVIDENCE / "api-status.json"
+    api_status = json.loads(api_status_file.read_text())["classes"] if api_status_file.exists() else {}
+    for cls in api_classes:
+        st = api_status.get(cls)
+        api_files = ["api-status.json", "api-inventory.json"] + [f["file"] for f in (st or {}).get("files", [])]
+        if st is None:
+            disp, lim = "FAILED", "The API read step did not produce a result for this class."
+        elif st["status"] == "OK":
+            disp, lim = "PRESERVED-AS-EQUIVALENT-REPRESENTATION", API_LIMITATION[cls]
+        elif st["status"] == "DISABLED":
+            disp, lim = "PRESERVED", None
+        else:
+            disp, lim = "FAILED", st.get("detail", "The API read failed.")
+        objects.append({"object_class": cls, "object_id": f"{source}#{cls}", "disposition": disp,
+                        "evidence": api_files, "limitation": lim})
+        if lim and disp != "FAILED":
+            limitations.append({"limitation_id": f"LIM-{cls}-equivalent", "description": lim,
+                                "restriction_id": None, "object_class": cls})
     # --- Demais classes: NOT-VERIFIED, rastreáveis até a restrição aceita ---
     for cls, a in accepted.items():
-        if cls == "git":
+        if cls == "git" or cls in api_classes:
             continue
         objects.append({"object_class": cls, "object_id": f"{source}#{cls}", "disposition": "NOT-VERIFIED",
                         "evidence": ["preflight.json"], "limitation": a["restriction"],

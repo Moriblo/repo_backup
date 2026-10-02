@@ -23,7 +23,7 @@
 - Segredo em texto puro nunca aparece em chat, log ou evidência.
 - Código só entra por pull request. A única escrita direta no `main` é o `commands.log`, e só depois do GO.
 
-**Estado atual (30/09/2026).** O fluxo foi **provado de ponta a ponta em execução real** para um repositório pequeno (1 ref, sem LFS, sem submódulos): a escolha da capability, o GO, o `commands.log`, o Dispatcher, o preflight, o gate do destino no OneDrive real (com rotação do refresh token pelo App Writer), o mirror, o pacote e a evidência no OneDrive terminaram `COMPLETE_WITH_EXCEPTIONS`, e o **pacote restaurou para um repositório novo no GitHub** (bundle verificado, refs iguais ao `refs.tsv`, arquivos iguais ao zip, exceto o fim de linha do Windows). Hoje o backup cobre só o **código Git**; as demais 17 classes são restrições aceitas (seção I.14). **Provado também:** repositório com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, 2 branches e 2 tags (a classe `git` fica `PARTIALLY-PRESERVED`: do submódulo só o gitlink), hash conferido no destino por `quickXorHash`, e restauração com LFS (4 refs iguais, arquivo LFS com o tamanho real). **Não provado:** repositórios muito grandes, conteúdo de submódulos, nomes com acento no OneDrive.
+**Estado atual (30/09/2026).** O fluxo foi **provado de ponta a ponta em execução real** para um repositório pequeno (1 ref, sem LFS, sem submódulos): a escolha da capability, o GO, o `commands.log`, o Dispatcher, o preflight, o gate do destino no OneDrive real (com rotação do refresh token pelo App Writer), o mirror, o pacote e a evidência no OneDrive terminaram `COMPLETE_WITH_EXCEPTIONS`, e o **pacote restaurou para um repositório novo no GitHub** (bundle verificado, refs iguais ao `refs.tsv`, arquivos iguais ao zip, exceto o fim de linha do Windows). Hoje o backup prova o **código Git** em run real. As classes `labels`, `milestones` e `issues` já são lidas pela API (02/10/2026), mas **ainda não foram provadas em run real** (seção I.14); as demais 14 classes são restrições aceitas. **Provado também:** repositório com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, 2 branches e 2 tags (a classe `git` fica `PARTIALLY-PRESERVED`: do submódulo só o gitlink), hash conferido no destino por `quickXorHash`, e restauração com LFS (4 refs iguais, arquivo LFS com o tamanho real). **Não provado:** repositórios muito grandes, conteúdo de submódulos, nomes com acento no OneDrive.
 
 **Onde encontrar cada coisa**
 
@@ -114,7 +114,7 @@ Se não conseguir ler o repositório, pare e me avise. Não siga de memória.
 | **Engine** (hoje, a sessão do Claude Code; outros no futuro, ver a issue #5) | Lê este protocolo, apresenta o menu e o ECR, grava a linha no `commands.log` depois do GO e reporta o resultado. Nunca infere autorização. |
 | **Repositório `repo_backup`** (`main`) | Guarda o código, o `commands.log`, os segredos e as variáveis. Código só entra por pull request. |
 | **GitHub Actions** | Executa o Dispatcher e o workflow do `BKP_REPO` (e, temporariamente, o diagnóstico). |
-| **Token `SOURCE_READ_TOKEN`** | Token fine-grained (Contents e Metadata **somente leitura**, todos os repositórios), guardado como secret do environment `onedrive-backup`. É a credencial de leitura da origem. (O GitHub App "Repository Preservation Reader" continua só no workflow de diagnóstico temporário.) |
+| **Token `SOURCE_READ_TOKEN`** | Token fine-grained (Contents, Metadata e **Issues** **somente leitura**, todos os repositórios; o *Issues: Read* é o que libera labels, milestones e issues), guardado como secret do environment `onedrive-backup`. É a credencial de leitura da origem. (O GitHub App "Repository Preservation Reader" continua só no workflow de diagnóstico temporário.) |
 | **GitHub App Writer** (**OPCIONAL**, criado) | Regrava o novo refresh token do OneDrive no secret do environment. Só *Secrets: Read and write* e *Environments: Read and write*. Sem ele, a rotação fica desligada (seção I.11). |
 | **Repositório de origem** | É lido e **nunca alterado**. |
 | **Microsoft Entra, app público** (configuração pelo HITL pendente) | Emite os tokens do OneDrive pela autoridade `consumers` (conta pessoal). |
@@ -150,7 +150,7 @@ O texto de cada passo, com o que entra, o que acontece, o que pode falhar e o qu
 | 15 | O engine reporta o resultado | Engine e HITL | Existe |
 
 **Observações**
-- Com as 17 restrições atuais (todas as classes, menos o Git), toda execução exige **duas linhas** no `commands.log`: a primeira termina `BLOCKED`, e a segunda carrega a decisão do HITL.
+- Com as 14 restrições atuais (todas as classes, menos `git`, `labels`, `milestones` e `issues`), toda execução exige **duas linhas** no `commands.log`: a primeira termina `BLOCKED`, e a segunda carrega a decisão do HITL.
 - O `request_id` de uma linha rejeitada ou bloqueada fica **queimado**: o log só recebe acréscimos, e a autorização não é reutilizável.
 - Enquanto o passo 11 falhar fechado, nada é copiado e nenhuma evidência é gerada.
 
@@ -223,7 +223,7 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
 #### Passo 9: Capability Preflight
 - **Quem:** GitHub Actions, `bkp_repo.py preflight`.
 - **Acontece:** avalia as **18 classes** de objeto do `backup_repository`, cada rota separadamente. Hoje só a classe **`git`** tem rota implementada. As outras **17** viram lacuna `EXECUTION_CAPABILITY_GAP`. Se o token não foi emitido, o `git` também vira lacuna (`ACCESS_PERMISSION_GAP`), e são **18**. O resultado é validado contra o schema do command-request e gravado em `evidence/preflight.json`.
-- **De onde vêm as restrições:** não são uma lista fixa. São **calculadas** a cada execução: as classes de `includes` (em `backup/capabilities.yaml`) menos as de `implemented_classes` (também em `backup/capabilities.yaml`, na capability). Hoje, 18 menos 1 (`git`) dá **17**. Cada uma tem o nome `RST-<classe>-<tipo da lacuna>`. A lista completa aparece no `BKP_RESULT`, no `preflight.json` e, depois de aceita, no `commands.log`. Implementar uma classe a retira das restrições (seção I.14).
+- **De onde vêm as restrições:** não são uma lista fixa. São **calculadas** a cada execução: as classes de `includes` (em `backup/capabilities.yaml`) menos as de `implemented_classes` (também em `backup/capabilities.yaml`, na capability). Hoje, 18 menos 4 (`git`, `labels`, `milestones` e `issues`) dá **14**. Cada uma tem o nome `RST-<classe>-<tipo da lacuna>`. A lista completa aparece no `BKP_RESULT`, no `preflight.json` e, depois de aceita, no `commands.log`. Implementar uma classe a retira das restrições (seção I.14).
 - **Decisão:** a execução só segue se **todas** as restrições exigidas estiverem em `preflight_decision.accepted_restrictions`. Aceitar menos mantém o bloqueio.
 - **Sai:** saída **10**, `BKP_RESULT` **`BLOCKED`** (`CAPABILITY_PREFLIGHT_GAPS`) com a lista `required_restrictions`, e os passos seguintes são pulados. Ou saída **0**, `BKP_RESULT` **`PREFLIGHT_OK`**. O artefato `bkp-repo-<request_id>` é publicado sempre.
 
@@ -249,6 +249,15 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
   5. Varre o histórico inteiro atrás de submódulos (`gitmodules-history.tsv`, `gitlinks-history.tsv`).
   6. Logo após o clone, compara as refs da **origem** (`git ls-remote`) com as do mirror. Qualquer diferença: saída **7** (`refs-compare.txt` mostra a diferença). Se a origem recebeu um push entre o clone e a consulta, dispare o backup de novo.
 - **Falha:** o job fica vermelho no passo que falhou.
+
+#### Passo 12b: leitura das classes de API (`labels`, `milestones`, `issues`)
+- **Quem:** GitHub Actions (passo "Read API object classes"), com `backup/scripts/github_api_read.py`. Roda antes do pacote.
+- **Acontece:** só requisições GET à API do GitHub, com o `SOURCE_READ_TOKEN`. Grava em `package/` os arquivos `api-labels.json`, `api-milestones.json`, `api-issues.json`, `api-issue-comments.json`, `api-issue-events.json`, `api-issue-reactions.json` e `api-inventory.json`, e em `evidence/` o `api-status.json`.
+- **Conferências (qualquer divergência marca a classe `FAILED`):** abertos lidos (issues mais pull requests) contra o `open_issues_count` do repositório; comentários lidos contra o contador de cada issue; etiquetas e marcos citados pelas issues contra as listas lidas.
+- **Pull requests:** vêm na API de issues e ficam de fora; só os números vão ao inventário. A classe `pull_requests` continua pendente.
+- **Disposição:** `PRESERVED-AS-EQUIVALENT-REPRESENTATION` se passou; `PRESERVED` sem objetos se o recurso está desativado na origem (HTTP 410); `FAILED` se faltou permissão (o token precisa de *Issues: Read*), a rede falhou ou alguma conferência reprovou.
+- **Falha:** este passo não derruba o job. O pacote Git é enviado normalmente e o `build-evidence` marca a classe `FAILED`, o que deixa o job vermelho no final.
+- **Limites:** relações entre issues só nos campos do próprio JSON da issue (a linha do tempo completa e os endpoints de sub-issues e dependências não são lidos); número, autor e datas originais não voltam idênticos; **não existe restauração pela API ainda**, os arquivos são registro.
 
 #### Passo 13: pacote e envio ao OneDrive
 - **Quem:** GitHub Actions (passos "Build restorable package" e "Upload package to OneDrive").
@@ -380,6 +389,8 @@ Estados: **EXISTE**, **TEMPORÁRIO**, **A REMOVER**, **PLANEJADO**.
 | `backup/scripts/bkp_repo.py` | Revalidação, preflight, gate de destino e montagem da evidência. | EXISTE |
 | `backup/scripts/onedrive.py` | Access token, rotação do secret, validação do destino, envio (simples ou em blocos) e conferência de hash. Provado em run real, inclusive envio em blocos e hash por `quickXorHash`. | EXISTE |
 | `backup/scripts/onedrive_authorize.py` | Login local único (device code) que entrega o refresh token. Roda no computador do HITL. | EXISTE |
+| `backup/scripts/github_api_read.py` | Leitor das classes `labels`, `milestones` e `issues` pela API REST (só GET, com paginação, repetição e conferências). Grava `package/api-*.json` e `evidence/api-status.json`. Testado só contra servidor simulado. | EXISTE |
+| `backup/tests/test_github_api_read.py` | Teste local do leitor de API, com servidor simulado (`python3 backup/tests/test_github_api_read.py`). Não roda no Actions. | EXISTE |
 | `backup/scripts/montar_repo_teste.sh` | Roda no computador do HITL: monta e envia um repositório de teste (arquivo grande, LFS, submódulo, branches e tags). Provado em run real. | TEMPORÁRIO |
 | `backup/scripts/montar_repo_teste_issues.sh` | Roda no computador do HITL com o `gh`: cria um repositório de teste com issues, comentários, etiquetas, marco e um quadro (Project). Só o fluxo foi testado, com `gh` simulado. | TEMPORÁRIO |
 | `backup/scripts/validate_traceability.py` | Confere o registro contra o repositório (existência, SHA, órfãos, caminhos, evidência de `VALIDATED`) e atualiza os SHAs com `--update`. | EXISTE |
@@ -476,6 +487,8 @@ Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `
 | **Sem restauração** | Fica como registro e evidência. | `actions` (execuções, logs, artefatos), `checks`, `actions_caches`, `deployments`, `codespaces_repository_state_delta` (o conteúdo pode ser recuperado como commits ou patch), `secret_metadata` (valores não são exportáveis; os segredos são criados de novo), `other_discovered_state` (depende do que for descoberto) |
 
 O modo de restauração de cada classe é **previsto** e será confirmado no teste de restauração.
+
+**Etapa 2A: `labels`, `milestones` e `issues` (02/10/2026).** Implementada e registrada em `implemented_classes`; testada só localmente contra um servidor simulado (10 testes). **Falta o run real**: um backup de `Moriblo/backup_teste_issues` (6 issues, 5 comentários, 4 etiquetas novas, 1 marco) conferido contra o repositório. Antes dele, o `SOURCE_READ_TOKEN` precisa ter *Issues: Read*. Até o run real, a classe fica `NOT_VALIDATED` no registro. Os arquivos são **registro**: a restauração pela API é a capability `restore_repository`, ainda planejada.
 
 **Limites aceitos: o que não volta idêntico**
 - As refs `refs/pull/*`: o GitHub as gerencia e não aceita enviá-las de volta.

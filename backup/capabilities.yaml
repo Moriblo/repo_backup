@@ -446,7 +446,9 @@ capabilities:
     # Classes (de `includes`) que o executor JÁ sabe ler e preservar. É a fonte única: o preflight
     # (bkp_repo.py) calcula as restrições como `includes` menos `implemented_classes`.
     # Ao implementar uma classe, acrescente-a aqui: a restrição correspondente deixa de ser exigida.
-    implemented_classes: [git]
+    # labels, milestones e issues são lidas pela API por backup/scripts/github_api_read.py e
+    # entram no pacote como api-*.json (representação equivalente, não restauração por git push).
+    implemented_classes: [git, labels, milestones, issues]
     # Destino OneDrive pessoal (OAuth delegado, sem OIDC). Nada aqui é segredo: os valores
     # sensíveis ficam em secrets/variáveis do repositório (nomes abaixo).
     onedrive:
@@ -612,7 +614,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 253d037d64bd9e02c3bea1c92a6b2bddc555847b
+      current_sha: ea988aa95db6ead498d998501fab9bd2e3a4c623
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -718,7 +720,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: a0de9d69bda19e766772f405019fa70a8d224aac
+      current_sha: 3f055228c54198dd8d692d8f03988f0cedc4adca
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
@@ -843,7 +845,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: dbcf8bb363c685ddc3a298436ac5f83822235227
+      current_sha: 61ec819740edeaf679ba785426fcad3933d686bc
     validation:
       status: VALIDATED
       scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, as 17 classes fora do Git."
@@ -1021,5 +1023,49 @@ implementation_artifacts:
       current_sha: 430ca6130aeaf70c1d0d1ef6735a7f99498f84cd
     validation:
       status: NOT_VALIDATED
+    relationships:
+      - {capability_id: backup_repository, relationship: VALIDATES}
+
+  # ---------------------------------------------------------------------------
+  # Leitor das classes de API (labels, milestones, issues): só GET, com paginação, repetição
+  # em falha transitória e conferências (contagem de abertos, comentários por issue, etiquetas
+  # e marcos citados). Grava package/api-*.json e evidence/api-status.json.
+  # ---------------------------------------------------------------------------
+  - artifact_id: github_api_reader_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/github_api_read.py
+    purpose: Read-only reader of the labels, milestones and issues object classes through the GitHub REST API, producing JSON files for the preservation package and a per-class status for the evidence.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 425cc3ec2e0ac2237970346cb98e4f28bf5533b7
+    validation:
+      status: NOT_VALIDATED
+      scope: Testado só contra um servidor simulado (backup/tests/test_github_api_read.py). Não provado contra a API real nem em run do Actions.
+    relationships:
+      - {capability_id: backup_repository, relationship: EXECUTES}
+
+  # ---------------------------------------------------------------------------
+  # Teste local do leitor de API (servidor simulado). Roda com python3, sem dependências.
+  # ---------------------------------------------------------------------------
+  - artifact_id: github_api_reader_test
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/tests/test_github_api_read.py
+    purpose: Local test of the API reader against a simulated GitHub API (pagination, pull request separation, reconciliation checks, failure handling, GET-only, token not leaked).
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 71377c60bc25bb4b172acd6d5fe58fc6b484e0e7
+    validation:
+      status: NOT_VALIDATED
+      scope: Executado localmente (10 testes). Não roda no Actions.
     relationships:
       - {capability_id: backup_repository, relationship: VALIDATES}
