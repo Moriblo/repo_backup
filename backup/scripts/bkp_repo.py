@@ -33,6 +33,8 @@ VARIÁVEIS DE AMBIENTE (definidas pelo workflow)
     REQUEST_ID, SOURCE_REPOSITORY, DESTINATION   inputs autorizados
     PREFLIGHT_DECISION                           JSON da decisão CONTINUE_WITH_RESTRICTIONS (opcional)
     TOKEN_OUTCOME                                resultado do passo que fornece o token de leitura (SOURCE_READ_TOKEN)
+    PROJECTS_TOKEN_OUTCOME                       resultado do passo que fornece o token de Projects (PROJECTS_READ_TOKEN);
+                                                 sem ele, a classe projects vira ACCESS_PERMISSION_GAP
     EVIDENCE_DIR                                 pasta de evidências (padrão: "evidence")
     DESTINATION_VALIDATED                        "true" só depois do gate de destino
     STARTED_AT                                   início da execução (opcional)
@@ -65,13 +67,18 @@ GAP_ACCESS = "ACCESS_PERMISSION_GAP"
 # EXECUTION_CAPABILITY_GAP: a arquitetura existe, mas esta execução não tem rota operacional.
 GAP_EXEC = "EXECUTION_CAPABILITY_GAP"
 
-# Classes lidas por github_api_read.py (API REST). Só valem se estiverem em `implemented_classes`.
-API_CLASSES = ("labels", "milestones", "issues")
+# Classes lidas pela API: labels, milestones e issues por github_api_read.py (REST) e projects por
+# github_projects_read.py (GraphQL). Só valem se estiverem em `implemented_classes`.
+API_CLASSES = ("labels", "milestones", "issues", "projects")
+# Arquivos de evidência de cada classe de API (além dos arquivos de dados, listados no status).
+API_EVIDENCE = {c: ["api-status.json", "api-inventory.json"] for c in ("labels", "milestones", "issues")}
+API_EVIDENCE["projects"] = ["api-projects-status.json", "api-projects-inventory.json"]
 # O que cada classe de API NÃO devolve idêntico (vai para as limitações do manifest).
 API_LIMITATION = {
     "labels": "Labels are preserved as API JSON (equivalent representation); restoring them requires recreating them through the API.",
     "milestones": "Milestones are preserved as API JSON (equivalent representation); restoring them requires recreating them through the API.",
     "issues": "Issues, comments, events and reactions are preserved as API JSON (equivalent representation): original numbers, authors and dates cannot be restored identically; relationships are limited to fields in the issue JSON; pull requests are not included.",
+    "projects": "Projects are preserved as GraphQL JSON (equivalent representation): fields, views, workflows, status updates and items with field values; recreating a board requires the API and is not part of this backup.",
 }
 
 
@@ -190,6 +197,10 @@ def build_preflight():
     # Para implementar uma nova classe: implemente a leitura no workflow E acrescente-a
     # a `implemented_classes` no capabilities.yaml.
     implemented_classes = set(cap.get("implemented_classes", []))
+    # Classes que precisam de uma credencial PRÓPRIA além do token de leitura da origem
+    # (hoje: projects, com o PROJECTS_READ_TOKEN). `class_credentials` no registro dá o nome do
+    # secret e a variável com o resultado do passo que o fornece (ex.: PROJECTS_TOKEN_OUTCOME).
+    class_credentials = cap.get("class_credentials", {})
     assessments, gaps, pending = [], [], []
     # Uma avaliação por classe de objeto que o backup_repository cobre (lista `includes` do capabilities.yaml).
     for cls in cap["includes"]:
@@ -197,16 +208,22 @@ def build_preflight():
         spec = caps["object_classes"][cls]
         # True só para classes com rota realmente implementada neste executor.
         implemented = cls in implemented_classes
+        # Credencial própria da classe (se houver): sem ela a classe não é lida, mesmo implementada.
+        cred = class_credentials.get(cls)
+        cred_ok = (not cred) or os.environ.get(cred["outcome_env"]) == "success"
+        cred_msg = f"Class credential ({cred['secret']}) is missing or could not be provided." if cred else ""
         # Rotas avaliadas desta classe; cada tipo de rota aprovado é avaliado separadamente.
         routes = []
         # Cada tipo de rota aprovado é avaliado separadamente (BACKUP_REPOSITORY.md).
         for rt in spec["approved_route_types"]:
             if rt == "DETERMINISTIC_EXECUTOR":
                 # Este workflow É o executor determinístico; é a única rota avaliada de fato.
-                if implemented and token_ok:
+                if implemented and token_ok and cred_ok:
                     state, lim = "AVAILABLE", None
-                elif implemented:
+                elif implemented and not token_ok:
                     state, lim = "UNAVAILABLE", "Read-only source token could not be issued for the source repository."
+                elif implemented:
+                    state, lim = "UNAVAILABLE", cred_msg
                 else:
                     state, lim = "UNAVAILABLE", "This executor has no implemented route for the object class."
                 routes.append({"route_type": rt, "route_reference": "github_actions:backup-repository.yml",
@@ -218,7 +235,7 @@ def build_preflight():
                 routes.append({"route_type": rt, "route_reference": None, "state": "NOT_VERIFIED",
                                "authorized": False, "limitation": "Route not assessed; only the deterministic executor is in scope of this execution."})
         # Capacidade efetiva: só é AVAILABLE se a classe está implementada E o token de leitura foi emitido.
-        effective = "AVAILABLE" if implemented and token_ok else "UNAVAILABLE"
+        effective = "AVAILABLE" if implemented and token_ok and cred_ok else "UNAVAILABLE"
         assessments.append({
             "object_class": cls,
             "architectural_status": spec["architectural_status"],
@@ -232,7 +249,8 @@ def build_preflight():
             # Classe implementada sem token = problema de ACESSO.
             # Classe não implementada = falta de CAPACIDADE DE EXECUÇÃO.
             cls_gap = GAP_ACCESS if implemented else GAP_EXEC
-            cause = ("Read-only source token (SOURCE_READ_TOKEN) is missing or could not be provided for the source repository."
+            cause = (("Read-only source token (SOURCE_READ_TOKEN) is missing or could not be provided for the source repository."
+                      if not token_ok else cred_msg)
                      if implemented else "Executor route for this object class is not implemented yet.")
             gaps.append({
                 "object_class": cls,
@@ -367,11 +385,13 @@ def cmd_build_evidence():
       git            PRESERVED; PARTIALLY-PRESERVED se há submódulos (só os gitlinks
                      são registrados); FAILED se nenhuma ref foi enumerada ou se nenhum
                      pacote foi enviado ao OneDrive (evidence/onedrive-package.json).
-      labels, milestones, issues
-                     lidas por github_api_read.py (evidence/api-status.json):
+      labels, milestones, issues, projects
+                     lidas pela API (evidence/api-status.json e api-projects-status.json):
                      PRESERVED-AS-EQUIVALENT-REPRESENTATION se a leitura passou nas
-                     conferências; PRESERVED (sem objetos) se o recurso está desativado na
-                     origem; FAILED se a leitura falhou ou alguma conferência reprovou.
+                     conferências; PARTIALLY-PRESERVED se parte do conteúdo ficou oculta para
+                     o token (projects com itens ocultos); PRESERVED (sem objetos) se o recurso
+                     está desativado na origem; FAILED se a leitura falhou ou alguma conferência
+                     reprovou. Classe com restrição aceita (ex.: projects sem token) é NOT-VERIFIED.
       demais classes NOT-VERIFIED, ligadas ao restriction_id aceito pelo HITL.
     Status final: COMPLETE só sem restrições, limitações ou falhas; senão
     COMPLETE_WITH_EXCEPTIONS (ou FAILED).
@@ -421,16 +441,26 @@ def cmd_build_evidence():
     # A leitura nunca vira sucesso por omissão: sem api-status.json a classe é FAILED.
     caps = load("backup/capabilities.yaml")
     implemented = set(next(c for c in caps["capabilities"] if c["id"] == "backup_repository").get("implemented_classes", []))
-    api_classes = [c for c in API_CLASSES if c in implemented]
-    api_status_file = EVIDENCE / "api-status.json"
-    api_status = json.loads(api_status_file.read_text())["classes"] if api_status_file.exists() else {}
+    # Uma classe implementada, mas com restrição ACEITA nesta execução (ex.: projects sem o
+    # PROJECTS_READ_TOKEN), não foi lida: fica NOT-VERIFIED no laço abaixo.
+    api_classes = [c for c in API_CLASSES if c in implemented and c not in accepted]
+    # Resultado de cada leitor: api-status.json (labels, milestones, issues) e
+    # api-projects-status.json (projects). Os dois têm o formato {"classes": {classe: {...}}}.
+    api_status = {}
+    for status_name in ("api-status.json", "api-projects-status.json"):
+        status_file = EVIDENCE / status_name
+        if status_file.exists():
+            api_status.update(json.loads(status_file.read_text())["classes"])
     for cls in api_classes:
         st = api_status.get(cls)
-        api_files = ["api-status.json", "api-inventory.json"] + [f["file"] for f in (st or {}).get("files", [])]
+        api_files = API_EVIDENCE[cls] + [f["file"] for f in (st or {}).get("files", [])]
         if st is None:
             disp, lim = "FAILED", "The API read step did not produce a result for this class."
         elif st["status"] == "OK":
             disp, lim = "PRESERVED-AS-EQUIVALENT-REPRESENTATION", API_LIMITATION[cls]
+        elif st["status"] == "PARTIAL":
+            # Leu, mas parte do conteúdo ficou oculta para o token: lacuna declarada, nunca PRESERVED.
+            disp, lim = "PARTIALLY-PRESERVED", f"{API_LIMITATION[cls]} Partial: {st.get('detail', 'some content is hidden from the token.')}"
         elif st["status"] == "DISABLED":
             disp, lim = "PRESERVED", None
         else:
@@ -438,8 +468,8 @@ def cmd_build_evidence():
         objects.append({"object_class": cls, "object_id": f"{source}#{cls}", "disposition": disp,
                         "evidence": api_files, "limitation": lim})
         if lim and disp != "FAILED":
-            limitations.append({"limitation_id": f"LIM-{cls}-equivalent", "description": lim,
-                                "restriction_id": None, "object_class": cls})
+            limitations.append({"limitation_id": f"LIM-{cls}-{'partial' if disp == 'PARTIALLY-PRESERVED' else 'equivalent'}",
+                                "description": lim, "restriction_id": None, "object_class": cls})
     # --- Demais classes: NOT-VERIFIED, rastreáveis até a restrição aceita ---
     for cls, a in accepted.items():
         if cls == "git" or cls in api_classes:

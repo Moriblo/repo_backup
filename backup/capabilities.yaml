@@ -448,7 +448,16 @@ capabilities:
     # Ao implementar uma classe, acrescente-a aqui: a restrição correspondente deixa de ser exigida.
     # labels, milestones e issues são lidas pela API por backup/scripts/github_api_read.py e
     # entram no pacote como api-*.json (representação equivalente, não restauração por git push).
-    implemented_classes: [git, labels, milestones, issues]
+    # projects é lida por backup/scripts/github_projects_read.py (GraphQL) e precisa de uma
+    # credencial própria (ver `class_credentials`).
+    implemented_classes: [git, labels, milestones, issues, projects]
+    # Classes que, além do SOURCE_READ_TOKEN, exigem uma credencial PRÓPRIA. `secret` é o nome do
+    # secret do environment; `outcome_env` é a variável com o resultado do passo do workflow que o
+    # fornece. Sem ela, o preflight trata a classe como ACCESS_PERMISSION_GAP (restrição a aceitar),
+    # em vez de falhar o backup do código. projects: token CLÁSSICO com `read:project`, porque token
+    # fine-grained não alcança Projects v2 de conta pessoal (a confirmar no primeiro run real).
+    class_credentials:
+      projects: {secret: PROJECTS_READ_TOKEN, outcome_env: PROJECTS_TOKEN_OUTCOME}
     # Destino OneDrive pessoal (OAuth delegado, sem OIDC). Nada aqui é segredo: os valores
     # sensíveis ficam em secrets/variáveis do repositório (nomes abaixo).
     onedrive:
@@ -614,7 +623,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 6fcfe084d8b6424e0151b5ffede72729abfc1b03
+      current_sha: 1482d23344371fb774cfd16981412fbeae7f7646
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -720,7 +729,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 3f055228c54198dd8d692d8f03988f0cedc4adca
+      current_sha: 3982460a446b5aefba40c8062e33919f15f4903c
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
@@ -846,7 +855,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: b58a43fd996b11dcd1f9e834c597cafebe74d127
+      current_sha: c0a4f5b686d103a10bff001c1768450c028378e2
     validation:
       status: VALIDATED
       scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, as classes além de git, labels, milestones e issues (pull_requests, projects e as demais)."
@@ -1073,3 +1082,50 @@ implementation_artifacts:
       scope: Executado localmente (10 testes). Não roda no Actions.
     relationships:
       - {capability_id: backup_repository, relationship: VALIDATES}
+
+  # ---------------------------------------------------------------------------
+  # Leitor da classe projects (GitHub Projects v2, API GraphQL): só consultas, três escopos
+  # (SOURCE_REPOSITORY, PROJECT, OWNER_PROJECT_SET), conferências (total de itens, conexões
+  # cortadas, opções de seleção) e itens ocultos como PARTIAL. Grava package/api-projects*.json
+  # e evidence/api-projects-status.json. Serve ao BKP_REPO e, depois, ao backup_projects.
+  # ---------------------------------------------------------------------------
+  - artifact_id: github_projects_reader_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/github_projects_read.py
+    purpose: Read-only reader of the projects object class (GitHub Projects v2) through the GraphQL API, producing JSON files for the preservation package and a status for the evidence.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 99738bc135c4cc1ff51862d8a96dec073049ac01
+    validation:
+      status: NOT_VALIDATED
+      scope: Testado só contra um servidor GraphQL simulado (backup/tests/test_github_projects_read.py). Os nomes de campo do schema GraphQL foram escritos de memória; não provado contra a API real nem em run do Actions.
+    relationships:
+      - {capability_id: backup_repository, relationship: EXECUTES}
+      - {capability_id: backup_projects, relationship: EXECUTES}
+
+  # ---------------------------------------------------------------------------
+  # Teste local do leitor de Projects (servidor GraphQL simulado). Roda com python3, sem dependências.
+  # ---------------------------------------------------------------------------
+  - artifact_id: github_projects_reader_test
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/tests/test_github_projects_read.py
+    purpose: Local test of the Projects reader against a simulated GraphQL API (three scopes, discovery fallback, reconciliation checks, redacted items, failure handling, queries only, token not leaked).
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 1578dc300777360a2027a1d8058772c9cc54b887
+    validation:
+      status: NOT_VALIDATED
+      scope: Executado localmente (17 testes, mais verificação de mutação). Não roda no Actions.
+    relationships:
+      - {capability_id: backup_repository, relationship: VALIDATES}
+      - {capability_id: backup_projects, relationship: VALIDATES}

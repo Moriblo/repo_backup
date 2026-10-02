@@ -160,6 +160,27 @@ jobs:
           echo "::add-mask::$SOURCE_READ_TOKEN"
           echo "token=$SOURCE_READ_TOKEN" >> "$GITHUB_OUTPUT"
 
+      # Token da classe PROJECTS (GitHub Projects v2). É um token CLÁSSICO com o escopo
+      # `read:project` (somente leitura), porque token fine-grained não alcança Projects v2 de
+      # conta pessoal. Fica num secret próprio (PROJECTS_READ_TOKEN) para o SOURCE_READ_TOKEN
+      # continuar fine-grained. Se faltar, este passo falha SEM derrubar o job (continue-on-error):
+      # o preflight lê o resultado (PROJECTS_TOKEN_OUTCOME) e a classe projects vira
+      # ACCESS_PERMISSION_GAP (restrição a aceitar pelo HITL), e o backup do código segue.
+      - name: Provide Projects read token (PROJECTS_READ_TOKEN)
+        id: projects_token
+        continue-on-error: true
+        shell: bash
+        env:
+          PROJECTS_READ_TOKEN: ${{ secrets.PROJECTS_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PROJECTS_READ_TOKEN" ]]; then
+            echo "::warning::Secret PROJECTS_READ_TOKEN ausente no environment onedrive-backup: a classe projects ficará como restrição."
+            exit 1
+          fi
+          echo "::add-mask::$PROJECTS_READ_TOKEN"
+          echo "token=$PROJECTS_READ_TOKEN" >> "$GITHUB_OUTPUT"
+
       # OPCIONAL. Emite um token do GitHub App Writer, limitado a ESCREVER SECRETS neste
       # repositório (permission-secrets: write), só para regravar o novo refresh token do
       # OneDrive (rotação). Só roda se a variável REPOSITORY_PRESERVATION_SECRETS_APP_ID existir.
@@ -192,6 +213,7 @@ jobs:
         shell: bash
         env:
           TOKEN_OUTCOME: ${{ steps.token.outcome }}
+          PROJECTS_TOKEN_OUTCOME: ${{ steps.projects_token.outcome }}
         run: python3 backup/scripts/bkp_repo.py preflight
 
       # Gate de destino (fail closed). Renova o token do OneDrive, GRAVA o novo refresh
@@ -365,11 +387,29 @@ jobs:
           mkdir -p package "$EVIDENCE_DIR"
           python3 backup/scripts/github_api_read.py read
 
+      # Lê pela API GraphQL os Projects (v2) LIGADOS ao repositório de origem (escopo
+      # SOURCE_REPOSITORY) e grava package/api-projects*.json e evidence/api-projects-status.json.
+      # Só roda se o token de Projects foi fornecido. Como o passo das outras classes de API, NÃO
+      # derruba o job quando a classe falha ou fica parcial (itens ocultos para o token): o
+      # resultado vai no api-projects-status.json e o build-evidence decide a disposição
+      # (PRESERVED-AS-EQUIVALENT-REPRESENTATION, PARTIALLY-PRESERVED ou FAILED).
+      - name: Read Projects linked to the source repository
+        if: steps.projects_token.outcome == 'success'
+        shell: bash
+        env:
+          PROJECTS_TOKEN: ${{ steps.projects_token.outputs.token }}
+          PROJECTS_SCOPE: SOURCE_REPOSITORY
+        run: |
+          set -euo pipefail
+          mkdir -p package "$EVIDENCE_DIR"
+          export PROJECTS_SCOPE_IDS="$(python3 -c 'import json,os; print(json.dumps({"source_repository": os.environ["SOURCE_REPOSITORY"]}))')"
+          python3 backup/scripts/github_projects_read.py read
+
       # Monta o PACOTE RESTAURÁVEL em package/:
       #   source.bundle   git bundle de TODAS as refs (verificado com `git bundle verify`)
       #   lfs-objects.tar objetos Git LFS (o bundle não os carrega); só se a origem usa LFS
       #   refs.tsv        lista das refs e dos SHAs preservados, para conferência
-      #   api-*.json      labels, milestones e issues lidos pelo passo anterior (já estão em package/)
+      #   api-*.json      labels, milestones, issues e projects lidos pelos passos anteriores (já estão em package/)
       #   arquivos-<branch>.zip  INSTANTÂNEO LEGÍVEL: os arquivos da branch padrão (HEAD do mirror)
       #                   no estado atual, para abrir sem git. NÃO é a base da restauração (o
       #                   bundle é): não tem histórico e, se a origem usa LFS, pode trazer só os ponteiros ou o
@@ -416,6 +456,8 @@ jobs:
             api-*.json             Registro das labels, milestones e issues (JSON da API do
                                    GitHub), com api-inventory.json (contagens e SHA-256). E
                                    REGISTRO: o git push NAO os restaura (ver abaixo).
+            api-projects*.json     (so se o backup leu Projects) Projects v2 ligados ao
+                                   repositorio: campos, views, itens e valores. Tambem REGISTRO.
 
           ANTES DE COMECAR (o que voce precisa fazer com as proprias maos)
             - Restaure para um repositorio NOVO e VAZIO. Nunca sobre o repositorio original.
@@ -473,9 +515,9 @@ jobs:
                ponteiro (~130 bytes): ls -la conf-restaurado/NOME-DO-ARQUIVO-LFS
 
           O QUE ESTE BACKUP NAO RESTAURA
-            Labels, milestones e issues (com comentarios, eventos e reacoes) estao no pacote como
-            REGISTRO (api-*.json), mas o git push NAO os recria no GitHub: a restauracao pela
-            API ainda nao existe. Pull requests, actions, projects, environments, variaveis,
+            Labels, milestones, issues (com comentarios, eventos e reacoes) e Projects estao no
+            pacote como REGISTRO (api-*.json e api-projects*.json), mas o git push NAO os recria
+            no GitHub: a restauracao pela API ainda nao existe. Pull requests, actions, environments, variaveis,
             metadados de secrets, deployments, regras de protecao, colaboradores, webhooks,
             checks, caches e demais estados do GitHub fora do Git NAO estao neste pacote (ver
             preflight.json e manifest.json na pasta evidence). Segredos nunca sao preservados.
