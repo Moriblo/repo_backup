@@ -388,7 +388,8 @@ def cmd_build_evidence():
     accepted = {a["object_class"]: a for a in pf["accepted_restrictions"]}
     started = os.environ.get("STARTED_AT", now())
 
-    # Lista de objetos da evidência: primeiro o git, depois as classes NOT-VERIFIED.
+    # Lista de objetos da evidência: primeiro o git, depois as classes de API (labels, milestones, issues) e,
+    # por fim, as classes ainda NOT-VERIFIED.
     objects = []
     # --- Classe git: disposição decidida pelos arquivos que os passos bash gravaram ---
     git_disp, git_lim = "PRESERVED", None
