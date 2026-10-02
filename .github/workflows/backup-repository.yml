@@ -350,10 +350,26 @@ jobs:
           sort -u -o "$EVIDENCE_DIR/gitmodules-history.tsv"             "$EVIDENCE_DIR/gitmodules-history.tsv"
           sort -u -o "$EVIDENCE_DIR/gitlinks-history.tsv"             "$EVIDENCE_DIR/gitlinks-history.tsv"
 
+      # Lê pela API as classes labels, milestones e issues da origem (SOMENTE GET) e grava
+      # package/api-*.json (+ api-inventory.json) e evidence/api-status.json. Cada classe é
+      # conferida (abertos x open_issues_count, comentários por issue, etiquetas e marcos
+      # citados). Este passo NÃO derruba o job quando uma classe falha: o resultado fica no
+      # api-status.json e o build-evidence marca a classe FAILED (o job termina em falha ao
+      # final), depois de o pacote Git já ter sido enviado. O token precisa de Issues: Read.
+      - name: Read API object classes (labels, milestones, issues)
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p package "$EVIDENCE_DIR"
+          python3 backup/scripts/github_api_read.py read
+
       # Monta o PACOTE RESTAURÁVEL em package/:
       #   source.bundle   git bundle de TODAS as refs (verificado com `git bundle verify`)
       #   lfs-objects.tar objetos Git LFS (o bundle não os carrega); só se a origem usa LFS
       #   refs.tsv        lista das refs e dos SHAs preservados, para conferência
+      #   api-*.json      labels, milestones e issues lidos pelo passo anterior (já estão em package/)
       #   arquivos-<branch>.zip  INSTANTÂNEO LEGÍVEL: os arquivos da branch padrão (HEAD do mirror)
       #                   no estado atual, para abrir sem git. NÃO é a base da restauração (o
       #                   bundle é): não tem histórico e, se a origem usa LFS, pode trazer só os ponteiros ou o
@@ -397,6 +413,9 @@ jobs:
             arquivos-<branch>.zip  Instantaneo LEGIVEL da branch padrao: abre sem git. Sem
                                    historico; com Git LFS pode trazer so os ponteiros ou o conteudo real. NAO restaura.
             lfs-objects.tar        (so se a origem usa Git LFS) objetos LFS, que o bundle nao leva.
+            api-*.json             Registro das labels, milestones e issues (JSON da API do
+                                   GitHub), com api-inventory.json (contagens e SHA-256). E
+                                   REGISTRO: o git push NAO os restaura (ver abaixo).
 
           ANTES DE COMECAR (o que voce precisa fazer com as proprias maos)
             - Restaure para um repositorio NOVO e VAZIO. Nunca sobre o repositorio original.
@@ -454,8 +473,10 @@ jobs:
                ponteiro (~130 bytes): ls -la conf-restaurado/NOME-DO-ARQUIVO-LFS
 
           O QUE ESTE BACKUP NAO RESTAURA
-            Issues, pull requests, actions, projects, environments, variaveis, metadados de
-            secrets, deployments, regras de protecao, colaboradores, webhooks, labels, milestones,
+            Labels, milestones e issues (com comentarios, eventos e reacoes) estao no pacote como
+            REGISTRO (api-*.json), mas o git push NAO os recria no GitHub: a restauracao pela
+            API ainda nao existe. Pull requests, actions, projects, environments, variaveis,
+            metadados de secrets, deployments, regras de protecao, colaboradores, webhooks,
             checks, caches e demais estados do GitHub fora do Git NAO estao neste pacote (ver
             preflight.json e manifest.json na pasta evidence). Segredos nunca sao preservados.
           EOF
