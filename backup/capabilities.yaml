@@ -614,7 +614,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: ea988aa95db6ead498d998501fab9bd2e3a4c623
+      current_sha: 6fcfe084d8b6424e0151b5ffede72729abfc1b03
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -724,8 +724,9 @@ implementation_artifacts:
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
-      scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, as 17 classes fora do Git."
+      scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, as classes além de git, labels, milestones e issues (pull_requests, projects e as demais)."
       evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37076443670", commit: edebe8a30e2e360f4987d77aa5ac25d2dad36873}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36802676819", commit: bf64abf66558347ec10fc517b665638dae2878e5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
@@ -848,8 +849,9 @@ implementation_artifacts:
       current_sha: b58a43fd996b11dcd1f9e834c597cafebe74d127
     validation:
       status: VALIDATED
-      scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, as 17 classes fora do Git."
+      scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, as classes além de git, labels, milestones e issues (pull_requests, projects e as demais)."
       evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37076443670", commit: edebe8a30e2e360f4987d77aa5ac25d2dad36873}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36802676819", commit: bf64abf66558347ec10fc517b665638dae2878e5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
@@ -1044,8 +1046,10 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: 425cc3ec2e0ac2237970346cb98e4f28bf5533b7
     validation:
-      status: NOT_VALIDATED
-      scope: Testado só contra um servidor simulado (backup/tests/test_github_api_read.py). Não provado contra a API real nem em run do Actions.
+      status: VALIDATED
+      scope: "Run real completo (req-20261002-001, Moriblo/backup_teste_issues): 4 etiquetas, 1 marco, 6 issues (pull requests fora) e 5 comentários lidos pela API, com as conferências aprovadas; api-*.json enviados ao OneDrive com hash por quickXorHash; api-issues.json conferido pelo HITL contra o repositório (textos e acentos, etiquetas, marco, issue editada e issue fechada). Não provado - repositórios grandes (paginação real e limite de taxa), reações (o repositório de teste não tem), pull requests, relações entre issues (campos zerados no teste) e restauração pela API."
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37076443670", commit: edebe8a30e2e360f4987d77aa5ac25d2dad36873}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
