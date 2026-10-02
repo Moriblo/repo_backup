@@ -976,7 +976,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 5176cd44bec23a9a98a656c51321bed0faab3da8
+      current_sha: 866016b23c660505789bd8ff49e9bb346adf1b78
     validation:
       status: NOT_VALIDATED
       scope: Só o fluxo do script foi testado, com um gh simulado (6 issues, 5 comentários, 3 etiquetas, 7 itens do quadro). Não executado contra o GitHub real.
