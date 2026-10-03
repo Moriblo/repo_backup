@@ -25,7 +25,8 @@ SAÍDAS
     Código 0  : push aceito (pode não haver nada a despachar).
     Código 30 : violação; NADA é despachado (fail-closed, o push inteiro é recusado).
     Código 64 : uso incorreto / variável de ambiente ausente.
-    Em GITHUB_OUTPUT: `bkp_repo_matrix` (JSON para strategy.matrix) e `bkp_repo_count`.
+    Em GITHUB_OUTPUT, por Mnemonic: `<mnemonic>_matrix` (JSON para strategy.matrix) e
+    `<mnemonic>_count`, em minúsculas (hoje bkp_repo_* e bkp_proj_*).
 
 VARIÁVEIS DE AMBIENTE
     BEFORE, AFTER        commit anterior e novo do push (github.event.before / github.sha)
@@ -61,7 +62,10 @@ ZEROS = "0" * 40
 # Deve refletir os jobs do dispatcher.yml e o caminho que o registro de artefatos do capabilities.yaml
 # declara para o `command_workflow.artifact_id` do Mnemonic (a conferência é feita em validate_lines).
 # Para novo Mnemonic: acrescente aqui, um job no dispatcher.yml e o registro no capabilities.yaml.
-MNEMONIC_WORKFLOWS = {"BKP_REPO": ".github/workflows/backup-repository.yml"}
+MNEMONIC_WORKFLOWS = {
+    "BKP_REPO": ".github/workflows/backup-repository.yml",
+    "BKP_PROJ": ".github/workflows/backup-projects.yml",
+}
 
 # Código de saída para violações (distinto de erros de uso).
 VIOLATION = 30
@@ -243,26 +247,26 @@ def validate_lines(old_ids, lines):
     return accepted
 
 
-def build_matrix(accepted, mnemonic):
-    """Monta o `strategy.matrix` (formato {"include": [...]}) das linhas de um Mnemonic.
+def matrix_entry(obj):
+    """Inputs do workflow de UMA linha aprovada (só os params autorizados; nada é executado como comando).
 
-    `preflight_decision` vai como TEXTO JSON (string) porque inputs de workflow_call
-    só aceitam string/boolean/number; o workflow chamado faz o parse.
-    """
+    `preflight_decision` e `scope_identifiers` vão como TEXTO JSON (string) porque inputs de
+    workflow_call só aceitam string/boolean/number; o workflow chamado faz o parse."""
+    p = obj["params"]
+    entry = {"request_id": obj["request_id"], "destination": p["destination"],
+             "preflight_decision": json.dumps(p["preflight_decision"], sort_keys=True) if "preflight_decision" in p else ""}
+    if obj["mnemonic"] == "BKP_REPO":
+        entry["source_repository"] = p["source_repository"]
+    else:  # BKP_PROJ
+        entry["scope"] = p["scope"]
+        entry["scope_identifiers"] = json.dumps(p["scope_identifiers"], sort_keys=True)
+    return entry
+
+
+def build_matrix(accepted, mnemonic):
+    """Monta o `strategy.matrix` (formato {"include": [...]}) das linhas de um Mnemonic."""
     # Uma entrada da matriz por linha aprovada deste Mnemonic.
-    include = []
-    for obj in accepted:
-        if obj["mnemonic"] != mnemonic:
-            continue
-        # Só os params autorizados viram inputs do workflow; nenhum valor do log é executado como comando.
-        p = obj["params"]
-        include.append({
-            "request_id": obj["request_id"],
-            "source_repository": p["source_repository"],
-            "destination": p["destination"],
-            "preflight_decision": json.dumps(p["preflight_decision"], sort_keys=True) if "preflight_decision" in p else "",
-        })
-    return {"include": include}
+    return {"include": [matrix_entry(o) for o in accepted if o["mnemonic"] == mnemonic]}
 
 
 def set_output(key, value):
@@ -292,18 +296,20 @@ def main():
     if LOG not in changed:
         # Push legítimo (ex.: merge de PR) que não mexeu no log: nada a despachar.
         print("commands.log unchanged; nothing to dispatch.")
-        set_output("bkp_repo_matrix", json.dumps({"include": []}))
-        set_output("bkp_repo_count", "0")
+        for mnemonic in MNEMONIC_WORKFLOWS:
+            set_output(f"{mnemonic.lower()}_matrix", json.dumps({"include": []}))
+            set_output(f"{mnemonic.lower()}_count", "0")
         return
 
     # 4) Extrai as linhas NOVAS exigindo apenas acréscimo.
     old_ids, lines = new_lines(before, after)
     # 5) Valida cada linha nova; qualquer falha encerra com saída 30 e nada é despachado.
     accepted = validate_lines(old_ids, lines)
-    # 6) Monta a matriz do job `run-bkp-repo`; um Mnemonic novo precisa de matriz e job próprios.
-    matrix = build_matrix(accepted, "BKP_REPO")
-    set_output("bkp_repo_matrix", json.dumps(matrix, sort_keys=True))
-    set_output("bkp_repo_count", str(len(matrix["include"])))
+    # 6) Monta a matriz de cada Mnemonic (job `run-<mnemonic>` no dispatcher.yml); um Mnemonic novo precisa de job próprio.
+    for mnemonic in MNEMONIC_WORKFLOWS:
+        matrix = build_matrix(accepted, mnemonic)
+        set_output(f"{mnemonic.lower()}_matrix", json.dumps(matrix, sort_keys=True))
+        set_output(f"{mnemonic.lower()}_count", str(len(matrix["include"])))
     # Só IDs no log: o conteúdo das linhas não é ecoado.
     print("DISPATCH_ACCEPTED " + json.dumps({"request_ids": [o["request_id"] for o in accepted]}))
 

@@ -2,7 +2,8 @@
 # Check de rastreabilidade do registro de artefatos
 # =============================================================================
 # O QUE É
-#   Roda backup/scripts/validate_traceability.py --check e falha se o registro
+#   Roda os testes locais (backup/tests, servidores de API simulados) e o
+#   backup/scripts/validate_traceability.py --check, e falha se o registro
 #   (backup/capabilities.yaml) não bater com o repositório: artefato registrado que
 #   não existe, SHA desatualizado, arquivo sem registro (órfão), caminhos do Mnemonic
 #   incoerentes ou estado VALIDATED sem evidência.
@@ -37,7 +38,7 @@ jobs:
   traceability:
     name: Registry traceability
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       # Baixa o repositório na versão do pull request.
       - name: Checkout
@@ -50,6 +51,19 @@ jobs:
         run: |
           set -euo pipefail
           pip install --quiet pyyaml jsonschema
+
+      # Testes locais: schema da linha do commands.log, dispatch_check.py, leitores de API e
+      # bkp_repo.py nos dois modos (BKP_REPO e BKP_PROJ). Servidores SIMULADOS: não usam token,
+      # GitHub nem OneDrive reais. Qualquer teste que falhe reprova o check.
+      - name: Run local tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for t in backup/tests/test_*.py; do
+            echo "::group::$t"
+            python3 "$t"
+            echo "::endgroup::"
+          done
 
       # Confere o registro. Saída 1 = há problemas (listados no log, um por linha, com o
       # código do problema); saída 0 = registro coerente.

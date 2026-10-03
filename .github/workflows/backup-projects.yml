@@ -1,0 +1,302 @@
+# =============================================================================
+# Backup Projects (BKP_PROJ) - executor do Mnemonic BKP_PROJ
+# =============================================================================
+# O QUE É
+#   Workflow que executa o backup SÓ de Projects v2 do GitHub (origem, SOMENTE
+#   LEITURA) para o OneDrive pessoal (destino). É o Mnemonic BKP_PROJ do
+#   capabilities.yaml (backup_projects -> BKP_PROJ). A leitura é a mesma do BKP_REPO
+#   (backup/scripts/github_projects_read.py); aqui não há clone, bundle, LFS nem submódulos.
+#
+# COMO É ACIONADO
+#   Apenas via `workflow_call`, pelo dispatcher.yml, depois que o HITL deu GO e o
+#   engine gravou uma linha em commands.log. Sem `workflow_dispatch` de propósito.
+#
+# ECR (Exact Command Request)
+#   Os `inputs` do `on: workflow_call` abaixo SÃO o ECR. Mudou um input, mudou o ECR:
+#   exige nova autorização.
+#
+# ESCOPOS (input `scope`; identificadores em `scope_identifiers`, JSON)
+#   SOURCE_REPOSITORY  {"source_repository": "dono/nome"}  Projects ligados ao repositório
+#   PROJECT            {"owner": "dono", "number": N}      um Project
+#   OWNER_PROJECT_SET  {"owner": "dono"}                   todos os Projects do dono
+#
+# SEQUÊNCIA DOS PASSOS (não reordenar; ver BACKUP_REPOSITORY.md)
+#   1. Revalidar inputs            -> rejeita valores fora do schema
+#   2. Tokens                      -> PROJECTS_READ_TOKEN (classe projects); SOURCE_READ_TOKEN só no
+#                                     escopo SOURCE_REPOSITORY (títulos das issues, regra E); App Writer opcional
+#   3. Capability Preflight        -> pode terminar BLOCKED (HITL decide)
+#   4. Validar destino             -> OneDrive de verdade; falha fechada (saída 20)
+#   5. Ler Projects                -> package/api-projects*.json + evidence/api-projects-status.json
+#   6. Pacote                      -> JSON dos Projects + RESTAURAR.txt
+#   7. Enviar o pacote ao OneDrive -> upload conferido por hash
+#   8. Evidência e manifest 2.0    -> validados contra os schemas
+#   9. Enviar a evidência          -> ao OneDrive, conferida por hash
+#  10. Limpar e publicar           -> apaga o estado local; artefato do Actions (sempre)
+#
+# REGRAS QUE ESTE WORKFLOW RESPEITA
+#   - A origem é READ-ONLY: só consultas GraphQL/REST de leitura (o leitor recusa `mutation`).
+#   - Nenhum segredo é impresso; os tokens só aparecem em variável de ambiente dos passos que os usam.
+#   - Sem OIDC: OneDrive por OAuth delegado (Files.ReadWrite.AppFolder), pelo onedrive.py. O refresh
+#     token gira a cada uso: NÃO dispare dois comandos ao mesmo tempo (BKP_REPO e BKP_PROJ juntos
+#     também girariam o mesmo refresh token).
+#   - O BKP_RESULT que vale é o ÚLTIMO da execução.
+#   - Sucesso do workflow NÃO prova preservação; a prova é o manifest validado.
+# =============================================================================
+name: Backup Projects (BKP_PROJ)
+
+on:
+  workflow_call:
+    inputs:
+      # Identificador único da requisição, vindo da linha do commands.log.
+      request_id:
+        description: "Unique request id from commands.log, 8-64 chars [A-Za-z0-9._-] (required)"
+        required: true
+        type: string
+      # Escopo do backup de Projects.
+      scope:
+        description: "Projects scope: SOURCE_REPOSITORY, PROJECT or OWNER_PROJECT_SET (required; READ-ONLY)"
+        required: true
+        type: string
+      # Identificadores do escopo, em JSON (inputs de workflow_call só aceitam string).
+      scope_identifiers:
+        description: 'JSON of the scope identifiers: {"source_repository": "owner/name"} | {"owner": "...", "number": N} | {"owner": "..."} (required)'
+        required: true
+        type: string
+      # Pasta de destino DENTRO do AppFolder do OneDrive (não é um caminho absoluto).
+      destination:
+        description: "OneDrive AppFolder-relative path, no leading slash and no '..' (required)"
+        required: true
+        type: string
+      # Decisão do HITL após um BLOCKED de preflight. Vazio na 1ª execução.
+      preflight_decision:
+        description: "JSON of the HITL CONTINUE_WITH_RESTRICTIONS decision (previous_request_id, hitl_decision, accepted_restrictions); empty on a first run (optional)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  backup-projects:
+    name: BKP_PROJ ${{ inputs.request_id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Environment que guarda ONEDRIVE_CLIENT_ID, ONEDRIVE_REFRESH_TOKEN, PROJECTS_READ_TOKEN e SOURCE_READ_TOKEN.
+    environment: onedrive-backup
+    env:
+      # Faz o bkp_repo.py trabalhar com a capability backup_projects (preflight, evidência e manifest).
+      CAPABILITY_ID: backup_projects
+      REQUEST_ID: ${{ inputs.request_id }}
+      SCOPE: ${{ inputs.scope }}
+      SCOPE_IDENTIFIERS: ${{ inputs.scope_identifiers }}
+      DESTINATION: ${{ inputs.destination }}
+      PREFLIGHT_DECISION: ${{ inputs.preflight_decision }}
+      EVIDENCE_DIR: evidence
+      ONEDRIVE_SECRETS_ENVIRONMENT: onedrive-backup
+
+    steps:
+      - name: Checkout execution repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install --quiet pyyaml jsonschema pynacl
+
+      # Segunda barreira de validação (a primeira é do dispatcher): saída 2 e BKP_RESULT REJECTED
+      # se algum input violar o schema da linha do commands.log (inclui os identificadores do escopo).
+      - name: Revalidate inputs
+        shell: bash
+        run: python3 backup/scripts/bkp_repo.py validate-inputs
+
+      # Token de LEITURA de Projects: o secret PROJECTS_READ_TOKEN (token CLÁSSICO com `read:project`).
+      # Se faltar, o passo falha SEM derrubar o job: o preflight registra ACCESS_PERMISSION_GAP e o HITL decide.
+      - name: Provide Projects read token (PROJECTS_READ_TOKEN)
+        id: projects_token
+        continue-on-error: true
+        shell: bash
+        env:
+          PROJECTS_READ_TOKEN: ${{ secrets.PROJECTS_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PROJECTS_READ_TOKEN" ]]; then
+            echo "::warning::Secret PROJECTS_READ_TOKEN ausente no environment onedrive-backup: a classe projects ficará como restrição."
+            exit 1
+          fi
+          echo "::add-mask::$PROJECTS_READ_TOKEN"
+          echo "token=$PROJECTS_READ_TOKEN" >> "$GITHUB_OUTPUT"
+
+      # Só no escopo SOURCE_REPOSITORY: o SOURCE_READ_TOKEN lê as issues da origem (REST) para a regra E
+      # (confirmar pelos títulos os Projects cujo vínculo com o repositório privado fica oculto ao token
+      # de Projects). Sem ele, só os vínculos VISÍVEIS valem. Não é exigido pelo preflight.
+      - name: Provide read-only source token for title matching (SOURCE_READ_TOKEN)
+        id: token
+        if: inputs.scope == 'SOURCE_REPOSITORY'
+        continue-on-error: true
+        shell: bash
+        env:
+          SOURCE_READ_TOKEN: ${{ secrets.SOURCE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SOURCE_READ_TOKEN" ]]; then
+            echo "::warning::Secret SOURCE_READ_TOKEN ausente: sem a regra E, só os Projects com vínculo visível serão incluídos."
+            exit 1
+          fi
+          echo "::add-mask::$SOURCE_READ_TOKEN"
+          echo "token=$SOURCE_READ_TOKEN" >> "$GITHUB_OUTPUT"
+
+      # OPCIONAL: App Writer para a rotação do refresh token do OneDrive (ver backup-repository.yml).
+      - name: Issue secrets-writer token (GitHub App Writer)
+        id: writer
+        if: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_APP_ID }}
+          private-key: ${{ secrets.REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-secrets: write
+          permission-environments: write
+
+      # Capability Preflight (APÓS o GO, ANTES de ler a origem). Saída 10 = BLOCKED: o HITL decide.
+      # Aqui a classe projects é a única avaliada; sem PROJECTS_READ_TOKEN vira ACCESS_PERMISSION_GAP.
+      - name: Capability Preflight
+        id: preflight
+        shell: bash
+        env:
+          PROJECTS_TOKEN_OUTCOME: ${{ steps.projects_token.outcome }}
+        run: python3 backup/scripts/bkp_repo.py preflight
+
+      # Gate de destino (fail closed): prova escrita, leitura e remoção no OneDrive. Falha = saída 20.
+      - name: Validate destination (fail closed before reading Projects)
+        id: destination
+        shell: bash
+        env:
+          ONEDRIVE_CLIENT_ID: ${{ vars.ONEDRIVE_CLIENT_ID }}
+          ONEDRIVE_REFRESH_TOKEN: ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
+          SECRETS_WRITER_TOKEN: ${{ steps.writer.outputs.token }}
+        run: python3 backup/scripts/bkp_repo.py validate-destination
+
+      # Só no escopo SOURCE_REPOSITORY: lê as issues da origem numa pasta de TRABALHO (titles-work, fora
+      # do pacote), só para a regra E. Falha aqui não derruba o job: sem os títulos, nenhum candidato
+      # de vínculo oculto é confirmado (o leitor registra NO_SOURCE_TITLES).
+      - name: Read source issue titles for the title match (rule E)
+        if: inputs.scope == 'SOURCE_REPOSITORY' && steps.token.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
+          PACKAGE_DIR: titles-work
+          EVIDENCE_DIR: titles-work/evidence
+        run: |
+          set -euo pipefail
+          mkdir -p titles-work/evidence
+          SOURCE_REPOSITORY="$(python3 -c 'import json,os; print(json.loads(os.environ["SCOPE_IDENTIFIERS"])["source_repository"])')" \
+            python3 backup/scripts/github_api_read.py read
+
+      # Lê os Projects do escopo (SOMENTE consultas GraphQL) e grava package/api-projects*.json e
+      # evidence/api-projects-status.json. NÃO derruba o job quando a classe falha ou fica parcial: o
+      # build-evidence decide a disposição (PRESERVED-AS-EQUIVALENT-REPRESENTATION, PARTIALLY-PRESERVED ou FAILED).
+      - name: Read Projects of the requested scope
+        if: steps.projects_token.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          PROJECTS_TOKEN: ${{ steps.projects_token.outputs.token }}
+          PROJECTS_SCOPE: ${{ inputs.scope }}
+          PROJECTS_SCOPE_IDS: ${{ inputs.scope_identifiers }}
+          SOURCE_TITLES_DIR: titles-work
+        run: |
+          set -euo pipefail
+          mkdir -p package "$EVIDENCE_DIR"
+          python3 backup/scripts/github_projects_read.py read
+
+      # Monta o pacote em package/: api-projects*.json (já gravados pelo passo anterior) e o RESTAURAR.txt.
+      - name: Build package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p package
+          cat > package/RESTAURAR.txt <<'EOF'
+          BACKUP DE PROJECTS DO GITHUB - escopo @ESCOPO@ (pedido @PEDIDO@)
+
+          O QUE HA NESTA PASTA
+            api-projects.json        Cada Project: metadados, campos e opcoes, views, workflows,
+                                     status updates, repositorios ligados e `linkage` (como o
+                                     vinculo com o escopo foi estabelecido).
+            api-project-items.json   Itens de todos os Projects: valores de campo, itens
+                                     arquivados, referencias a issues e pull requests, rascunhos.
+            api-projects-inventory.json  Contagens, conferencias, SHA-256 e limitacoes da leitura
+                                     (inclui os candidatos EXCLUIDOS pela regra de confirmacao).
+
+          O QUE ESTE PACOTE E
+            REGISTRO em JSON (resposta da API GraphQL do GitHub), uma representacao equivalente.
+            NAO existe restauracao automatica: recriar um quadro pela API ainda nao faz parte
+            deste backup. Use estes arquivos para consultar o estado do quadro e, se preciso,
+            recria-lo a mao ou por uma futura capability de restauracao.
+
+          LIMITES
+            Itens cujo conteudo o token nao enxerga (por exemplo, issues de repositorio privado)
+            aparecem como "ocultos": o estado do quadro (titulo, status, campos) sobrevive, mas a
+            referencia a issue nao. Veja evidence/manifest.json e preflight.json na pasta evidence.
+            Segredos nunca sao preservados.
+          EOF
+          sed -i "s|@ESCOPO@|${SCOPE}|; s|@PEDIDO@|${REQUEST_ID}|" package/RESTAURAR.txt
+
+      - name: Upload package to OneDrive
+        shell: bash
+        env:
+          ONEDRIVE_CLIENT_ID: ${{ vars.ONEDRIVE_CLIENT_ID }}
+          ONEDRIVE_REFRESH_TOKEN: ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
+          SECRETS_WRITER_TOKEN: ${{ steps.writer.outputs.token }}
+        run: |
+          set -euo pipefail
+          rc=0
+          python3 backup/scripts/onedrive.py upload --prefix "${DESTINATION}/${REQUEST_ID}/package" \
+            --result "$EVIDENCE_DIR/onedrive-package.json" --files package/* || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            printf 'BKP_RESULT {"reason": "PACKAGE_UPLOAD_FAILED", "request_id": "%s", "status": "FAILED"}\n' "$REQUEST_ID"
+            exit "$rc"
+          fi
+
+      # Gera evidence.json e manifest.json (schemas 2.0), valida e imprime o BKP_RESULT.
+      - name: Build schema 2.0 evidence and manifest
+        shell: bash
+        env:
+          DESTINATION_VALIDATED: ${{ steps.destination.outputs.destination_validated }}
+        run: python3 backup/scripts/bkp_repo.py build-evidence
+
+      - name: Upload evidence to OneDrive
+        shell: bash
+        env:
+          ONEDRIVE_CLIENT_ID: ${{ vars.ONEDRIVE_CLIENT_ID }}
+          ONEDRIVE_REFRESH_TOKEN: ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
+          SECRETS_WRITER_TOKEN: ${{ steps.writer.outputs.token }}
+        run: |
+          set -euo pipefail
+          rc=0
+          python3 backup/scripts/onedrive.py upload --prefix "${DESTINATION}/${REQUEST_ID}/evidence" \
+            --result "${RUNNER_TEMP}/onedrive-evidence-upload.json" --files "$EVIDENCE_DIR"/* || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            printf 'BKP_RESULT {"reason": "EVIDENCE_UPLOAD_FAILED", "request_id": "%s", "status": "FAILED"}\n' "$REQUEST_ID"
+            exit "$rc"
+          fi
+
+      # Apaga o estado local do OneDrive (contém o refresh token corrente), MESMO se o job falhou.
+      - name: Remove local OneDrive state
+        if: always()
+        shell: bash
+        run: python3 backup/scripts/onedrive.py cleanup
+
+      - name: Publish evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bkp-proj-${{ inputs.request_id }}
+          path: evidence/
+          if-no-files-found: ignore
+          retention-days: 7

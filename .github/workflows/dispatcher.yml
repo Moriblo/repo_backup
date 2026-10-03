@@ -19,9 +19,11 @@
 #   guard        Valida o push e produz a matriz de despacho (dispatch_check.py).
 #                Qualquer violação falha o job e NADA é despachado (fail-closed).
 #   run-bkp-repo Chama o workflow do BKP_REPO uma vez por linha nova válida.
+#   run-bkp-proj Chama o workflow do BKP_PROJ (backup só de Projects) idem.
 #
 # MAPEAMENTO FIXO (Mnemonic -> workflow)
 #   BKP_REPO -> .github/workflows/backup-repository.yml
+#   BKP_PROJ -> .github/workflows/backup-projects.yml
 #   Um Mnemonic novo exige: (1) entrada em MNEMONIC_WORKFLOWS no dispatch_check.py,
 #   (2) um job `run-<mnemonic>` aqui, (3) registro em backup/capabilities.yaml.
 #   `uses:` precisa ser um caminho literal, por isso um job por Mnemonic (não há
@@ -68,6 +70,9 @@ jobs:
       bkp_repo_matrix: ${{ steps.check.outputs.bkp_repo_matrix }}
       # Quantidade de linhas do BKP_REPO a despachar (0 = nenhuma; o job seguinte é pulado).
       bkp_repo_count: ${{ steps.check.outputs.bkp_repo_count }}
+      # Idem para o BKP_PROJ (backup só de Projects).
+      bkp_proj_matrix: ${{ steps.check.outputs.bkp_proj_matrix }}
+      bkp_proj_count: ${{ steps.check.outputs.bkp_proj_count }}
     steps:
       # Histórico completo (fetch-depth: 0): o script compara o commit anterior do
       # push com o novo, e o anterior pode estar fora de um clone raso.
@@ -126,5 +131,32 @@ jobs:
     with:
       request_id: ${{ matrix.request_id }}
       source_repository: ${{ matrix.source_repository }}
+      destination: ${{ matrix.destination }}
+      preflight_decision: ${{ matrix.preflight_decision }}
+
+  # ---------------------------------------------------------------------------
+  # run-bkp-proj: chama o workflow do Mnemonic BKP_PROJ (backup só de Projects v2).
+  # Uma execução por linha nova (matrix). Só roda se houver ao menos uma.
+  # ---------------------------------------------------------------------------
+  run-bkp-proj:
+    name: BKP_PROJ ${{ matrix.request_id }}
+    needs: guard
+    if: needs.guard.outputs.bkp_proj_count != '0'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.guard.outputs.bkp_proj_matrix) }}
+    concurrency:
+      group: bkp-proj-${{ matrix.request_id }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    # Caminho LITERAL (mapeamento fixo), como no run-bkp-repo.
+    uses: ./.github/workflows/backup-projects.yml
+    secrets: inherit
+    # Os inputs do ECR do BKP_PROJ, vindos da linha validada do commands.log.
+    with:
+      request_id: ${{ matrix.request_id }}
+      scope: ${{ matrix.scope }}
+      scope_identifiers: ${{ matrix.scope_identifiers }}
       destination: ${{ matrix.destination }}
       preflight_decision: ${{ matrix.preflight_decision }}
