@@ -703,7 +703,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 3907e505bfa0942934eadb4b1c489c70ae728d50
+      current_sha: cb45c4de67e326ca8dc2e01e7b7ea5757b76ec12
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -894,8 +894,9 @@ implementation_artifacts:
       current_sha: 526d6628b90907cf7ff09787765de9e2fdb0aaf8
     validation:
       status: VALIDATED
-      scope: Linha inicial e linha de continuação validadas pelo dispatcher e revalidadas pelo BKP_REPO. Duas linhas BKP_PROJ (escopos PROJECT e OWNER_PROJECT_SET) validadas pelo dispatcher e revalidadas pelo backup-projects.yml em runs reais. Casos de rejeição só testados localmente. Depois da mudança do schema (preflight_decision em $defs), o BKP_REPO foi rodado de verdade com a primeira linha (req-20261003-006, BLOCKED no preflight) e a linha de continuação com as 13 restrições (req-20261003-007, COMPLETE_WITH_EXCEPTIONS), e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008). Não provado - linha de continuação do BKP_PROJ.
+      scope: "Linha inicial e linha de continuação validadas pelo dispatcher e revalidadas pelo BKP_REPO. Duas linhas BKP_PROJ (escopos PROJECT e OWNER_PROJECT_SET) validadas pelo dispatcher e revalidadas pelo backup-projects.yml em runs reais. Casos de rejeição só testados localmente. Depois da mudança do schema (preflight_decision em $defs), o BKP_REPO foi rodado de verdade com a primeira linha (req-20261003-006, BLOCKED no preflight) e a linha de continuação com as 13 restrições (req-20261003-007, COMPLETE_WITH_EXCEPTIONS), e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008). Não provado - linha de continuação do BKP_PROJ. Linha RST_REPO (backup_path) validada pelo dispatcher e revalidada pelo restore-repository.yml no Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues. Não provado - target_name e linha de continuação do RST_REPO."
       evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37137225805", commit: 08339506b9d4a7da87366116654f2e121b295af5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37093767488", commit: 96962d6f20f55df3c11f99c834a565407d1ceca6}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37093322390", commit: e4d30916c80bfd1aea2b88d1584da9f08f1a2e92}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37092140044", commit: f325f834243d444e69e09518771671921bd25588}
@@ -924,8 +925,9 @@ implementation_artifacts:
       current_sha: 97df13685bf539012e444d64f3371789550e308c
     validation:
       status: VALIDATED
-      scope: Caminho feliz (uma linha aceita e despachada, linha de continuação) e push sem mudança no log (merge de PR). Duas linhas BKP_PROJ aceitas e despachadas só para o backup-projects.yml, com o job do BKP_REPO pulado (runs 37091894311 e 37092140044). Recusas por violação só testadas localmente. Depois da mudança do dispatcher, o job do BKP_REPO rodou de verdade com a primeira linha (req-20261003-006, preflight BLOCKED) e a de continuação (req-20261003-007, 14 arquivos de pacote e 18 de evidência no OneDrive), e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008), sempre com o job do outro Mnemonic pulado. Não provado - mais de uma linha na mesma matriz e o dispatcher com duas linhas de Mnemonics diferentes no mesmo push.
+      scope: "Caminho feliz (uma linha aceita e despachada, linha de continuação) e push sem mudança no log (merge de PR). Duas linhas BKP_PROJ aceitas e despachadas só para o backup-projects.yml, com o job do BKP_REPO pulado (runs 37091894311 e 37092140044). Recusas por violação só testadas localmente. Depois da mudança do dispatcher, o job do BKP_REPO rodou de verdade com a primeira linha (req-20261003-006, preflight BLOCKED) e a de continuação (req-20261003-007, 14 arquivos de pacote e 18 de evidência no OneDrive), e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008), sempre com o job do outro Mnemonic pulado. Não provado - mais de uma linha na mesma matriz e o dispatcher com duas linhas de Mnemonics diferentes no mesmo push. Linha RST_REPO aceita e despachada só para o restore-repository.yml, com os jobs BKP_REPO e BKP_PROJ pulados (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues)."
       evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37137225805", commit: 08339506b9d4a7da87366116654f2e121b295af5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37093767488", commit: 96962d6f20f55df3c11f99c834a565407d1ceca6}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37093322390", commit: e4d30916c80bfd1aea2b88d1584da9f08f1a2e92}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37092140044", commit: f325f834243d444e69e09518771671921bd25588}
@@ -958,8 +960,9 @@ implementation_artifacts:
       current_sha: 68c85369866b47eca7cff45fbd48ce2b76992194
     validation:
       status: VALIDATED
-      scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. (e) com CAPABILITY_ID=backup_projects (BKP_PROJ), em dois runs reais (PROJECT nº 13, e OWNER_PROJECT_SET com 8 Projects e 201 itens): preflight de uma só classe sem exigir o SOURCE_READ_TOKEN, evidência e manifest 2.0 com o escopo no lugar do repositório e só o objeto projects (PARTIALLY-PRESERVED), COMPLETE_WITH_EXCEPTIONS. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura. (f) regressão do BKP_REPO depois da generalização por CAPABILITY_ID, em dois runs reais no repositório de teste de issues - req-20261003-006 (preflight BLOCKED com as mesmas 13 restrições, sem exigir mudança) e req-20261003-007 (continuação, COMPLETE_WITH_EXCEPTIONS - git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION, projects PARTIALLY-PRESERVED, 13 NOT-VERIFIED, 14 arquivos de pacote e 18 de evidência com hash conferido); e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008, 1 Project e 7 itens)."
+      scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. (e) com CAPABILITY_ID=backup_projects (BKP_PROJ), em dois runs reais (PROJECT nº 13, e OWNER_PROJECT_SET com 8 Projects e 201 itens): preflight de uma só classe sem exigir o SOURCE_READ_TOKEN, evidência e manifest 2.0 com o escopo no lugar do repositório e só o objeto projects (PARTIALLY-PRESERVED), COMPLETE_WITH_EXCEPTIONS. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura. (f) regressão do BKP_REPO depois da generalização por CAPABILITY_ID, em dois runs reais no repositório de teste de issues - req-20261003-006 (preflight BLOCKED com as mesmas 13 restrições, sem exigir mudança) e req-20261003-007 (continuação, COMPLETE_WITH_EXCEPTIONS - git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION, projects PARTIALLY-PRESERVED, 13 NOT-VERIFIED, 14 arquivos de pacote e 18 de evidência com hash conferido); e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008, 1 Project e 7 itens). validate-inputs e preflight de uma classe (git) com CAPABILITY_ID=restore_repository, sem exigir o SOURCE_READ_TOKEN, e destino validado em run real (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues). Não provado - preflight BLOCKED da restauração sem o RESTORE_WRITE_TOKEN."
       evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37137225805", commit: 08339506b9d4a7da87366116654f2e121b295af5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37093767488", commit: 96962d6f20f55df3c11f99c834a565407d1ceca6}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37093322390", commit: e4d30916c80bfd1aea2b88d1584da9f08f1a2e92}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37092140044", commit: f325f834243d444e69e09518771671921bd25588}
@@ -993,8 +996,9 @@ implementation_artifacts:
       current_sha: 53cec7e903ba53f82c2e79beeb27e68eff92e164
     validation:
       status: VALIDATED
-      scope: Caminho feliz e push sem mudança no log em runs reais, inclusive a matriz do BKP_PROJ (duas linhas despachadas). Verificações de violação só testadas localmente. A matriz do BKP_REPO depois da generalização por Mnemonic foi provada em run real (req-20261003-006 e req-20261003-007). Não provado - mais de uma linha por matriz e duas linhas de Mnemonics diferentes no mesmo push.
+      scope: "Caminho feliz e push sem mudança no log em runs reais, inclusive a matriz do BKP_PROJ (duas linhas despachadas). Verificações de violação só testadas localmente. A matriz do BKP_REPO depois da generalização por Mnemonic foi provada em run real (req-20261003-006 e req-20261003-007). Não provado - mais de uma linha por matriz e duas linhas de Mnemonics diferentes no mesmo push. Matriz do RST_REPO (request_id, backup_path, target_name vazio, preflight_decision) despachada em run real (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues)."
       evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37137225805", commit: 08339506b9d4a7da87366116654f2e121b295af5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37093767488", commit: 96962d6f20f55df3c11f99c834a565407d1ceca6}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37093322390", commit: e4d30916c80bfd1aea2b88d1584da9f08f1a2e92}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37092140044", commit: f325f834243d444e69e09518771671921bd25588}
@@ -1027,8 +1031,9 @@ implementation_artifacts:
       current_sha: 55a40d578b0ee0dc3e81e3f7b979f8ba7419f0ca
     validation:
       status: VALIDATED
-      scope: "Provado em run real - login na Microsoft, rotação do refresh token pelo App Writer, escrita/leitura/apagamento de prova, envio simples e em blocos (arquivos de ~26 e ~32 MiB) e conferência de hash por quickXorHash (21 de 21 arquivos, sem divergência). Não provado - expiração do refresh token, repositórios muito grandes."
+      scope: "Provado em run real - login na Microsoft, rotação do refresh token pelo App Writer, escrita/leitura/apagamento de prova, envio simples e em blocos (arquivos de ~26 e ~32 MiB) e conferência de hash por quickXorHash (21 de 21 arquivos, sem divergência). Não provado - expiração do refresh token, repositórios muito grandes. Download com conferência de tamanho e quickXorHash (3 arquivos de evidência e 2 do pacote) e envio da evidência da restauração em run real (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues). Não provado - download de arquivo grande (o arquivo inteiro é lido em memória) e hash divergente em run real."
       evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37137225805", commit: 08339506b9d4a7da87366116654f2e121b295af5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36802676819", commit: bf64abf66558347ec10fc517b665638dae2878e5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
@@ -1310,8 +1315,10 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: b2888ee8ac4ab41f0746c0ff420c0ead4da6b82d
     validation:
-      status: NOT_VALIDATED
-      scope: "Ainda não executado no Actions; a lógica (fetch, restore, evidência) é coberta pelos testes locais."
+      status: VALIDATED
+      scope: "Run real completo pelo dispatcher (req-20261003-009, run 37137225805): restauração do backup req-20261003-007 de Moriblo/backup_teste_issues para o repositório novo Moriblo/backup_teste_issues-restaurado, criado PRIVADO pelo workflow com o RESTORE_WRITE_TOKEN (token clássico, escopos repo e workflow). Preflight PASS de uma classe, destino validado, backup baixado e conferido, 1 branch (main) enviada e conferida contra o refs.tsv (0 tags, 0 refs puladas), branch padrão main, evidência e manifest 2.0 enviados com hash conferido (6 de 6 arquivos), COMPLETE_WITH_EXCEPTIONS (classe git PRESERVED; labels, milestones, issues e Projects NÃO restaurados, declarado na limitação LIM-restore-scope). Não provado - tags, refs/pull/*, Git LFS ao GitHub, branches com .github/workflows (permissão workflow), repo-metadata.json (descrição, tópicos e branch padrão a partir dele; este backup é anterior ao arquivo), target_name, alvo já existente, preflight BLOCKED sem o token, falha no meio e repositório grande. Não foi aberto o conteúdo do repositório restaurado nem o evidence.json nesta checagem."
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37137225805", commit: 08339506b9d4a7da87366116654f2e121b295af5}
     relationships:
       - {capability_id: restore_repository, relationship: EXECUTES}
 
@@ -1331,8 +1338,10 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: cd755c4851b04028514e56900772bee1e3a85cd9
     validation:
-      status: NOT_VALIDATED
-      scope: "Executado só em testes locais (OneDrive, API do GitHub e repositórios Git simulados). Não rodou no Actions."
+      status: VALIDATED
+      scope: "Rodou no run real req-20261003-009 (run 37137225805) nos três subcomandos - fetch (backup baixado e conferido), restore (repositório privado criado, 1 branch enviada, refs conferidas, branch padrão definida) e build-evidence (evidence.json e manifest.json válidos nos schemas 2.0). Não provado em run real - tags, Git LFS, refs/pull/*, branches com workflows, metadados do repo-metadata.json, as recusas (alvo existente ou igual à origem, token inválido), falhas no meio e repositório grande; essas só têm teste local."
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37137225805", commit: 08339506b9d4a7da87366116654f2e121b295af5}
     relationships:
       - {capability_id: restore_repository, relationship: EXECUTES}
 
