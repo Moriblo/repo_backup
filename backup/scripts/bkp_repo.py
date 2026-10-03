@@ -3,7 +3,8 @@
 
 O QUE É
     Um único script com quatro subcomandos, compartilhado pelos dois workflows. A capability é
-    escolhida pela variável CAPABILITY_ID (backup_repository, o padrão, ou backup_projects).
+    escolhida pela variável CAPABILITY_ID (backup_repository, o padrão, backup_projects ou, só para
+    validate-inputs, preflight e validate-destination, restore_repository).
     Cada workflow chama os subcomandos em um ponto fixo da execução. Manter a lógica aqui (e não em YAML inline) permite
     testar localmente e revisar com facilidade.
 
@@ -35,6 +36,8 @@ VARIÁVEIS DE AMBIENTE (definidas pelo workflow)
     REQUEST_ID, DESTINATION                      inputs autorizados (comuns)
     SOURCE_REPOSITORY                            input do BKP_REPO
     SCOPE, SCOPE_IDENTIFIERS                     inputs do BKP_PROJ (escopo e identificadores, este em JSON)
+    BACKUP_PATH, TARGET_NAME                     inputs do RST_REPO (backup a restaurar; nome opcional do alvo)
+    RESTORE_TOKEN_OUTCOME                        resultado do passo que fornece o token de escrita (RESTORE_WRITE_TOKEN)
     PREFLIGHT_DECISION                           JSON da decisão CONTINUE_WITH_RESTRICTIONS (opcional)
     TOKEN_OUTCOME                                resultado do passo que fornece o token de leitura (SOURCE_READ_TOKEN);
                                                  só conta nas capabilities com source_read_token_required (BKP_REPO)
@@ -119,6 +122,9 @@ def scope_subject():
         subject = {"SOURCE_REPOSITORY": ids.get("source_repository"), "PROJECT": f"{ids.get('owner')}/projects/{ids.get('number')}",
                    "OWNER_PROJECT_SET": f"{ids.get('owner')}/projects"}[scope]
         return subject, {"scope": scope, "scope_identifiers": ids, "destination": destination}
+    if CAPABILITY_ID == "restore_repository":
+        path = os.environ.get("BACKUP_PATH", "")
+        return path, {"backup_path": path, "destination": destination}
     source = os.environ.get("SOURCE_REPOSITORY", "")
     return source, {"source_repository": source, "destination": destination}
 
@@ -180,6 +186,11 @@ def cmd_validate_inputs():
             result("REJECTED", reason="INPUT_VALIDATION")
             sys.exit(2)
         params = {"scope": os.environ.get("SCOPE", ""), "scope_identifiers": ids, "destination": os.environ.get("DESTINATION", "")}
+    elif CAPABILITY_ID == "restore_repository":
+        mnemonic = "RST_REPO"
+        params = {"backup_path": os.environ.get("BACKUP_PATH", "")}
+        if os.environ.get("TARGET_NAME"):
+            params["target_name"] = os.environ["TARGET_NAME"]
     else:
         mnemonic = "BKP_REPO"
         params = {
@@ -239,7 +250,7 @@ def build_preflight():
     # a `implemented_classes` no capabilities.yaml.
     implemented_classes = set(cap.get("implemented_classes", []))
     # Classes que precisam de uma credencial PRÓPRIA além do token de leitura da origem
-    # (hoje: projects, com o PROJECTS_READ_TOKEN). `class_credentials` no registro dá o nome do
+    # (hoje: projects, com o PROJECTS_READ_TOKEN; e git na restauração, com o RESTORE_WRITE_TOKEN). `class_credentials` no registro dá o nome do
     # secret e a variável com o resultado do passo que o fornece (ex.: PROJECTS_TOKEN_OUTCOME).
     class_credentials = cap.get("class_credentials", {})
     assessments, gaps, pending = [], [], []
@@ -303,7 +314,7 @@ def build_preflight():
                 "preservation_impact": f"{cls} is not preserved; its state is NOT-VERIFIED, never treated as absent.",
                 "resulting_restriction": f"{cls} excluded from this preservation and reported NOT-VERIFIED.",
             })
-        if cls == "git":
+        if cls == "git" and CAPABILITY_ID == "backup_repository":
             # Se a origem usa LFS ou submódulos só se descobre no Source Inventory.
             # A rota existe (route_defined), portanto NÃO é uma lacuna.
             pending.append({"object_class": "git", "pending_fact": "Git LFS usage and submodule presence in the source", "route_defined": True})

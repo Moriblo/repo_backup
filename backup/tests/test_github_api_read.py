@@ -105,7 +105,9 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
         d = cls.data
         if route == f"/repos/{REPO}":
             opened = sum(1 for i in d["issues"] if i["state"] == "open")
-            return self._send(200, {"open_issues_count": cls.open_count if cls.open_count is not None else opened})
+            return self._send(200, {"open_issues_count": cls.open_count if cls.open_count is not None else opened,
+                                    "full_name": REPO, "private": True, "visibility": "private", "description": "Repositório de teste",
+                                    "topics": ["backup", "teste"], "default_branch": "main", "archived": False, "token_like": "NAO_COPIAR"})
         lists = {f"/repos/{REPO}/labels": d["labels"], f"/repos/{REPO}/milestones": d["milestones"],
                  f"/repos/{REPO}/issues": d["issues"], f"/repos/{REPO}/issues/comments": d["comments"],
                  f"/repos/{REPO}/issues/events": d["events"]}
@@ -182,6 +184,23 @@ class ReadTest(unittest.TestCase):
         import hashlib
         entry = st["labels"]["files"][0]
         self.assertEqual(entry["sha256"], hashlib.sha256((self.root / "package" / "api-labels.json").read_bytes()).hexdigest())
+
+    def test_metadados_do_repositorio_para_a_restauracao(self):
+        status = self.run_read()
+        meta = self.load("repo-metadata.json")
+        self.assertEqual((meta["schema"], meta["full_name"], meta["visibility"], meta["default_branch"]),
+                         ("repo-metadata/1", REPO, "private", "main"))
+        self.assertEqual((meta["description"], meta["topics"]), ("Repositório de teste", ["backup", "teste"]))
+        self.assertNotIn("token_like", meta)                 # só os campos da lista são copiados
+        self.assertTrue(status["repo_metadata"]["written"])
+
+    def test_falha_nos_metadados_nao_derruba_as_classes(self):
+        FakeGitHub.fail = {f"/repos/{REPO}": 403}
+        status = self.run_read()
+        self.assertFalse((self.root / "package" / "repo-metadata.json").exists())
+        self.assertFalse(status["repo_metadata"]["written"])
+        self.assertIn("403", status["repo_metadata"]["error"])
+        self.assertEqual(status["classes"]["labels"]["status"], "OK")
 
     def test_somente_get_e_token_nao_vaza(self):
         self.run_read()

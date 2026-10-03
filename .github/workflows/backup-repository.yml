@@ -463,6 +463,18 @@ jobs:
                                    REGISTRO: o git push NAO os restaura (ver abaixo).
             api-projects*.json     (so se o backup leu Projects) Projects v2 ligados ao
                                    repositorio: campos, views, itens e valores. Tambem REGISTRO.
+            repo-metadata.json     Visibilidade, descricao, topicos e branch padrao do repositorio
+                                   no momento do backup (usado pela restauracao automatica).
+
+          DUAS FORMAS DE RESTAURAR
+            AUTOMATICA (opcional): a capability restore_repository do repo_backup (comando RST_REPO)
+              restaura este backup sozinha. Voce informa so a pasta deste backup no OneDrive; o
+              workflow confere os hashes, cria o repositorio NOVO e PRIVADO "<nome>-restaurado",
+              envia branches, tags e LFS e confere as refs. Cobre SO o codigo (git). Labels,
+              milestones, issues e Projects NAO sao restaurados por ela (ainda).
+            MANUAL: o roteiro abaixo. Funciona sem o repo_backup, sem o GitHub Actions e sem token
+              guardado em lugar nenhum; e o plano B quando a restauracao automatica nao estiver
+              disponivel. Os dois levam ao mesmo resultado para o codigo.
 
           ANTES DE COMECAR (o que voce precisa fazer com as proprias maos)
             - Restaure para um repositorio NOVO e VAZIO. Nunca sobre o repositorio original.
@@ -471,7 +483,12 @@ jobs:
               found", a colagem trouxe marcas invisiveis: cole com o botao direito do mouse ou
               digite o comando.
             - Baixe TODOS os arquivos desta pasta (package) do OneDrive para uma pasta local
-              vazia, por exemplo "restauro", e abra o terminal dentro dela.
+              vazia, por exemplo "restauro", e abra o terminal dentro dela. Baixe tambem
+              manifest.json, da pasta evidence ao lado.
+            - Confira os arquivos baixados: cada arquivo do pacote tem o SHA-256 registrado em
+              manifest.json (campo "artifacts", "sha256"). Compare com o que voce baixou:
+                 sha256sum source.bundle refs.tsv
+              Se algum valor for diferente, o download esta corrompido: baixe de novo.
             - Tenha em maos uma forma de autenticar no GitHub para ENVIAR (passo 5): o proprio
               git abre o login no navegador, ou use um token pessoal (GitHub > Settings >
               Developer settings > Personal access tokens) com permissao de escrita em

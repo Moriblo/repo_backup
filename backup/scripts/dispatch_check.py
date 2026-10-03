@@ -65,6 +65,7 @@ ZEROS = "0" * 40
 MNEMONIC_WORKFLOWS = {
     "BKP_REPO": ".github/workflows/backup-repository.yml",
     "BKP_PROJ": ".github/workflows/backup-projects.yml",
+    "RST_REPO": ".github/workflows/restore-repository.yml",
 }
 
 # Código de saída para violações (distinto de erros de uso).
@@ -253,13 +254,16 @@ def matrix_entry(obj):
     `preflight_decision` e `scope_identifiers` vão como TEXTO JSON (string) porque inputs de
     workflow_call só aceitam string/boolean/number; o workflow chamado faz o parse."""
     p = obj["params"]
-    entry = {"request_id": obj["request_id"], "destination": p["destination"],
+    entry = {"request_id": obj["request_id"], "destination": p.get("destination", ""),
              "preflight_decision": json.dumps(p["preflight_decision"], sort_keys=True) if "preflight_decision" in p else ""}
     if obj["mnemonic"] == "BKP_REPO":
         entry["source_repository"] = p["source_repository"]
-    else:  # BKP_PROJ
+    elif obj["mnemonic"] == "BKP_PROJ":
         entry["scope"] = p["scope"]
         entry["scope_identifiers"] = json.dumps(p["scope_identifiers"], sort_keys=True)
+    else:  # RST_REPO: não tem `destination` (o destino da evidência sai do backup_path)
+        entry = {"request_id": obj["request_id"], "backup_path": p["backup_path"], "target_name": p.get("target_name", ""),
+                 "preflight_decision": entry["preflight_decision"]}
     return entry
 
 
