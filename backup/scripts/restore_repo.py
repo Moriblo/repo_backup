@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Restaura um backup do BKP_REPO (OneDrive) para um repositório NOVO do GitHub (RST_REPO).
+"""Restaura um backup do BKP_REPO (OneDrive) para um repositório NOVO do GitHub (RST_REPO): git, labels e milestones.
 
 O QUE É
     Script do workflow restore-repository.yml, com três subcomandos. É a primeira escrita no GitHub do
@@ -14,11 +14,15 @@ SUBCOMANDOS
     fetch           baixa evidence.json, manifest.json e onedrive-package.json de <BACKUP_PATH>/evidence/ e
                     os arquivos do pacote de <BACKUP_PATH>/package/; confere o SHA-256 de cada um contra o
                     manifest e o onedrive-package.json; só aceita um backup do BKP_REPO que não terminou
-                    FAILED e cuja classe git foi preservada. Grava restore-work/plan.json.
+                    FAILED e cuja classe git foi preservada. Baixa também api-labels.json e api-milestones.json,
+                    quando a evidência do backup diz que a classe foi preservada; senão a classe fica NOT-VERIFIED
+                    (não é restaurada, nem tratada como vazia). Grava restore-work/plan.json.
     restore         confere o bundle, define o alvo (<dono>/<nome>-restaurado, ou TARGET_NAME), recusa se o
                     alvo for a origem ou já existir, cria o repositório PRIVADO, envia SÓ refs/heads/* e
                     refs/tags/* (sem --force, sem refs/pull/*), envia o LFS, define a branch padrão e confere
-                    as refs do alvo contra o refs.tsv. Grava evidence/restore-result.json.
+                    as refs do alvo contra o refs.tsv. Só depois disso restaura as labels e os milestones (API REST,
+                    sem DELETE) e confere o que ficou no alvo campo a campo. Grava evidence/restore-result.json e
+                    evidence/restore-map.json (milestone antigo -> novo, para a restauração das issues).
     build-evidence  monta evidence.json e manifest.json (schemas 2.0) da restauração.
                     (saída 21 = destino não validado; 1 = FAILED)
 
@@ -35,6 +39,7 @@ CÓDIGOS DE SAÍDA
     44  falha no envio de branches e tags
     45  as refs do alvo não conferem com o refs.tsv
     46  falha no envio dos objetos LFS
+    48  git restaurado e conferido, mas labels ou milestones não voltaram como no backup (o alvo NÃO é apagado)
     64  uso incorreto ou variável ausente
 
 VARIÁVEIS DE AMBIENTE
@@ -53,9 +58,12 @@ REGRAS QUE ESTE SCRIPT NUNCA QUEBRA
     - Só escreve no repositório que criou nesta execução, privado, e nunca com --force.
     - Nunca imprime o token. A URL de envio não leva o token: ele vai por cabeçalho HTTP (GIT_CONFIG_*).
     - O alvo parcial (falha no meio) NÃO é apagado: o resultado diz qual é, e o HITL decide.
+    - Nada é apagado no GitHub: as labels padrão que o GitHub cria e que não existem na origem ficam no alvo e são
+      só listadas no resultado.
     - Sucesso do workflow NÃO prova restauração: a prova é o manifest validado e as refs conferidas.
 """
 import base64
+import datetime
 import hashlib
 import json
 import os
@@ -81,10 +89,23 @@ GIT_BASE = os.environ.get("GITHUB_GIT_BASE", "https://github.com").rstrip("/")
 
 # Arquivos do pacote: os dois primeiros são obrigatórios; os outros, só se existirem no backup.
 REQUIRED = ("source.bundle", "refs.tsv")
-OPTIONAL = ("lfs-objects.tar", "repo-metadata.json")
+OPTIONAL = ("lfs-objects.tar", "repo-metadata.json", "api-labels.json", "api-milestones.json")
+# Classes de API restauradas por esta etapa e o arquivo do pacote de cada uma.
+DATA_CLASSES = {"labels": "api-labels.json", "milestones": "api-milestones.json"}
+# Disposições do backup que dizem que a classe foi lida e preservada (o resto não é restaurado).
+DATA_READY = ("PRESERVED", "PRESERVED-AS-EQUIVALENT-REPRESENTATION")
+# O GitHub limita escritas em sequência (limite secundário): pausa entre escritas e espera quando ele pede.
+WRITE_DELAY = float(os.environ.get("RESTORE_WRITE_DELAY", "0.8"))
+RATE_WAIT = float(os.environ.get("RESTORE_RATE_WAIT", "60"))
 # Nome do alvo: letras, números, ponto, hífen e sublinhado (regra do GitHub e do schema da linha).
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 SOURCE_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# Limitação padrão de cada classe de API restaurada com sucesso (a disposição é equivalente, nunca idêntica).
+RESTORE_LIMITATIONS = {
+    "labels": "Restored through the API: name, color and description match the backup; the internal label id is not preserved.",
+    "milestones": "Restored through the API: title, state, description and due date match the backup; creation and closing dates and the "
+                  "creator cannot be set, and milestone numbers may change when the source had gaps.",
+}
 # Só estas refs voltam ao GitHub; refs/pull/* e outras são gerenciadas por ele e não aceitam envio.
 PUSHABLE = ("refs/heads/", "refs/tags/")
 
@@ -147,6 +168,32 @@ def gh(method, path, body=None, token=None, retries=3):
     return last
 
 
+def gh_write(method, path, body):
+    """Escrita no alvo, com pausa entre chamadas e espera quando o GitHub pede (403/429 de limite de taxa)."""
+    for attempt in range(3):
+        time.sleep(WRITE_DELAY)
+        status, payload = gh(method, path, body)
+        limited = status in (403, 429) and "rate limit" in str((payload or {}).get("message", "")).lower()
+        if not limited or attempt == 2:
+            return status, payload
+        time.sleep(RATE_WAIT)
+    return status, payload
+
+
+def gh_list(path):
+    """Lista paginada (100 por página) de uma rota GET do alvo. Devolve (status, itens)."""
+    items = []
+    for page in range(1, 201):
+        sep = "&" if "?" in path else "?"
+        status, payload = gh("GET", f"{path}{sep}per_page=100&page={page}")
+        if status != 200 or not isinstance(payload, list):
+            return status, payload
+        items.extend(payload)
+        if len(payload) < 100:
+            return 200, items
+    return 200, items
+
+
 def short(status, payload):
     """Resumo seguro de um erro da API: status e mensagem do serviço."""
     return f"HTTP {status}: {str((payload or {}).get('message', ''))[:160]}"
@@ -187,6 +234,29 @@ def sha256_file(path):
 
 
 # --- fetch --------------------------------------------------------------------------------
+
+def data_classes_plan(ev, files):
+    """O que fazer com labels e milestones: READY (restaurar) ou NOT_VERIFIED (com o motivo), nunca "vazio" por engano."""
+    out = {}
+    for cls, fname in DATA_CLASSES.items():
+        obj = next((o for o in ev["objects"] if o["object_class"] == cls), None)
+        if obj is None:
+            out[cls] = {"status": "NOT_VERIFIED", "reason": f"a evidência do backup não traz a classe {cls}"}
+        elif obj["disposition"] not in DATA_READY:
+            out[cls] = {"status": "NOT_VERIFIED", "reason": f"a classe {cls} ficou {obj['disposition']} no backup"}
+        elif fname not in files:
+            out[cls] = {"status": "NOT_VERIFIED", "reason": f"{fname} não está no pacote do backup"}
+        else:
+            try:
+                items = json.loads((RESTORE_DIR / "package" / fname).read_text(encoding="utf-8"))
+                if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+                    raise ValueError("não é uma lista de objetos")
+            except ValueError as exc:
+                out[cls] = {"status": "NOT_VERIFIED", "reason": f"{fname} não pôde ser lido: {exc}"}
+                continue
+            out[cls] = {"status": "READY", "file": fname, "count": len(items)}
+    return out
+
 
 def cmd_fetch():
     """Baixa e confere o backup. Não escreve nada no GitHub."""
@@ -247,13 +317,15 @@ def cmd_fetch():
         metadata = {}
         if "repo-metadata.json" in files:
             metadata = json.loads((RESTORE_DIR / "package" / "repo-metadata.json").read_text())
+        classes = data_classes_plan(ev, files)
         plan = {"source_repository": source, "backup_request_id": ev["request_id"], "backup_path": base,
                 "backup_status": man["status"], "git_disposition": git_obj["disposition"], "files": files,
-                "has_lfs": "lfs-objects.tar" in files, "metadata": metadata}
+                "has_lfs": "lfs-objects.tar" in files, "metadata": metadata, "classes": classes}
         (RESTORE_DIR / "plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
         print("RESTORE_FETCH " + json.dumps({"source_repository": source, "backup_request_id": ev["request_id"],
                                              "files": sorted(files), "has_lfs": plan["has_lfs"],
-                                             "has_metadata": bool(metadata)}, sort_keys=True), flush=True)
+                                             "has_metadata": bool(metadata),
+                                             "classes": {c: v["status"] for c, v in classes.items()}}, sort_keys=True), flush=True)
     except RestoreError as err:
         fail(err, state)
 
@@ -271,6 +343,124 @@ def choose_default_branch(plan, heads, mirror):
         return head
     only = [r[len("refs/heads/"):] for r in heads]
     return only[0] if len(only) == 1 else None
+
+
+def restore_labels(repo, labels):
+    """Recria as labels do backup no alvo e confere. Devolve o resultado da classe (status OK ou FAILED)."""
+    status, existing = gh_list(f"/repos/{repo}/labels")
+    if status != 200:
+        return {"status": "FAILED", "reason": "não foi possível listar as labels do alvo: " + short(status, existing)}
+    by_name = {l["name"].lower(): l["name"] for l in existing}
+    created = updated = 0
+    errors = []
+    for lb in labels:
+        name = lb.get("name")
+        body = {"color": str(lb.get("color") or "ededed").lstrip("#"), "description": lb.get("description") or ""}
+        if not name:
+            errors.append("label sem nome no backup")
+            continue
+        current = by_name.get(name.lower())
+        if current is None:
+            status, payload = gh_write("POST", f"/repos/{repo}/labels", dict(body, name=name))
+            ok, bucket = status == 201, "created"
+        else:
+            status, payload = gh_write("PATCH", f"/repos/{repo}/labels/{urllib.parse.quote(current, safe='')}", dict(body, new_name=name))
+            ok, bucket = status == 200, "updated"
+        if ok:
+            created += bucket == "created"
+            updated += bucket == "updated"
+        else:
+            errors.append(f"{name}: " + short(status, payload))
+    # Conferência: lê de volta e compara nome, cor e descrição de cada label do backup.
+    status, after = gh_list(f"/repos/{repo}/labels")
+    if status != 200:
+        return {"status": "FAILED", "reason": "não foi possível conferir as labels do alvo: " + short(status, after)}
+    got = {l["name"]: l for l in after}
+    mismatches = []
+    for lb in labels:
+        name = lb.get("name")
+        item = got.get(name)
+        want = (str(lb.get("color") or "ededed").lstrip("#").lower(), lb.get("description") or "")
+        if item is None or ((item.get("color") or "").lower(), item.get("description") or "") != want:
+            mismatches.append(name)
+    wanted = {(lb.get("name") or "").lower() for lb in labels}
+    extras = sorted(n for n in got if n.lower() not in wanted)
+    out = {"status": "OK", "expected": len(labels), "created": created, "updated": updated, "extras": extras}
+    if errors or mismatches:
+        out.update(status="FAILED", errors=errors[:10], mismatches=sorted(m for m in mismatches if m)[:10],
+                   reason=f"{len(errors)} erro(s) de escrita e {len(mismatches)} label(s) que não conferem")
+    return out
+
+
+def due_date(value):
+    """Data (UTC) de um due_on ISO 8601, ou None."""
+    try:
+        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(datetime.timezone.utc).date().isoformat()
+    except (AttributeError, ValueError):
+        return None
+
+
+def restore_milestones(repo, milestones):
+    """Recria os milestones em ordem de número, guarda o mapa antigo -> novo e confere. Devolve (resultado, mapa)."""
+    ordered = sorted(milestones, key=lambda m: m.get("number", 0))
+    mapping, errors, notes = {}, [], []
+    for m in ordered:
+        want_closed = m.get("state") == "closed"
+        body = {"title": m.get("title"), "description": m.get("description") or "", "state": "closed" if want_closed else "open"}
+        if m.get("due_on"):
+            body["due_on"] = m["due_on"]
+        status, created = gh_write("POST", f"/repos/{repo}/milestones", body)
+        if status != 201 or "number" not in created:
+            errors.append(f"{m.get('title')}: " + short(status, created))
+            continue
+        mapping[m.get("number")] = created["number"]
+        if want_closed and created.get("state") != "closed":
+            status, payload = gh_write("PATCH", f"/repos/{repo}/milestones/{created['number']}", {"state": "closed"})
+            if status != 200:
+                errors.append(f"{m.get('title')}: não foi possível fechar: " + short(status, payload))
+    status, after = gh_list(f"/repos/{repo}/milestones?state=all")
+    if status != 200:
+        return {"status": "FAILED", "reason": "não foi possível conferir os milestones do alvo: " + short(status, after)}, mapping
+    got = {m["number"]: m for m in after}
+    mismatches = []
+    for m in ordered:
+        new = mapping.get(m.get("number"))
+        item = got.get(new)
+        if item is None:
+            mismatches.append(m.get("title"))
+            continue
+        same = (item.get("title"), item.get("state"), item.get("description") or "") == (m.get("title"), m.get("state"), m.get("description") or "")
+        if m.get("due_on") and item.get("due_on") != m["due_on"]:
+            if due_date(item.get("due_on")) == due_date(m["due_on"]):
+                notes.append(f"o GitHub normalizou o horário do prazo de '{m.get('title')}' (a data é a mesma)")
+            else:
+                same = False
+        if not m.get("due_on") and item.get("due_on"):
+            same = False
+        if not same:
+            mismatches.append(m.get("title"))
+    shifted = sorted(old for old, new in mapping.items() if old != new)
+    out = {"status": "OK", "expected": len(ordered), "created": len(mapping), "numbers_changed": shifted, "notes": notes}
+    if errors or mismatches:
+        out.update(status="FAILED", errors=errors[:10], mismatches=mismatches[:10],
+                   reason=f"{len(errors)} erro(s) de escrita e {len(mismatches)} milestone(s) que não conferem")
+    return out, mapping
+
+
+def restore_data_classes(plan, repo):
+    """Restaura labels e milestones do plano. Devolve ({classe: resultado}, mapa de milestones)."""
+    results, mapping = {}, {}
+    for cls, fname in DATA_CLASSES.items():
+        info = plan.get("classes", {}).get(cls, {"status": "NOT_VERIFIED", "reason": "o plano não traz a classe"})
+        if info["status"] != "READY":
+            results[cls] = {"status": "NOT_VERIFIED", "reason": info["reason"]}
+            continue
+        items = json.loads((RESTORE_DIR / "package" / fname).read_text(encoding="utf-8"))
+        if cls == "labels":
+            results[cls] = restore_labels(repo, items)
+        else:
+            results[cls], mapping = restore_milestones(repo, items)
+    return results, mapping
 
 
 def cmd_restore():
@@ -384,11 +574,23 @@ def cmd_restore():
         status, repo = gh("GET", f"/repos/{created['full_name']}")
         if default_branch and status == 200 and repo.get("default_branch") != default_branch:
             notes.append(f"a branch padrão do alvo é {repo.get('default_branch')}, não {default_branch}")
+        # 7. Labels e milestones, só depois de o git estar restaurado e conferido. Uma falha aqui não apaga nada:
+        # o git fica como está, o resultado diz o que não voltou e o job termina com o código 48.
+        classes, mapping = restore_data_classes(plan, created["full_name"])
+        (EVIDENCE / "restore-map.json").write_text(json.dumps(
+            {"schema": "restore-map/1", "source_repository": source, "target_repository": created["full_name"],
+             "milestones": {str(old): new for old, new in sorted(mapping.items())}}, indent=2, sort_keys=True) + "\n")
         data = {"status": "OK", **state, "default_branch": default_branch, "heads": len(heads),
                 "tags": len(to_push) - len(heads), "skipped_refs": len(skipped), "skipped_examples": skipped[:5],
-                "lfs": plan["has_lfs"], "notes": notes, "backup_request_id": plan["backup_request_id"]}
+                "lfs": plan["has_lfs"], "notes": notes, "backup_request_id": plan["backup_request_id"], "classes": classes}
         write_result(data)
         print("RESTORE_OK " + json.dumps({k: data[k] for k in ("target_repository", "html_url", "default_branch", "heads", "tags", "skipped_refs", "lfs")}, sort_keys=True), flush=True)
+        print("RESTORE_CLASSES " + json.dumps({c: v["status"] for c, v in classes.items()}, sort_keys=True), flush=True)
+        failed = sorted(c for c, v in classes.items() if v["status"] == "FAILED")
+        if failed:
+            print(f"::error::DATA_RESTORE_FAILED: {', '.join(failed)} não voltaram como no backup; o alvo foi mantido.")
+            b.result("FAILED", reason="DATA_RESTORE_FAILED", target_repository=state["target_repository"], created=True, failed_classes=failed)
+            sys.exit(48)
     except RestoreError as err:
         fail(err, state)
 
@@ -425,8 +627,36 @@ def cmd_build_evidence():
     objects = [{"object_class": "git", "object_id": f"{target}", "disposition": disposition, "evidence": evidence_files,
                 "limitation": limitation}]
     limitations = [{"limitation_id": "LIM-restore-scope", "restriction_id": None, "object_class": None,
-                    "description": "This stage restores only the git class (branches, tags, LFS). Labels, milestones, issues, projects and every "
+                    "description": "This stage restores git (branches, tags, LFS), labels and milestones. Issues, projects and every "
                                    "other class kept in the backup package are NOT restored; see RESTAURAR.txt."}]
+    # Labels e milestones: o resultado de cada classe vem do restore; sem ele (git não restaurado), NOT-VERIFIED.
+    planned = plan.get("classes", {})
+    results = res.get("classes", {}) if ok else {}
+    data_files = evidence_files + (["restore-map.json"] if (EVIDENCE / "restore-map.json").exists() else [])
+    unreconciled = []
+    for cls in DATA_CLASSES:
+        r = results.get(cls)
+        if r is None:
+            reason = (planned.get(cls) or {}).get("reason") if planned.get(cls, {}).get("status") == "NOT_VERIFIED" else None
+            r = {"status": "NOT_VERIFIED", "reason": reason or "a restauração não chegou a esta classe"}
+        object_id = f"{target}#{cls}"
+        if r["status"] == "OK":
+            disp = "PRESERVED-AS-EQUIVALENT-REPRESENTATION"
+            lim = RESTORE_LIMITATIONS[cls]
+            if cls == "labels" and r.get("extras"):
+                lim += f" Labels padrão do GitHub que não existem na origem permanecem no alvo: {', '.join(r['extras'][:12])}."
+            if cls == "milestones" and r.get("numbers_changed"):
+                lim += f" Números de milestone que mudaram (origem: {', '.join(str(n) for n in r['numbers_changed'][:12])}); o mapa está em restore-map.json."
+            if r.get("notes"):
+                lim += " " + "; ".join(r["notes"][:3]) + "."
+            limitations.append({"limitation_id": f"LIM-{cls}-restore", "description": lim, "restriction_id": None, "object_class": cls})
+        elif r["status"] == "FAILED":
+            disp, lim = "FAILED", f"{r.get('reason')}"
+        else:
+            disp, lim = "NOT-VERIFIED", f"Not restored: {r['reason']}."
+            unreconciled.append(cls)
+            limitations.append({"limitation_id": f"LIM-{cls}-not-restored", "description": lim, "restriction_id": None, "object_class": cls})
+        objects.append({"object_class": cls, "object_id": object_id, "disposition": disp, "evidence": data_files, "limitation": lim})
     if limitation and disposition != "FAILED":
         limitations.append({"limitation_id": "LIM-git-refs", "description": limitation, "restriction_id": None, "object_class": "git"})
     for i, note in enumerate(res.get("notes", []), 1):
@@ -448,14 +678,16 @@ def cmd_build_evidence():
 
     arts = [{"path": p.name, "sha256": b.sha256(p), "object_class": "evidence", "bytes": p.stat().st_size}
             for p in sorted(EVIDENCE.iterdir()) if p.is_file() and p.name != "manifest.json"]
-    status = "FAILED" if disposition == "FAILED" else "COMPLETE_WITH_EXCEPTIONS"
+    dispositions = [o["disposition"] for o in objects]
+    status = "FAILED" if "FAILED" in dispositions else "COMPLETE_WITH_EXCEPTIONS"
     manifest = {"schema_version": "2.0", "request_id": request_id, "capability_id": "restore_repository", "scope": scope,
                 "started_at": started, "completed_at": b.now(), "status": status,
                 "capability_preflight": {"status": pf["status"], "hitl_decision": pf["hitl_decision"], "accepted_restrictions": pf["accepted_restrictions"]},
                 "artifacts": arts,
-                "reconciliation": {"preserved": int(disposition == "PRESERVED"), "equivalent": 0, "partial": int(disposition == "PARTIALLY-PRESERVED"),
-                                   "non_exportable": 0, "failed": int(disposition == "FAILED"), "not_verified": 0,
-                                   "unreconciled_object_classes": [], "restrictions_reconciled": True},
+                "reconciliation": {"preserved": dispositions.count("PRESERVED"), "equivalent": dispositions.count("PRESERVED-AS-EQUIVALENT-REPRESENTATION"),
+                                   "partial": dispositions.count("PARTIALLY-PRESERVED"), "non_exportable": 0, "failed": dispositions.count("FAILED"),
+                                   "not_verified": dispositions.count("NOT-VERIFIED"),
+                                   "unreconciled_object_classes": unreconciled, "restrictions_reconciled": True},
                 "limitations": limitations}
     jsonschema.validate(manifest, b.load("backup/schemas/backup-manifest.schema.yaml"))
     (EVIDENCE / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
