@@ -623,7 +623,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 070d2d0a956e9f23659a2577756282cf9a5f3c21
+      current_sha: c7e62aaedba482bcc0f1def6f0892e2c47efacec
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -733,8 +733,9 @@ implementation_artifacts:
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
-      scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, as classes além de git, labels, milestones e issues (pull_requests, projects e as demais)."
+      scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura."
       evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37089900544", commit: b3ed55261c97b954bbc4effd94e02e01c3792e17}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37076443670", commit: edebe8a30e2e360f4987d77aa5ac25d2dad36873}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36802676819", commit: bf64abf66558347ec10fc517b665638dae2878e5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
@@ -858,8 +859,9 @@ implementation_artifacts:
       current_sha: c0a4f5b686d103a10bff001c1768450c028378e2
     validation:
       status: VALIDATED
-      scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, as classes além de git, labels, milestones e issues (pull_requests, projects e as demais)."
+      scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura."
       evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37089900544", commit: b3ed55261c97b954bbc4effd94e02e01c3792e17}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37076443670", commit: edebe8a30e2e360f4987d77aa5ac25d2dad36873}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36802676819", commit: bf64abf66558347ec10fc517b665638dae2878e5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
@@ -1102,8 +1104,10 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: 086b8bfec52ee240654d2cf6727ab0228a138704
     validation:
-      status: NOT_VALIDATED
-      scope: "Dois runs reais (req-20261003-001, que falhou, e req-20261003-002, run 37087638922, que funcionou): a API real aceitou as consultas GraphQL, o quadro nº 13 foi lido por inteiro (7 itens, 14 campos, 1 view, 6 workflows; Status e Prioridade conferidos contra a tela) e o estado do quadro sobrevive à ocultação do conteúdo das issues privadas. O 2º run incluiu às cegas 3 Projects (2 alheios); a regra E (confirmação dos candidatos pelos títulos das issues da origem) corrige isso e foi testada só contra servidor simulado (backup/tests/test_github_projects_read.py, 28 testes). Não provado - a regra E em run real, falso positivo por título repetido, repositório sem issues, e os escopos PROJECT e OWNER_PROJECT_SET."
+      status: VALIDATED
+      scope: "Run real completo (req-20261003-003, run 37089900544, Moriblo/backup_teste_issues, repositório privado): o token clássico read:project não enxerga o repositório; a descoberta alternativa lista os Projects do dono e a regra E confirma o vínculo pelos títulos: o quadro nº 13 ficou com TITLE_MATCH 6/6 (7 itens, 14 campos, 1 view, 6 workflows, Status e Prioridade conferidos contra a tela) e os nº 12 e nº 5 foram excluídos (TITLES_DO_NOT_MATCH, 0/101 e 0/1) e NÃO entraram no pacote (api-project-items.json de 177 KB para 12 KB). Classe PARTIALLY-PRESERVED: 6 itens com a referência da issue oculta (o estado do quadro sobrevive). Paginação real exercitada no run anterior (101 itens em 2 páginas, run 37087638922). Não provado - falso positivo por título repetido entre repositórios, origem sem issues, Project só com rascunhos, os escopos PROJECT e OWNER_PROJECT_SET, Projects de organização, valores de campo de iteração, data e número, itens arquivados e status updates."
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37089900544", commit: b3ed55261c97b954bbc4effd94e02e01c3792e17}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
       - {capability_id: backup_projects, relationship: EXECUTES}
