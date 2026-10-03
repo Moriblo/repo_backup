@@ -144,6 +144,9 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
     ignore_milestone = False     # o servidor ignora o milestone na criação da issue
     force_assignee = False       # o servidor atribui alguém à issue
     alter_comment = False        # o servidor altera o corpo do comentário
+    list_lag = 0                 # as listagens de issues e comentários omitem as últimas N (atraso de índice do GitHub)
+    get_lag = {}                 # número da issue -> quantas leituras diretas ainda respondem 404 (atraso transitório)
+    comments_status = None       # força o status da leitura dos comentários de uma issue (ex.: 500)
 
     def log_message(self, *args):
         pass
@@ -273,7 +276,23 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
         if route:
             kind, repo, rest = route
             if kind == "issues":
-                return self._paged(cls.issue_comments.get(repo, []) if rest == ["comments"] else cls.issues.get(repo, []))
+                issues, comments = cls.issues.get(repo, []), cls.issue_comments.get(repo, [])
+                if rest == []:
+                    return self._paged(issues[:len(issues) - cls.list_lag] if cls.list_lag else issues)
+                if rest == ["comments"]:
+                    return self._paged(comments[:len(comments) - cls.list_lag] if cls.list_lag else comments)
+                number = rest[0]
+                if cls.get_lag.get(number, 0) > 0:
+                    cls.get_lag[number] -= 1
+                    return self._send(404, {"message": "Not Found"})
+                if len(rest) == 1:
+                    item = next((i for i in issues if str(i["number"]) == number), None)
+                    return self._send(200, item) if item else self._send(404, {"message": "Not Found"})
+                if rest[1] == "comments":
+                    if cls.comments_status:
+                        return self._send(cls.comments_status, {"message": "boom"})
+                    return self._paged([c for c in comments if c["issue_url"].rsplit("/", 1)[-1] == number])
+                return self._send(404, {"message": "Not Found"})
             items = cls.labels.get(repo, []) if kind == "labels" else cls.milestones.get(repo, [])
             return self._paged(items)
         if self.path == "/user":
@@ -485,13 +504,14 @@ class Base(unittest.TestCase):
         FakeGitHub.issues, FakeGitHub.issue_comments, FakeGitHub.issue_bodies, FakeGitHub.issue_fail = {}, {}, [], {}
         FakeGitHub.close_fail, FakeGitHub.comment_fail, FakeGitHub.alter_body = False, None, False
         FakeGitHub.drop_labels = FakeGitHub.ignore_milestone = FakeGitHub.force_assignee = FakeGitHub.alter_comment = False
+        FakeGitHub.list_lag, FakeGitHub.get_lag, FakeGitHub.comments_status = 0, {}, None
         FakeOneDrive.blob_auth = []
         self.make_backup()
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("CAPABILITY_ID", "RESTORE_", "PREFLIGHT", "TARGET_"))}
         self.env.update(
             REQUEST_ID="req-20260102-001", BACKUP_PATH=BASE, DESTINATION=f"{BASE}/restores", DESTINATION_VALIDATED="true",
             EVIDENCE_DIR=str(self.root / "evidence"), RESTORE_DIR=str(self.root / "work"), RESTORE_TOKEN=TOKEN, RUNNER_TEMP=str(self.root),
-            ONEDRIVE_CLIENT_ID="cid", ONEDRIVE_REFRESH_TOKEN="RT", GITHUB_REPOSITORY="dono/repo_backup", ONEDRIVE_RETRY_DELAY="0", RESTORE_WRITE_DELAY="0", RESTORE_RATE_WAIT="0",
+            ONEDRIVE_CLIENT_ID="cid", ONEDRIVE_REFRESH_TOKEN="RT", GITHUB_REPOSITORY="dono/repo_backup", ONEDRIVE_RETRY_DELAY="0", RESTORE_WRITE_DELAY="0", RESTORE_RATE_WAIT="0", RESTORE_VERIFY_DELAY="0",
             ONEDRIVE_AUTH_BASE=f"http://127.0.0.1:{self.od.server_address[1]}", ONEDRIVE_GRAPH_BASE=f"http://127.0.0.1:{self.od.server_address[1]}",
             GITHUB_API_URL=f"http://127.0.0.1:{self.gh.server_address[1]}", GITHUB_GIT_BASE=f"file://{self.git_root}", RESTORE_RETRY_DELAY="0")
         self.outputs = []
@@ -1166,15 +1186,14 @@ class IssuesTest(Base):
             self.assertEqual((res["status"], sorted(res["mismatches"])), ("FAILED", expected), flag)
             setattr(FakeGitHub, flag, False)
 
-    def test_issue_a_mais_no_alvo_e_divergencia(self):
-        # Uma issue estranha aparece no alvo antes da leitura de volta.
-        FakeGitHub.issues.setdefault(self.T, [])
+    def test_issue_a_mais_persistente_e_divergencia(self):
         self.fetched()
         orig_get = FakeGitHub.do_GET
         def spy(handler):
-            if "/issues?state=all" in handler.path and not getattr(spy, "done", False):
-                spy.done = True
-                FakeGitHub.issues[self.T].append({"number": 99, "title": "intrusa", "body": "x", "state": "open", "labels": [], "milestone": None, "assignees": []})
+            if handler.path.endswith(f"/repos/{self.T}/issues/4"):
+                if not any(i["number"] == 4 for i in FakeGitHub.issues.get(self.T, [])):
+                    FakeGitHub.issues[self.T].append({"number": 4, "title": "intrusa", "body": "x", "state": "open", "labels": [],
+                                                      "milestone": None, "assignees": []})
             return orig_get(handler)
         FakeGitHub.do_GET = spy
         try:
@@ -1182,7 +1201,49 @@ class IssuesTest(Base):
         finally:
             FakeGitHub.do_GET = orig_get
         self.assertEqual(proc.returncode, 48)
-        self.assertTrue(any("tem 4 issues" in str(m) for m in self.evidence("restore-result.json")["classes"]["issues"]["mismatches"]))
+        res = self.evidence("restore-result.json")["classes"]["issues"]
+        self.assertEqual((res["status"], res["verify_attempts"]), ("FAILED", 4))
+        self.assertIn("além da última restaurada", str(res["mismatches"]))
+
+    def test_listagem_atrasada_nao_derruba_a_conferencia(self):
+        # O que aconteceu no run real: a listagem devolveu só as primeiras issues. A leitura direta não depende dela.
+        FakeGitHub.list_lag = 2
+        self.assertEqual(self.go().returncode, 0)
+        res = self.evidence("restore-result.json")["classes"]["issues"]
+        self.assertEqual((res["status"], res["verify_attempts"], res["created"]), ("OK", 1, 3))
+
+    def test_leitura_direta_com_atraso_transitorio_e_repetida(self):
+        FakeGitHub.get_lag = {"3": 2}                              # a issue 3 responde 404 nas duas primeiras leituras
+        self.assertEqual(self.go().returncode, 0)
+        res = self.evidence("restore-result.json")["classes"]["issues"]
+        self.assertEqual((res["status"], res["verify_attempts"]), ("OK", 3))
+
+    def test_atraso_que_nunca_passa_vira_failed_depois_das_tentativas(self):
+        FakeGitHub.get_lag = {"3": 99}
+        self.assertEqual(self.go().returncode, 48)
+        res = self.evidence("restore-result.json")["classes"]["issues"]
+        self.assertEqual((res["status"], res["verify_attempts"], res["mismatches"]), ("FAILED", 4, [4]))
+
+    def test_erro_ao_ler_os_comentarios_vira_failed_sem_quebrar(self):
+        FakeGitHub.comments_status = 500
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
+        res = self.evidence("restore-result.json")["classes"]["issues"]
+        self.assertEqual((res["status"], res["verify_attempts"], sorted(res["mismatches"])), ("FAILED", 4, [1, 2, 4]))
+        self.assertNotIn("Traceback", proc.stdout + proc.stderr)
+
+    def test_estado_de_fechamento_e_conferido(self):
+        orig = FakeGitHub._issue_write
+        def wrong_reason(handler, repo, rest, body):
+            if handler.command == "PATCH" and body.get("state") == "closed":
+                body = dict(body, state_reason="completed")       # o servidor troca o motivo do fechamento
+            return orig(handler, repo, rest, body)
+        FakeGitHub._issue_write = wrong_reason
+        try:
+            self.assertEqual(self.go().returncode, 48)
+        finally:
+            FakeGitHub._issue_write = orig
+        self.assertEqual(self.evidence("restore-result.json")["classes"]["issues"]["mismatches"], [2])
 
     def test_limite_de_taxa_nas_issues_espera_e_repete(self):
         FakeGitHub.rate_limited = 0
@@ -1271,6 +1332,11 @@ class StaticGuardsTest(unittest.TestCase):
         methods = sorted({args[0] for name in ("gh", "gh_write") for args, _ in self.calls(name) if args})
         self.assertEqual(methods, ["GET", "PATCH", "POST", "PUT"])                      # sem DELETE
         self.assertNotIn("DELETE", (SCRIPTS / "restore_repo.py").read_text(encoding="utf-8").replace("sem DELETE", "").replace("DELETE:", ""))
+
+    def test_a_conferencia_das_issues_espera_entre_as_tentativas(self):
+        text = (SCRIPTS / "restore_repo.py").read_text(encoding="utf-8")
+        self.assertIn("time.sleep(VERIFY_DELAY)", text)
+        self.assertIn('os.environ.get("RESTORE_VERIFY_DELAY", "3")', text)       # padrão de 3 s no run real
 
     def test_a_url_de_envio_nao_leva_o_token(self):
         text = (SCRIPTS / "restore_repo.py").read_text(encoding="utf-8")
