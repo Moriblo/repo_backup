@@ -18,7 +18,8 @@
 #   Cria <dono da origem>/<nome da origem>-restaurado (ou target_name), SEMPRE PRIVADO, que NÃO pode existir antes
 #   e NUNCA pode ser a origem; envia só refs/heads/* e refs/tags/* (sem --force) e o LFS; define a branch padrão e
 #   confere as refs. Depois recria as labels e os milestones do mesmo backup (sem apagar nada; as labels padrão do
-#   GitHub que não existem na origem ficam) e confere o resultado. Issues e Projects NÃO são restaurados nesta etapa
+#   GitHub que não existem na origem ficam) e as issues com comentários (cópia equivalente, com @menções e referências
+#   cruzadas neutralizadas e sem assignees) e confere o resultado. Sub-issues, dependências e Projects NÃO são restaurados nesta etapa
 #   (o RESTAURAR.txt do backup explica o que fazer à mão). refs/pull/* não voltam (o GitHub não aceita).
 #
 # SEQUÊNCIA DOS PASSOS (não reordenar; ver BACKUP_REPOSITORY.md)
@@ -173,7 +174,7 @@ jobs:
         run: python3 backup/scripts/restore_repo.py fetch
 
       # ÚNICO passo que escreve no GitHub: cria o repositório novo (privado), envia branches, tags e LFS e, depois de conferir
-      # o git, recria as labels e os milestones do backup (sem apagar nada). Falha nas labels ou milestones: saída 48.
+      # o git, recria as labels, os milestones e as issues com comentários do backup (sem apagar nada). Falha nelas: saída 48.
       # O token vai só como variável deste passo; o git o recebe por cabeçalho HTTP, nunca pela URL.
       - name: Create the new repository and restore
         id: restore
