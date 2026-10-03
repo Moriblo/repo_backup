@@ -235,6 +235,10 @@ jobs:
             api-projects-inventory.json  Contagens, conferencias, SHA-256 e limitacoes da leitura
                                      (inclui os candidatos EXCLUIDOS pela regra de confirmacao).
 
+          RESTAURACAO
+            A restauracao automatica (capability restore_repository) restaura backups de REPOSITORIO
+            (BKP_REPO), nao este. Este pacote e so registro dos Projects.
+
           O QUE ESTE PACOTE E
             REGISTRO em JSON (resposta da API GraphQL do GitHub), uma representacao equivalente.
             NAO existe restauracao automatica: recriar um quadro pela API ainda nao faz parte

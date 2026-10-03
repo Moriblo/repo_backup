@@ -23,12 +23,17 @@
 # MNEMONICS ATUAIS
 #   BKP_REPO  backup de um repositório (params: source_repository, destination)
 #   BKP_PROJ  backup só de Projects v2 (params: scope, scope_identifiers, destination)
+#   RST_REPO  restauração de um backup do BKP_REPO num repositório NOVO (params: backup_path, target_name opcional)
 #   `preflight_decision` (linha de continuação) é igual nos dois: definição única em $defs.
 #
 # EXEMPLO DE LINHA VÁLIDA (uma única linha no arquivo real):
 #   {"request_id":"req-20260929-01","mnemonic":"BKP_REPO","ts":"2026-09-29T12:00:00Z",
 #    "authorization":{"decision":"GO","authorized_scope":"EXACT_COMMAND_REQUEST","reusable":false},
 #    "params":{"source_repository":"Moriblo/exemplo","destination":"backups/exemplo"}}
+# EXEMPLO RST_REPO (uma única linha no arquivo real):
+#   {"request_id":"req-20261004-002","mnemonic":"RST_REPO","ts":"2026-10-04T12:00:00Z",
+#    "authorization":{"decision":"GO","authorized_scope":"EXACT_COMMAND_REQUEST","reusable":false},
+#    "params":{"backup_path":"backups/exemplo/req-20260929-001"}}
 # EXEMPLO BKP_PROJ (uma única linha no arquivo real):
 #   {"request_id":"req-20261004-001","mnemonic":"BKP_PROJ","ts":"2026-10-04T12:00:00Z",
 #    "authorization":{"decision":"GO","authorized_scope":"EXACT_COMMAND_REQUEST","reusable":false},
@@ -56,7 +61,7 @@ properties:
     description: Unique per line. A repeated request_id MUST be rejected by the dispatcher.
   # Comando a executar. Cada valor tem um workflow fixo no dispatcher.
   mnemonic:
-    enum: [BKP_REPO, BKP_PROJ]
+    enum: [BKP_REPO, BKP_PROJ, RST_REPO]
   # Momento em que o engine gravou a linha (UTC, ISO 8601).
   ts:
     type: string
@@ -159,6 +164,34 @@ allOf:
                     required: [owner]
                     properties:
                       owner: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"}
+
+  # ---- RST_REPO: restaura um backup do BKP_REPO (OneDrive) num repositório NOVO do GitHub ----
+  - if:
+      properties:
+        mnemonic: {const: RST_REPO}
+      required: [mnemonic]
+    then:
+      properties:
+        params:
+          type: object
+          additionalProperties: false
+          required: [backup_path]
+          properties:
+            # Pasta do backup no AppFolder, a mesma do BKP_REPO: <destination>/<request_id do backup>.
+            # Só este caminho é informado; origem, nome do alvo e metadados saem do que foi salvo.
+            backup_path:
+              type: string
+              description: Path relative to the OneDrive AppFolder of the backup to restore (<destination>/<backup request_id>).
+              pattern: "^[A-Za-z0-9_][A-Za-z0-9._/-]*$"
+              not: {pattern: "\\.\\."}
+            # Nome do repositório alvo (sem o dono). Opcional: sem ele, "<nome da origem>-restaurado".
+            # O alvo nunca pode existir antes, e nunca é a origem.
+            target_name:
+              type: string
+              description: Name (without owner) of the new repository; default is "<source name>-restaurado".
+              pattern: "^[A-Za-z0-9_.-]{1,100}$"
+              not: {pattern: "^\\.+$|\\.git$"}
+            preflight_decision: {$ref: "#/$defs/preflight_decision"}
 
 $defs:
   # Decisão do HITL após um BLOCKED de preflight; comum a todos os Mnemonics.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Acesso ao OneDrive pessoal para o BKP_REPO: sessão OAuth, rotação do secret, destino e upload.
+"""Acesso ao OneDrive pessoal (BKP_REPO, BKP_PROJ, RST_REPO): sessão OAuth, rotação do secret, destino, upload e download.
 
 O QUE É
     Biblioteca e linha de comando usadas pelo workflow backup-repository.yml para
@@ -15,10 +15,14 @@ O QUE FAZ
        ANTES de qualquer outro uso do OneDrive. Se a gravação falhar, tudo para.
     3. Valida o destino: escreve, lê de volta e apaga um arquivo de teste no AppFolder.
     4. Envia arquivos (upload simples ou em blocos) e confere o hash de cada um.
+    5. Baixa arquivos (restauração) e confere tamanho e hash de cada um contra o que o OneDrive informa.
 
 SUBCOMANDOS (linha de comando)
     upload   --prefix <pasta> --result <arquivo.json> --files <arq1> [<arq2> ...]
              Envia os arquivos para <pasta>/ no AppFolder e grava o resultado em JSON.
+    download --prefix <pasta> --dest <pasta local> --names <arq1> [<arq2> ...] [--result <arquivo.json>]
+             Baixa <pasta>/<nome> do AppFolder para <pasta local>/<nome>, conferindo tamanho e hash.
+             O arquivo inteiro é lido em memória: repositórios muito grandes são um limite conhecido.
     cleanup  Apaga o arquivo de estado local (com o refresh token corrente).
 
 CÓDIGOS DE SAÍDA
@@ -368,6 +372,33 @@ class Session:
         method, info = self._verify(item, rel, size, sha256, sha1, local)
         return {"remote_path": rel, "bytes": size, "sha256": sha256, "verified_by": method, "item_id": item.get("id"), **info}
 
+    def download_file(self, rel, local):
+        """Baixa <AppFolder>/<rel> para `local` e confere tamanho e hash contra o item do OneDrive.
+
+        Devolve {"remote_path", "bytes", "sha256", "verified_by"}. Divergência é HASH_MISMATCH e o
+        arquivo parcial é apagado: nunca fica um arquivo não conferido no disco. O download é
+        pré-autenticado (redirecionamento do Graph): a segunda requisição NÃO leva Authorization.
+        """
+        st, _, body = self.graph("GET", self._path(rel))
+        item = _json(body)
+        if st != 200 or "id" not in item:
+            raise OneDriveError("GRAPH_ERROR", f"{rel} não encontrado no OneDrive: " + _safe_error(st, body))
+        st, hdr, body = self.graph("GET", f"{self._path(rel)}:/content")
+        if st in (301, 302, 303, 307, 308):
+            st, _, body = http("GET", hdr.get("Location") or hdr.get("location"))
+        if st != 200:
+            raise OneDriveError("GRAPH_ERROR", f"download de {rel} recusado: HTTP {st}")
+        local = pathlib.Path(local)
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(body)
+        try:
+            size, sha256, sha1 = file_hashes(local)
+            method, _ = self._verify(item, rel, size, sha256, sha1, local)
+        except OneDriveError:
+            local.unlink(missing_ok=True)
+            raise
+        return {"remote_path": rel, "bytes": size, "sha256": sha256, "verified_by": method}
+
     def _upload_session(self, local, rel, size):
         """Upload em blocos (sessão de upload do Graph). Devolve o driveItem final."""
         st, _, body = self.graph("POST", f"{self._path(rel)}:/createUploadSession",
@@ -442,6 +473,17 @@ def cmd_upload(args):
     pathlib.Path(args.result).write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
 
 
+def cmd_download(args):
+    """Baixa os arquivos de <prefix>/ para a pasta local e grava a lista dos downloads em JSON (opcional)."""
+    session = Session.from_env()
+    results = []
+    for name in args.names:
+        results.append(session.download_file(f"{args.prefix.strip('/')}/{name}", pathlib.Path(args.dest) / name))
+        print(f"ONEDRIVE_DOWNLOAD {json.dumps({k: results[-1][k] for k in ('remote_path', 'bytes', 'verified_by')}, sort_keys=True)}", flush=True)
+    if args.result:
+        pathlib.Path(args.result).write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
+
+
 def cmd_cleanup(_args):
     """Apaga o estado local com o refresh token corrente."""
     state = pathlib.Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / "onedrive_state.json"
@@ -458,6 +500,12 @@ def main(argv=None):
     up.add_argument("--result", required=True)
     up.add_argument("--files", nargs="+", required=True)
     up.set_defaults(func=cmd_upload)
+    down = sub.add_parser("download")
+    down.add_argument("--prefix", required=True)
+    down.add_argument("--dest", required=True)
+    down.add_argument("--names", nargs="+", required=True)
+    down.add_argument("--result")
+    down.set_defaults(func=cmd_download)
     sub.add_parser("cleanup").set_defaults(func=cmd_cleanup)
     try:
         args = parser.parse_args(argv)

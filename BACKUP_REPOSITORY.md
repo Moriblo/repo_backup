@@ -79,7 +79,7 @@ Endereço: `https://github.com/Moriblo/repo_backup/blob/main/<caminho>`. O engin
 | `backup_repository` | `.github/workflows/backup-repository.yml` (o ECR, nos `inputs`); `backup/schemas/commands-log-line.schema.yaml` (formato da linha); `commands.log` (ids já usados) | O caminho do workflow vem do registro: `command_workflow.artifact_id` da capability, resolvido em `implementation_artifacts[].location.path`. |
 | `backup_projects` | `.github/workflows/backup-projects.yml` (o ECR, nos `inputs`); `backup/schemas/commands-log-line.schema.yaml` (formato da linha, ramo `BKP_PROJ`); `commands.log` (ids já usados) | Mnemonic `BKP_PROJ`. O caminho do workflow vem do registro, como no `backup_repository`. Parâmetros: `scope`, `scope_identifiers` e `destination` (seção II.15). |
 | `list_capabilities`, `show_status`, `validate_evidence`, `help` | Só os dois iniciais | O engine responde na conversa. Não geram linha de comando. |
-| `restore_repository` (**PLANEJADA**) | Ainda não existe no registro | Restaurar a partir do OneDrive para o GitHub (seção I.14). Quando existir, terá Mnemonic e workflow próprios, sob GO do HITL. |
+| `restore_repository` | `.github/workflows/restore-repository.yml` (o ECR, nos `inputs`); `backup/schemas/commands-log-line.schema.yaml` (ramo `RST_REPO`); `commands.log` (ids já usados) | Mnemonic `RST_REPO`. Restaura um backup do `BKP_REPO` para um repositório **novo e privado** (seção I.14). Parâmetro obrigatório: `backup_path` (pasta do backup no OneDrive); opcional: `target_name`. **Escreve no GitHub**: o engine **deve** mostrar no ECR o nome do alvo que será criado antes do GO. |
 | Capability nova no futuro | O que o registro indicar para ela | O menu vem do registro: **o prompt inicial não muda** quando uma capability é acrescentada. |
 
 **Regra geral.** Se a capability escolhida tem `mnemonic` no registro, o engine lê o workflow apontado em `command_workflow` e apresenta o ECR a partir dele. Se não tem, responde na conversa e não grava nada.
@@ -127,6 +127,7 @@ O código já está no repositório (SA-08). O HITL já fez (environment `onedri
 - **Opcional (rotação):** criar o GitHub App **Writer** (*Secrets: Read and write* e *Environments: Read and write*, instalado só em `Moriblo/repo_backup`; o *Environments* é necessário porque o secret fica em um environment) e gravar a variável `REPOSITORY_PRESERVATION_SECRETS_APP_ID` e o secret `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY`. Sem isso o backup funciona, mas o refresh token **não** é renovado (seção I.11).
 - **Atenção:** não rode dois backups ao mesmo tempo. Com rotação ligada, cada execução gira o refresh token; duas em paralelo podem invalidar uma à outra.
 - **Atenção:** se o environment tiver "Required reviewers", cada execução espera aprovação no GitHub.
+- **Antes da restauração (`RST_REPO`):** criar o secret `RESTORE_WRITE_TOKEN` (ver I.10) no environment `onedrive-backup` e **restringir o environment à branch `main`** (Settings → Environments → Deployment branches). Esse token é o primeiro com poder de escrita no GitHub: só o workflow do `RST_REPO` o usa, e só no repositório que ele cria.
 
 ## I.3 Os 15 passos de cada execução (índice)
 
@@ -337,13 +338,15 @@ Uma linha JSON por comando, sem quebras internas. O schema é `backup/schemas/co
 | Campo | O que é | Regra |
 |---|---|---|
 | `request_id` | Identificador único da requisição | 8 a 64 caracteres `[A-Za-z0-9._-]`. Não repete nenhum id já usado. Convenção adotada: `req-AAAAMMDD-NNN`. |
-| `mnemonic` | Comando a executar | Vem do registro. Valores aceitos hoje: `BKP_REPO` e `BKP_PROJ`. |
+| `mnemonic` | Comando a executar | Vem do registro. Valores aceitos hoje: `BKP_REPO`, `BKP_PROJ` e `RST_REPO`. |
 | `ts` | Hora da gravação | UTC, ISO 8601. |
 | `authorization` | O GO do HITL | `decision: GO`, `authorized_scope: EXACT_COMMAND_REQUEST`, `reusable: false`. |
 | `params.source_repository` | Origem do backup (`BKP_REPO`) | Formato `dono/nome`. Somente leitura. |
 | `params.scope` | Escopo do backup de Projects (`BKP_PROJ`) | `SOURCE_REPOSITORY`, `PROJECT` ou `OWNER_PROJECT_SET`. |
 | `params.scope_identifiers` | Identificadores do escopo (`BKP_PROJ`) | `SOURCE_REPOSITORY`: `{"source_repository":"dono/nome"}`; `PROJECT`: `{"owner":"dono","number":N}` (N inteiro); `OWNER_PROJECT_SET`: `{"owner":"dono"}`. Campo a mais ou faltando é recusado. |
-| `params.destination` | Pasta no OneDrive | Relativa ao AppFolder; sem `/` inicial e sem `..`. |
+| `params.destination` | Pasta no OneDrive (`BKP_REPO`, `BKP_PROJ`) | Relativa ao AppFolder; sem `/` inicial e sem `..`. |
+| `params.backup_path` | Backup a restaurar (`RST_REPO`) | `<destination>/<request_id do backup>`, relativo ao AppFolder; sem `/` inicial e sem `..`. É o único parâmetro obrigatório: a origem, o nome do alvo e os metadados saem do que foi salvo. |
+| `params.target_name` | Nome do repositório novo (`RST_REPO`, opcional) | Sem o dono, `[A-Za-z0-9_.-]{1,100}`, sem `..` nem `.git` no fim. Sem ele: `<nome da origem>-restaurado`. |
 | `params.preflight_decision` | Só na linha de continuação | `previous_request_id`, `hitl_decision: CONTINUE_WITH_RESTRICTIONS`, `accepted_restrictions` (lista). Igual nos dois Mnemonics (definição única em `$defs` do schema). |
 
 Exemplo de uma primeira linha (numa única linha no arquivo real):
@@ -356,6 +359,12 @@ Exemplo de uma linha do `BKP_PROJ` (um quadro específico):
 
 ```json
 {"request_id":"req-20261004-001","mnemonic":"BKP_PROJ","ts":"2026-10-04T12:00:00Z","authorization":{"decision":"GO","authorized_scope":"EXACT_COMMAND_REQUEST","reusable":false},"params":{"scope":"PROJECT","scope_identifiers":{"owner":"Moriblo","number":13},"destination":"backups/projetos"}}
+```
+
+Exemplo de uma linha do `RST_REPO` (só o caminho do backup):
+
+```json
+{"request_id":"req-20261004-002","mnemonic":"RST_REPO","ts":"2026-10-04T12:00:00Z","authorization":{"decision":"GO","authorized_scope":"EXACT_COMMAND_REQUEST","reusable":false},"params":{"backup_path":"backups/backup_teste_issues/req-20261003-007"}}
 ```
 
 A linha de continuação é igual, com outro `request_id` e, em `params`, o bloco `preflight_decision` (abreviado):
@@ -374,7 +383,7 @@ O log só recebe acréscimos: uma linha nunca é editada nem apagada. Uma linha 
 | **Leitura** | Engine (passos 1 e 2) | Descobre o Mnemonic ao ler o registro e ao HITL escolher a capability. |
 | **Transporte** | Engine (passo 5) | Copia o Mnemonic para a linha, depois do GO. Não o calcula. |
 | **Validação** | Dispatcher (passo 6) | Confere se o schema o aceita, se o mapeamento fixo o conhece e se o registro concorda. |
-| **Tradução** | Dispatcher (passo 7) | Converte o Mnemonic em workflow: `BKP_REPO` → `backup-repository.yml`; `BKP_PROJ` → `backup-projects.yml`. |
+| **Tradução** | Dispatcher (passo 7) | Converte o Mnemonic em workflow: `BKP_REPO` → `backup-repository.yml`; `BKP_PROJ` → `backup-projects.yml`; `RST_REPO` → `restore-repository.yml`. |
 
 Ninguém, em execução, **escolhe** o Mnemonic. Um Mnemonic novo precisa ser declarado, por pull request, em quatro lugares: o registro, o `enum` do schema da linha, o mapa do `dispatch_check.py` e um job do `dispatcher.yml`. Sem isso, o dispatcher recusa a linha.
 
@@ -408,6 +417,8 @@ Estados: **EXISTE**, **TEMPORÁRIO**, **A REMOVER**, **PLANEJADO**.
 | `.github/workflows/dispatcher.yml` | Dispara no push do `main`; valida e chama o workflow do Mnemonic. | EXISTE |
 | `backup/scripts/dispatch_check.py` | Verificações do Dispatcher; produz a matriz de despacho de cada Mnemonic. | EXISTE |
 | `.github/workflows/backup-repository.yml` | Executor do `BKP_REPO`. Seus inputs são o ECR. | EXISTE |
+| `.github/workflows/restore-repository.yml` | Executor do `RST_REPO` (restauração para um repositório novo). Seus inputs são o ECR. Ainda não rodou de verdade. | EXISTE |
+| `backup/scripts/restore_repo.py` | Restauração: `fetch` (baixa e confere o backup), `restore` (cria o alvo privado, envia branches, tags e LFS, confere as refs) e `build-evidence`. Só escreve no repositório que cria. Testado só contra simulados. | EXISTE |
 | `.github/workflows/backup-projects.yml` | Executor do `BKP_PROJ` (backup só de Projects). Seus inputs são o ECR. Ainda não rodou de verdade. | EXISTE |
 | `backup/scripts/bkp_repo.py` | Revalidação, preflight, gate de destino e montagem da evidência, para os dois Mnemonics (variável `CAPABILITY_ID`). | EXISTE |
 | `backup/scripts/onedrive.py` | Access token, rotação do secret, validação do destino, envio (simples ou em blocos) e conferência de hash. Provado em run real, inclusive envio em blocos e hash por `quickXorHash`. | EXISTE |
@@ -417,6 +428,7 @@ Estados: **EXISTE**, **TEMPORÁRIO**, **A REMOVER**, **PLANEJADO**.
 | `backup/tests/test_github_projects_read.py` | Teste local do leitor de Projects, com API GraphQL simulada (`python3 backup/tests/test_github_projects_read.py`). | EXISTE |
 | `backup/tests/test_github_api_read.py` | Teste local do leitor de API, com servidor simulado (`python3 backup/tests/test_github_api_read.py`). | EXISTE |
 | `backup/tests/test_dispatch_check.py` | Teste local do schema da linha do `commands.log` e do `dispatch_check.py` (os dois Mnemonics, regressão do `BKP_REPO`, matriz, mapeamento fixo). | EXISTE |
+| `backup/tests/test_restore_repo.py` | Teste local ponta a ponta da restauração: OneDrive, API do GitHub e remotes Git simulados (integridade, recusas, criação, envio, LFS, conferência, evidência). | EXISTE |
 | `backup/tests/test_bkp_proj.py` | Teste local ponta a ponta do `bkp_repo.py` nos dois modos (`BKP_PROJ` e regressão do `BKP_REPO`), com APIs simuladas. | EXISTE |
 | `backup/scripts/montar_repo_teste.sh` | Roda no computador do HITL: monta e envia um repositório de teste (arquivo grande, LFS, submódulo, branches e tags). Provado em run real. | TEMPORÁRIO |
 | `backup/scripts/montar_repo_teste_issues.sh` | Roda no computador do HITL com o `gh`: cria um repositório de teste com issues, comentários, etiquetas, marco e um quadro (Project). Só o fluxo foi testado, com `gh` simulado. | TEMPORÁRIO |
@@ -435,6 +447,7 @@ Ficam em Settings → Environments → `onedrive-backup` (os marcados abaixo) ou
 | `ONEDRIVE_REFRESH_TOKEN` | secret (environment `onedrive-backup`) | HITL (valor inicial) e App Writer (rotação, opcional) | `onedrive.py` | EXISTE |
 | `SOURCE_READ_TOKEN` | secret (environment `onedrive-backup`) | HITL | Leitura da origem (`backup-repository.yml`; no `backup-projects.yml` só no escopo `SOURCE_REPOSITORY`, para a regra E) | EXISTE |
 | `PROJECTS_READ_TOKEN` | secret (environment `onedrive-backup`) | HITL | Leitura de Projects v2 (`github_projects_read.py`, nos dois workflows); token clássico com `read:project` | EXISTE |
+| `RESTORE_WRITE_TOKEN` | secret (environment `onedrive-backup`) | HITL | **Escrita** no GitHub pela restauração (`restore-repository.yml`): cria o repositório novo e envia branches, tags e LFS. Fine-grained de **todos os repositórios** com Administration, Contents e Workflows em escrita, ou clássico `repo` se o GitHub não permitir criar repositório pessoal com fine-grained (a confirmar no primeiro run real). **Amplo**: restrinja o environment à branch `main` | **A CRIAR** |
 | `REPOSITORY_PRESERVATION_SECRETS_APP_ID` | variável | HITL | Rotação do secret pelo App Writer | OPCIONAL |
 | `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY` | secret | HITL | Idem | OPCIONAL |
 
@@ -469,12 +482,19 @@ O workflow do teste OIDC antigo foi removido. As variáveis `AZURE_CLIENT_ID` e 
 | 22 | `onedrive.py` | Falha do Graph, do envio ou hash divergente após o envio. |
 | 23 | `onedrive.py` | Configuração ausente, login recusado ou falha na rotação do secret. |
 | 30 | `dispatch_check.py` | Violação no push: nada é despachado. |
-| 64 | `bkp_repo.py`, `dispatch_check.py`, `validate_traceability.py` | Uso incorreto ou variável de ambiente ausente. |
+| 40 | `restore_repo.py` | Backup não restaurável (evidência inválida, não é do `BKP_REPO`, `FAILED`, pacote incompleto, sem branches). |
+| 41 | `restore_repo.py` | Integridade: SHA-256 divergente, bundle inválido ou refs do bundle diferentes do `refs.tsv`. |
+| 42 | `restore_repo.py` | Alvo recusado: é a origem, já existe ou o nome é inválido (nada foi criado). |
+| 43 | `restore_repo.py` | GitHub: token recusado, existência do alvo não confirmada ou criação inesperada. |
+| 44 | `restore_repo.py` | Falha no envio de branches e tags (o alvo criado **não é apagado**). |
+| 45 | `restore_repo.py` | As refs do alvo não conferem com o `refs.tsv`. |
+| 46 | `restore_repo.py` | Falha no envio dos objetos LFS. |
+| 64 | `bkp_repo.py`, `restore_repo.py`, `dispatch_check.py`, `validate_traceability.py` | Uso incorreto ou variável de ambiente ausente. |
 | 1 | `validate_traceability.py` | O registro não bate com o repositório (a linha `ERRO <CÓDIGO>` diz o quê). |
 
 ### Linhas `BKP_RESULT` e afins
 
-Os workflows do `BKP_REPO` e do `BKP_PROJ` imprimem, no log do job, **uma linha `BKP_RESULT {json}`** por desfecho (a mesma vai para o resumo do job). É ela que o engine lê.
+Os workflows do `BKP_REPO`, do `BKP_PROJ` e do `RST_REPO` imprimem, no log do job, **uma linha `BKP_RESULT {json}`** por desfecho (a mesma vai para o resumo do job). É ela que o engine lê.
 
 | `status` | Quando | Campos principais |
 |---|---|---|
@@ -485,7 +505,7 @@ Os workflows do `BKP_REPO` e do `BKP_PROJ` imprimem, no log do job, **uma linha 
 | `COMPLETE`, `COMPLETE_WITH_EXCEPTIONS`, `FAILED` | Fim da preservação | `evidence_sha256`, `manifest_sha256`, `reconciliation`, `package_files` |
 | `FAILED` | Envio ao OneDrive falhou | `reason`: `PACKAGE_UPLOAD_FAILED` ou `EVIDENCE_UPLOAD_FAILED` (vale o **último** `BKP_RESULT` do log) |
 
-Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `DIAG_RESULT {json}` (diagnóstico da leitura Git). O log do job só fica legível depois que o job termina. A evidência bruta fica como artefato do Actions (`bkp-repo-<request_id>` e `bkp-proj-<request_id>`, 7 dias; `diag-git-read-<run>`, 3 dias).
+Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `DIAG_RESULT {json}` (diagnóstico da leitura Git). O log do job só fica legível depois que o job termina. A evidência bruta fica como artefato do Actions (`bkp-repo-<request_id>`, `bkp-proj-<request_id>` e `rst-repo-<request_id>`, 7 dias; `diag-git-read-<run>`, 3 dias).
 
 ## I.13 Ciclo de vida dos temporários e manutenção
 
@@ -503,7 +523,7 @@ Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `
 **O que muda no plano**
 1. **Pacote restaurável** no passo 13 (**existe**): bundle de todas as refs, objetos LFS e lista das refs. Restaura-se com `git clone --mirror source.bundle` e envio de `refs/heads/*` e `refs/tags/*`; `refs/pull/*` não podem ser devolvidas ao GitHub. O roteiro completo (clone, `bundle verify`, comparação com o `refs.tsv`, envio à URL do repositório novo e conferência) vai dentro do pacote, em `RESTAURAR.txt`. Cuidados testados localmente: `git bundle verify` só roda dentro de um repositório, e um clone `--mirror` recusa `git push origin` com refspecs, então o envio é feito direto à URL.
 2. **Teste de restauração** logo depois do primeiro backup real: restaurar para um repositório **novo e vazio** e registrar o resultado. Um backup só está provado quando a restauração funciona.
-3. **Capability `restore_repository`** no menu, com Mnemonic e workflow próprios, sob GO do HITL, no mesmo padrão do `BKP_REPO`.
+3. **Capability `restore_repository`** no menu, com Mnemonic (`RST_REPO`) e workflow próprios, sob GO do HITL, no mesmo padrão do `BKP_REPO` (**existe**; etapa 1 abaixo).
 4. **Etapa 2: preservar e restaurar as 17 classes**, uma de cada vez. Cada classe implementada é acrescentada a `implemented_classes` no registro, e a restrição correspondente deixa de ser exigida. As classes **temporais** (que expiram) vêm primeiro, como manda o protocolo (seção II.12).
 
 **Níveis de restauração**
@@ -530,6 +550,17 @@ O modo de restauração de cada classe é **previsto** e será confirmado no tes
 **Regressão do `BKP_REPO` em run real (`req-20261003-006` e `-007`, 03/10/2026).** Depois da generalização por `CAPABILITY_ID` e do dispatcher por Mnemonic, a primeira linha terminou `BLOCKED` no preflight com as mesmas **13 restrições** (e o job do `BKP_PROJ` pulado), e a linha de continuação com essas 13 restrições terminou `COMPLETE_WITH_EXCEPTIONS`: `git` `PRESERVED`, `labels`, `milestones` e `issues` `PRESERVED-AS-EQUIVALENT-REPRESENTATION`, `projects` `PARTIALLY-PRESERVED`, 13 `NOT-VERIFIED`, 14 arquivos de pacote e 18 de evidência no OneDrive.
 
 **Não provado em run real:** o preflight `BLOCKED` e a linha de continuação do `BKP_PROJ` sem o `PROJECTS_READ_TOKEN`, a falha de envio, os Projects de organização, mais de uma linha na mesma matriz do dispatcher e duas linhas de Mnemonics diferentes no mesmo push. O executor está `VALIDATED` no registro com esse escopo declarado.
+
+**Restauração automatizada: `restore_repository` (`RST_REPO`), etapa 1: git (03/10/2026).** Implementada e coberta por testes locais; **ainda não provada em run real**. O HITL informa **só a pasta do backup** no OneDrive (`backup_path`); tudo mais sai do que foi salvo. O workflow `restore-repository.yml` (script `restore_repo.py`):
+1. **Lê e confere o backup** (sem escrever nada): baixa `evidence.json`, `manifest.json` e `onedrive-package.json`; recusa um backup que não seja do `BKP_REPO`, que tenha terminado `FAILED` ou cuja classe `git` não foi preservada; confere o SHA-256 de cada arquivo contra o manifest e o `onedrive-package.json` (e o hash do OneDrive no download); roda `git bundle verify` e compara as refs do bundle com o `refs.tsv`.
+2. **Cria o repositório novo**: `<dono da origem>/<nome da origem>-restaurado` (ou o `target_name`), **sempre privado**. **Recusa** se o alvo for a origem ou **já existir** (qualquer resposta que não seja "não existe"); nunca escreve num repositório que já existia. Descrição e tópicos vêm do `repo-metadata.json` do backup (que o `BKP_REPO` passou a salvar); backups antigos usam os padrões.
+3. **Envia só `refs/heads/*` e `refs/tags/*`**, sem `--force` e sem `refs/pull/*` (o GitHub não aceita), mais os objetos LFS; define a branch padrão e **confere as refs do alvo** contra o `refs.tsv`.
+4. **Gera evidência e manifest 2.0** da restauração em `<backup_path>/restores/<request_id>/evidence/`, sem tocar no backup. `git` fica `PRESERVED` (ou `PARTIALLY-PRESERVED` se o backup tinha refs que não voltam, como `refs/pull/*`); a limitação `LIM-restore-scope` diz que **labels, milestones, issues e Projects não são restaurados nesta etapa**.
+- **Falha no meio:** o alvo parcial **não é apagado**; o `BKP_RESULT FAILED` diz o `target_repository`. O HITL o apaga e roda de novo com outro `request_id`.
+- **Credencial:** `RESTORE_WRITE_TOKEN` (I.10), a primeira de escrita do sistema. Sem ela, o preflight termina `BLOCKED` com uma restrição.
+- **O `RESTAURAR.txt` continua gerado em todo backup** e é o plano B manual (não depende do GitHub Actions nem de token guardado). Ele ganhou a conferência do SHA-256 e a explicação das duas formas.
+- **Não provado:** tudo em run real (criação do repositório com o token real, `git push` ao GitHub, `git lfs push` ao GitHub, branch padrão, permissão de Workflows para branches com `.github/workflows`, repositórios grandes). Com o `git-lfs` instalado, os testes locais provam o envio LFS contra um remoto de arquivo, não contra o GitHub.
+- **Próximas etapas** (um PR cada, com prova em run real e o `RESTAURAR.txt` atualizado): **2.** labels e milestones; **3.** issues e comentários, como cópia equivalente e com `@menções` **neutralizadas** (entre crases) para não notificar ninguém; **4.** Projects, apontando para as issues novas.
 
 **Limites aceitos: o que não volta idêntico**
 - As refs `refs/pull/*`: o GitHub as gerencia e não aceita enviá-las de volta.
@@ -686,6 +717,7 @@ As definições canônicas estão em `backup/capabilities.yaml`.
 
 - `backup_repository`
 - `backup_projects`
+- `restore_repository`
 - `list_capabilities`
 - `show_status`
 - `validate_evidence`
@@ -693,7 +725,7 @@ As definições canônicas estão em `backup/capabilities.yaml`.
 
 O engine **NÃO DEVE** escolher em silêncio uma capability de preservação.
 
-Só uma capability que tenha Mnemonic e workflow ligado pode produzir uma linha no `commands.log`. Hoje, isso vale para `backup_repository` (`BKP_REPO`) e `backup_projects` (`BKP_PROJ`). As capabilities informativas e de validação são respondidas pelo engine na conversa e nunca produzem linha de comando.
+Só uma capability que tenha Mnemonic e workflow ligado pode produzir uma linha no `commands.log`. Hoje, isso vale para `backup_repository` (`BKP_REPO`), `backup_projects` (`BKP_PROJ`) e `restore_repository` (`RST_REPO`). As capabilities informativas e de validação são respondidas pelo engine na conversa e nunca produzem linha de comando.
 
 ## II.7 Obtenção de parâmetros pelo HITL
 
@@ -702,6 +734,10 @@ Os valores específicos de cada execução **DEVEM** ser informados ou confirmad
 `backup_repository` exige, no mínimo:
 - `source_repository`;
 - `destination`.
+
+`restore_repository` exige:
+- `backup_path`: a pasta do backup no OneDrive (`<destination>/<request_id do backup>`); o engine **DEVE** mostrar, no ECR, o repositório que será **criado** (`<dono da origem>/<nome>-restaurado`, ou o `target_name`), que ele será **privado** e que a restauração **escreve no GitHub**.
+- `target_name`: opcional.
 
 `backup_projects` exige:
 - `scope`: `SOURCE_REPOSITORY`, `PROJECT` ou `OWNER_PROJECT_SET`;

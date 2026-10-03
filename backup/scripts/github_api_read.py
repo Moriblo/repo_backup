@@ -284,6 +284,25 @@ def write_json(path, data):
     return raw
 
 
+# Campos do repositório que a restauração (RST_REPO) usa para recriar o alvo. Só dados públicos do próprio
+# repositório; nenhum segredo. Campo ausente na resposta fica de fora.
+METADATA_FIELDS = ("full_name", "private", "visibility", "description", "homepage", "topics", "default_branch",
+                   "archived", "fork", "has_issues", "has_projects", "has_wiki", "html_url")
+
+
+def read_repo_metadata(client, repo):
+    """Metadados do repositório (GET /repos/{repo}) para package/repo-metadata.json.
+
+    Serve à restauração: visibilidade, descrição, tópicos e branch padrão não vêm do Git. Uma falha aqui
+    NÃO derruba as classes: devolve (None, motivo) e o inventário registra o motivo."""
+    try:
+        raw = client.get(f"/repos/{repo}")
+    except ApiError as exc:
+        return None, f"{exc}"
+    return {"schema": "repo-metadata/1", "source_repository": repo, "captured_at": now(),
+            **{k: raw[k] for k in METADATA_FIELDS if k in raw}}, None
+
+
 def cmd_read():
     """Lê as três classes e grava os arquivos do pacote e o api-status.json."""
     try:
@@ -334,8 +353,16 @@ def cmd_read():
                          **({"detail": "Reconciliation check failed: " + ", ".join(c["check"] for c in failed)} if failed else {})}
         print(f"API_READ {cls}: {statuses[cls]['status']} count={out['count']}")
 
+    # Metadados do repositório para a restauração (não é uma classe: não entra no status das classes).
+    metadata, metadata_error = read_repo_metadata(client, repo)
+    if metadata is not None:
+        write_json(package / "repo-metadata.json", metadata)
+        print("API_READ repo-metadata: OK")
+    else:
+        print(f"API_READ repo-metadata: FAILED: {metadata_error}")
     inventory = {"schema": "api-inventory/1", "source_repository": repo, "captured_at": now(),
-                 "api_base": client.base, "classes": statuses, "limitations": LIMITATIONS}
+                 "api_base": client.base, "classes": statuses, "limitations": LIMITATIONS,
+                 "repo_metadata": {"written": metadata is not None, **({"error": metadata_error} if metadata_error else {})}}
     write_json(package / "api-inventory.json", inventory)
     write_json(evidence / "api-status.json", inventory)
 

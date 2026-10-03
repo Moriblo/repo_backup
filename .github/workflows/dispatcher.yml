@@ -20,10 +20,12 @@
 #                Qualquer violação falha o job e NADA é despachado (fail-closed).
 #   run-bkp-repo Chama o workflow do BKP_REPO uma vez por linha nova válida.
 #   run-bkp-proj Chama o workflow do BKP_PROJ (backup só de Projects) idem.
+#   run-rst-repo Chama o workflow do RST_REPO (restauração para um repositório novo) idem.
 #
 # MAPEAMENTO FIXO (Mnemonic -> workflow)
 #   BKP_REPO -> .github/workflows/backup-repository.yml
 #   BKP_PROJ -> .github/workflows/backup-projects.yml
+#   RST_REPO -> .github/workflows/restore-repository.yml
 #   Um Mnemonic novo exige: (1) entrada em MNEMONIC_WORKFLOWS no dispatch_check.py,
 #   (2) um job `run-<mnemonic>` aqui, (3) registro em backup/capabilities.yaml.
 #   `uses:` precisa ser um caminho literal, por isso um job por Mnemonic (não há
@@ -73,6 +75,9 @@ jobs:
       # Idem para o BKP_PROJ (backup só de Projects).
       bkp_proj_matrix: ${{ steps.check.outputs.bkp_proj_matrix }}
       bkp_proj_count: ${{ steps.check.outputs.bkp_proj_count }}
+      # Idem para o RST_REPO (restauração).
+      rst_repo_matrix: ${{ steps.check.outputs.rst_repo_matrix }}
+      rst_repo_count: ${{ steps.check.outputs.rst_repo_count }}
     steps:
       # Histórico completo (fetch-depth: 0): o script compara o commit anterior do
       # push com o novo, e o anterior pode estar fora de um clone raso.
@@ -159,4 +164,30 @@ jobs:
       scope: ${{ matrix.scope }}
       scope_identifiers: ${{ matrix.scope_identifiers }}
       destination: ${{ matrix.destination }}
+      preflight_decision: ${{ matrix.preflight_decision }}
+
+  # ---------------------------------------------------------------------------
+  # run-rst-repo: chama o workflow do Mnemonic RST_REPO (restauração para um repositório NOVO).
+  # Uma execução por linha nova (matrix). Só roda se houver ao menos uma.
+  # ---------------------------------------------------------------------------
+  run-rst-repo:
+    name: RST_REPO ${{ matrix.request_id }}
+    needs: guard
+    if: needs.guard.outputs.rst_repo_count != '0'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.guard.outputs.rst_repo_matrix) }}
+    concurrency:
+      group: rst-repo-${{ matrix.request_id }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    # Caminho LITERAL (mapeamento fixo), como nos outros jobs.
+    uses: ./.github/workflows/restore-repository.yml
+    secrets: inherit
+    # Os inputs do ECR do RST_REPO, vindos da linha validada do commands.log.
+    with:
+      request_id: ${{ matrix.request_id }}
+      backup_path: ${{ matrix.backup_path }}
+      target_name: ${{ matrix.target_name }}
       preflight_decision: ${{ matrix.preflight_decision }}
