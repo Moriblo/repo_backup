@@ -59,6 +59,8 @@ VARIÁVEIS DE AMBIENTE
     PROJECTS_SCOPE_IDS    JSON com os identificadores do escopo.
     EVIDENCE_DIR          pasta de evidências (padrão: evidence). Recebe api-projects-status.json.
     PACKAGE_DIR           pasta do pacote (padrão: package). Recebe api-projects*.json.
+    SOURCE_TITLES_DIR     pasta com o api-issues.json da origem (padrão: PACKAGE_DIR). No backup só de
+                          Projects (BKP_PROJ) fica fora do pacote: as issues não fazem parte dele.
     GITHUB_API_URL        base da API (padrão: https://api.github.com); o GraphQL fica em
                           <base>/graphql. Existe para o teste local usar um servidor simulado.
 
@@ -473,7 +475,9 @@ def cmd_read():
     entry = {"status": "FAILED", "count": 0, "files": [], "checks": []}
     projects, all_items, notes, partial, excluded = [], [], [], False, []
     # Títulos das issues da origem (só para confirmar candidatos do escopo SOURCE_REPOSITORY).
-    titles = load_source_titles(package) if scope == "SOURCE_REPOSITORY" else None
+    # SOURCE_TITLES_DIR: pasta onde está o api-issues.json (padrão: o próprio pacote). No backup só de Projects
+    # (BKP_PROJ) as issues são lidas numa pasta de trabalho, fora do pacote, só para esta conferência.
+    titles = load_source_titles(pathlib.Path(os.environ.get("SOURCE_TITLES_DIR", package))) if scope == "SOURCE_REPOSITORY" else None
     try:
         found, notes, partial = discover(graph, scope, ids)
         for ref in found:

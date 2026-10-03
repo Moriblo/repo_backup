@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Auxiliar determinístico do workflow BKP_REPO (backup-repository.yml).
+"""Auxiliar determinístico dos workflows BKP_REPO (backup-repository.yml) e BKP_PROJ (backup-projects.yml).
 
 O QUE É
-    Um único script com quatro subcomandos. O workflow chama cada um em um
-    ponto fixo da execução. Manter a lógica aqui (e não em YAML inline) permite
+    Um único script com quatro subcomandos, compartilhado pelos dois workflows. A capability é
+    escolhida pela variável CAPABILITY_ID (backup_repository, o padrão, ou backup_projects).
+    Cada workflow chama os subcomandos em um ponto fixo da execução. Manter a lógica aqui (e não em YAML inline) permite
     testar localmente e revisar com facilidade.
 
 ONDE SE ENCAIXA NO FLUXO
@@ -30,9 +31,13 @@ CONTRATO DE SAÍDA
     resumo do job ($GITHUB_STEP_SUMMARY).
 
 VARIÁVEIS DE AMBIENTE (definidas pelo workflow)
-    REQUEST_ID, SOURCE_REPOSITORY, DESTINATION   inputs autorizados
+    CAPABILITY_ID                                capability executada (padrão: backup_repository; backup_projects no BKP_PROJ)
+    REQUEST_ID, DESTINATION                      inputs autorizados (comuns)
+    SOURCE_REPOSITORY                            input do BKP_REPO
+    SCOPE, SCOPE_IDENTIFIERS                     inputs do BKP_PROJ (escopo e identificadores, este em JSON)
     PREFLIGHT_DECISION                           JSON da decisão CONTINUE_WITH_RESTRICTIONS (opcional)
-    TOKEN_OUTCOME                                resultado do passo que fornece o token de leitura (SOURCE_READ_TOKEN)
+    TOKEN_OUTCOME                                resultado do passo que fornece o token de leitura (SOURCE_READ_TOKEN);
+                                                 só conta nas capabilities com source_read_token_required (BKP_REPO)
     PROJECTS_TOKEN_OUTCOME                       resultado do passo que fornece o token de Projects (PROJECTS_READ_TOKEN);
                                                  sem ele, a classe projects vira ACCESS_PERMISSION_GAP
     EVIDENCE_DIR                                 pasta de evidências (padrão: "evidence")
@@ -60,6 +65,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 # Pasta onde as evidências são gravadas. O workflow define EVIDENCE_DIR=evidence.
 EVIDENCE = pathlib.Path(os.environ.get("EVIDENCE_DIR", "evidence"))
+
+# Capability executada. O BKP_REPO é o padrão; o workflow do BKP_PROJ define CAPABILITY_ID=backup_projects.
+CAPABILITY_ID = os.environ.get("CAPABILITY_ID", "backup_repository")
 
 # Classificações de lacuna usadas no preflight (vocabulário de BACKUP_REPOSITORY.md).
 # ACCESS_PERMISSION_GAP: a rota existe, mas o acesso/permissão a bloqueia.
@@ -92,6 +100,27 @@ def load(path):
 def now():
     """Data/hora atual em UTC, formato ISO 8601 com 'Z' (ex.: 2026-09-29T12:00:00Z)."""
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def capability(caps=None):
+    """Definição da capability executada (CAPABILITY_ID) no capabilities.yaml."""
+    caps = caps or load("backup/capabilities.yaml")
+    return next(c for c in caps["capabilities"] if c["id"] == CAPABILITY_ID)
+
+
+def scope_subject():
+    """(sujeito, source_scope) desta execução: o que o backup cobre, para a evidência e o manifest.
+
+    BKP_REPO: o repositório de origem. BKP_PROJ: o escopo pedido (`scope` + `scope_identifiers`),
+    e o sujeito é o dono ou o repositório que o escopo nomeia."""
+    destination = os.environ.get("DESTINATION", "")
+    if CAPABILITY_ID == "backup_projects":
+        scope, ids = os.environ.get("SCOPE", ""), json.loads(os.environ.get("SCOPE_IDENTIFIERS", "{}"))
+        subject = {"SOURCE_REPOSITORY": ids.get("source_repository"), "PROJECT": f"{ids.get('owner')}/projects/{ids.get('number')}",
+                   "OWNER_PROJECT_SET": f"{ids.get('owner')}/projects"}[scope]
+        return subject, {"scope": scope, "scope_identifiers": ids, "destination": destination}
+    source = os.environ.get("SOURCE_REPOSITORY", "")
+    return source, {"source_repository": source, "destination": destination}
 
 
 def result(status, **extra):
@@ -142,10 +171,21 @@ def cmd_validate_inputs():
     Falha com saída 2 e status REJECTED.
     """
     # Valores recebidos do workflow. Chegam por variável de ambiente (nunca interpolados no shell), o que evita injeção de comando.
-    params = {
-        "source_repository": os.environ.get("SOURCE_REPOSITORY", ""),
-        "destination": os.environ.get("DESTINATION", ""),
-    }
+    if CAPABILITY_ID == "backup_projects":
+        mnemonic = "BKP_PROJ"
+        try:
+            ids = json.loads(os.environ.get("SCOPE_IDENTIFIERS", ""))
+        except ValueError:
+            print("::error::input validation: scope_identifiers is not valid JSON")
+            result("REJECTED", reason="INPUT_VALIDATION")
+            sys.exit(2)
+        params = {"scope": os.environ.get("SCOPE", ""), "scope_identifiers": ids, "destination": os.environ.get("DESTINATION", "")}
+    else:
+        mnemonic = "BKP_REPO"
+        params = {
+            "source_repository": os.environ.get("SOURCE_REPOSITORY", ""),
+            "destination": os.environ.get("DESTINATION", ""),
+        }
     # Decisão do HITL (só existe em linha de continuação). None = 1ª execução.
     decision = parse_decision()
     if decision is not None:
@@ -153,7 +193,7 @@ def cmd_validate_inputs():
     # A linha sintética usa GO porque este workflow só é chamado após autorização.
     line = {
         "request_id": os.environ.get("REQUEST_ID", ""),
-        "mnemonic": "BKP_REPO",
+        "mnemonic": mnemonic,
         "ts": now(),
         "authorization": {"decision": "GO", "authorized_scope": "EXACT_COMMAND_REQUEST", "reusable": False},
         "params": params,
@@ -175,11 +215,11 @@ def cmd_validate_inputs():
         result("REJECTED", reason="AUTHORIZATION_REUSE")
         sys.exit(2)
     # Só chega aqui se a entrada passou em todas as verificações.
-    print(f"Inputs valid for {params['source_repository']}")
+    print(f"Inputs valid for {scope_subject()[0]}")
 
 
 def build_preflight():
-    """Avalia cada classe de objeto do backup_repository. Devolve (assessments, gaps, pending).
+    """Avalia cada classe de objeto da capability executada. Devolve (assessments, gaps, pending).
 
     assessments: por classe, as rotas avaliadas e a capacidade efetiva de leitura.
     gaps:        lacunas MATERIAIS (só ARCHITECTURAL/EXECUTION/ACCESS), que exigem HITL.
@@ -187,10 +227,11 @@ def build_preflight():
                  Ficam separados e NUNCA entram em `gaps` (regra 12 do protocolo).
     """
     caps = load("backup/capabilities.yaml")
-    cap = next(c for c in caps["capabilities"] if c["id"] == "backup_repository")
+    cap = capability(caps)
     # O passo do workflow que fornece o token de leitura usa continue-on-error;
-    # aqui o resultado dele decide se a leitura da origem está disponível.
-    token_ok = os.environ.get("TOKEN_OUTCOME") == "success"
+    # aqui o resultado dele decide se a leitura da origem está disponível. O backup só de Projects
+    # (`source_read_token_required: false`) não usa o token da origem: só a credencial da classe.
+    token_ok = os.environ.get("TOKEN_OUTCOME") == "success" or not cap.get("source_read_token_required", True)
     # Classes que o executor JÁ lê e preserva, declaradas no registro (`implemented_classes`).
     # Toda outra classe de `includes` vira EXECUTION_CAPABILITY_GAP até existir uma rota
     # implementada; nunca é tratada como ausente nem como preservada (regra 9 do protocolo).
@@ -202,7 +243,7 @@ def build_preflight():
     # secret e a variável com o resultado do passo que o fornece (ex.: PROJECTS_TOKEN_OUTCOME).
     class_credentials = cap.get("class_credentials", {})
     assessments, gaps, pending = [], [], []
-    # Uma avaliação por classe de objeto que o backup_repository cobre (lista `includes` do capabilities.yaml).
+    # Uma avaliação por classe de objeto que a capability cobre (lista `includes` do capabilities.yaml).
     for cls in cap["includes"]:
         # spec = definição da classe: leituras exigidas e rotas aprovadas.
         spec = caps["object_classes"][cls]
@@ -226,7 +267,7 @@ def build_preflight():
                     state, lim = "UNAVAILABLE", cred_msg
                 else:
                     state, lim = "UNAVAILABLE", "This executor has no implemented route for the object class."
-                routes.append({"route_type": rt, "route_reference": "github_actions:backup-repository.yml",
+                routes.append({"route_type": rt, "route_reference": cap["deterministic_executor"]["reference"],
                                "state": state, "authorized": True, "limitation": lim})
             else:
                 # Demais rotas (conector, REST direto, etc.) não estão no escopo desta
@@ -401,15 +442,19 @@ def cmd_build_evidence():
         sys.exit(21)
     # Daqui em diante o destino JÁ foi validado (checado acima); é seguro montar a evidência.
     request_id = os.environ["REQUEST_ID"]
-    source = os.environ["SOURCE_REPOSITORY"]
+    # Sujeito do backup (repositório, ou o que o escopo de Projects nomeia) e escopo para a evidência.
+    source, source_scope = scope_subject()
     # Resultado do preflight desta mesma execução, gravado antes pelo subcomando `preflight`.
     pf = json.loads((EVIDENCE / "preflight.json").read_text())
     # Restrições aceitas indexadas por classe de objeto.
     accepted = {a["object_class"]: a for a in pf["accepted_restrictions"]}
     started = os.environ.get("STARTED_AT", now())
 
-    # Lista de objetos da evidência: primeiro o git, depois as classes de API (labels, milestones, issues) e,
-    # por fim, as classes ainda NOT-VERIFIED.
+    # Lista de objetos da evidência: primeiro o git (só no BKP_REPO), depois as classes de API (labels, milestones,
+    # issues, projects) e, por fim, as classes ainda NOT-VERIFIED.
+    caps = load("backup/capabilities.yaml")
+    cap = capability(caps)
+    implemented = set(cap.get("implemented_classes", []))
     objects = []
     # --- Classe git: disposição decidida pelos arquivos que os passos bash gravaram ---
     git_disp, git_lim = "PRESERVED", None
@@ -426,21 +471,20 @@ def cmd_build_evidence():
     if git_disp != "FAILED" and not package:
         # Sem pacote no destino não há preservação: o mirror local some com o runner.
         git_disp, git_lim = "FAILED", "No preservation package was uploaded to the destination."
-    objects.append({"object_class": "git", "object_id": source, "disposition": git_disp,
-                    "evidence": ["refs.tsv", "refs-compare.txt", "git-fsck.txt", "git-count-objects.txt", "lfs-files.txt",
-                                 "lfs-verification.tsv", "gitmodules-history.tsv", "gitlinks-history.tsv",
-                                 "onedrive-package.json"],
-                    "limitation": git_lim})
+    if "git" in implemented:
+        objects.append({"object_class": "git", "object_id": source, "disposition": git_disp,
+                        "evidence": ["refs.tsv", "refs-compare.txt", "git-fsck.txt", "git-count-objects.txt", "lfs-files.txt",
+                                     "lfs-verification.tsv", "gitmodules-history.tsv", "gitlinks-history.tsv",
+                                     "onedrive-package.json"],
+                        "limitation": git_lim})
     # Limitações do manifest, cada uma ligada à sua restrição aceita (rastreabilidade).
     limitations = []
-    if git_lim:
+    if "git" in implemented and git_lim:
         limitations.append({"limitation_id": "LIM-git-submodules", "description": git_lim,
                             "restriction_id": None, "object_class": "git"})
     # --- Classes lidas pela API (labels, milestones, issues) ---
     # Só entram aqui as que estão em `implemented_classes` do registro e que este leitor cobre.
     # A leitura nunca vira sucesso por omissão: sem api-status.json a classe é FAILED.
-    caps = load("backup/capabilities.yaml")
-    implemented = set(next(c for c in caps["capabilities"] if c["id"] == "backup_repository").get("implemented_classes", []))
     # Uma classe implementada, mas com restrição ACEITA nesta execução (ex.: projects sem o
     # PROJECTS_READ_TOKEN), não foi lida: fica NOT-VERIFIED no laço abaixo.
     api_classes = [c for c in API_CLASSES if c in implemented and c not in accepted]
@@ -454,7 +498,10 @@ def cmd_build_evidence():
     for cls in api_classes:
         st = api_status.get(cls)
         api_files = API_EVIDENCE[cls] + [f["file"] for f in (st or {}).get("files", [])]
-        if st is None:
+        if not package:
+            # Sem pacote no destino não há preservação, nem das classes de API (o JSON só existia no runner).
+            disp, lim = "FAILED", "No preservation package was uploaded to the destination."
+        elif st is None:
             disp, lim = "FAILED", "The API read step did not produce a result for this class."
         elif st["status"] == "OK":
             disp, lim = "PRESERVED-AS-EQUIVALENT-REPRESENTATION", API_LIMITATION[cls]
@@ -487,8 +534,8 @@ def cmd_build_evidence():
              "hitl_decision": pf["hitl_decision"], "accepted_restrictions": pf["accepted_restrictions"]}
     # Corpo do evidence.json (schema 2.0).
     evidence = {
-        "schema_version": "2.0", "request_id": request_id, "capability_id": "backup_repository",
-        "source_scope": {"source_repository": source, "destination": os.environ["DESTINATION"]},
+        "schema_version": "2.0", "request_id": request_id, "capability_id": CAPABILITY_ID,
+        "source_scope": source_scope,
         "captured_at": now(), "capability_preflight": pf_ev, "objects": objects,
         "execution": {"source_repository_mode": "READ_ONLY", "destination_validated": True,
                       "authorization_request_id": request_id, "restrictions_reconciled": True,
@@ -515,7 +562,7 @@ def cmd_build_evidence():
     status = "FAILED" if count("FAILED") else ("COMPLETE_WITH_EXCEPTIONS" if exceptions else "COMPLETE")
     # Corpo do manifest.json (schema 2.0): reconciliação legível por máquina.
     manifest = {
-        "schema_version": "2.0", "request_id": request_id, "capability_id": "backup_repository",
+        "schema_version": "2.0", "request_id": request_id, "capability_id": CAPABILITY_ID,
         "scope": evidence["source_scope"], "started_at": started, "completed_at": now(), "status": status,
         "capability_preflight": {"status": pf["status"], "hitl_decision": pf["hitl_decision"],
                                  "accepted_restrictions": pf["accepted_restrictions"]},

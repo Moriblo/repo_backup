@@ -380,7 +380,7 @@ object_classes:
 
 # Menu de capabilities. As que têm `hitl_required: true` exigem GO do HITL.
 # Só uma capability com `mnemonic` e `command_workflow` gera linha no commands.log
-# (hoje, apenas backup_repository).
+# (hoje, backup_repository e backup_projects).
 capabilities:
   - id: backup_repository
     name: Backup Repository
@@ -476,9 +476,21 @@ capabilities:
       # Layout no destino: <destination>/<request_id>/package/ (restaurável) e /evidence/.
       layout: "<destination>/<request_id>/{package,evidence}"
 
-  # Backup de Projects. Chamável sozinho e também incluído pelo backup_repository. SEM Mnemonic e SEM executor materializado: hoje não gera comando.
+  # Backup de Projects. Chamável sozinho (Mnemonic BKP_PROJ) e também incluído pelo backup_repository.
   - id: backup_projects
     name: Backup Projects
+    # Mnemonic que o engine grava no commands.log; o dispatcher o mapeia, de forma FIXA, para o workflow abaixo.
+    mnemonic: BKP_PROJ
+    command_workflow:
+      # Único vínculo com o workflow: o `artifact_id` no registro de artefatos (o caminho vem de lá).
+      artifact_id: backup_projects_executor
+      invocation: workflow_call
+      secrets: inherit
+      ecr_source: WORKFLOW_ON_WORKFLOW_CALL_INPUTS
+      result_log_marker: BKP_RESULT
+    command_log:
+      path: commands.log
+      line_schema: backup/schemas/commands-log-line.schema.yaml
     class: PRESERVATION_EXECUTION
     hitl_required: true
     source_repository_mode: READ_ONLY
@@ -488,6 +500,15 @@ capabilities:
       # Não se sabe se este executor já existiu antes (informação que o registro sozinho não dá).
       historical_existence: NOT_DETERMINED
       required_for_capability_definition: false
+    # Classes cobertas e implementadas: só `projects` (mesmo leitor do BKP_REPO). O preflight
+    # (bkp_repo.py, com CAPABILITY_ID=backup_projects) calcula as restrições como `includes` menos `implemented_classes`.
+    includes: [projects]
+    implemented_classes: [projects]
+    # Este backup não clona nem lê o código: o SOURCE_READ_TOKEN não é exigido pelo preflight
+    # (no escopo SOURCE_REPOSITORY ele só alimenta a regra E, opcionalmente).
+    source_read_token_required: false
+    class_credentials:
+      projects: {secret: PROJECTS_READ_TOKEN, outcome_env: PROJECTS_TOKEN_OUTCOME}
     # Relação com o backup_repository: Projects relacionados entram no backup do repositório; também pode ser chamado isoladamente.
     relationship_to_backup_repository:
       related_projects_included_by_backup_repository: true
@@ -623,7 +644,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: c7e62aaedba482bcc0f1def6f0892e2c47efacec
+      current_sha: f1abfb788ad617465677ab730129f1fa4496d0fe
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -744,7 +765,8 @@ implementation_artifacts:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
   # ---------------------------------------------------------------------------
-  # Executor do backup_projects: só registrado (arquivo ainda não existe).
+  # Executor do BKP_PROJ: workflow_call chamado pelo dispatcher.yml. Os inputs do `on: workflow_call`
+  # dele definem o ECR. Ainda não rodou de verdade (NOT_VALIDATED até o primeiro run real).
   # ---------------------------------------------------------------------------
   - artifact_id: backup_projects_executor
     artifact_type: GITHUB_ACTIONS_WORKFLOW
@@ -753,11 +775,14 @@ implementation_artifacts:
       path: .github/workflows/backup-projects.yml
     purpose: Deterministic executor referenced by backup_projects.
     materialization:
-      status: NOT_MATERIALIZED
+      status: MATERIALIZED
     integrity:
       tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: aa7357a5d923abb695a237830262700e87edbc2f
     validation:
       status: NOT_VALIDATED
+      scope: Ainda não executado no Actions; a lógica compartilhada (schema, dispatcher, preflight, evidência) é coberta pelos testes locais.
     relationships:
       - {capability_id: backup_projects, relationship: EXECUTES}
 
@@ -802,7 +827,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: f1492b1f55118f7bc7ea948d672a9340ffdedd73
+      current_sha: fd25f524d0eff26d98e8ac75bb8d4f89eeecf412
     validation:
       status: VALIDATED
       scope: Linha inicial e linha de continuação validadas pelo dispatcher e revalidadas pelo BKP_REPO. Casos de rejeição só testados localmente.
@@ -827,7 +852,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 88306e642fa644277723e60380554197d1e45300
+      current_sha: 5b49ecd81d40efb5b893180af60d29ed2baf51ea
     validation:
       status: VALIDATED
       scope: Caminho feliz (uma linha aceita e despachada, linha de continuação) e push sem mudança no log (merge de PR). Recusas por violação só testadas localmente.
@@ -856,7 +881,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: c0a4f5b686d103a10bff001c1768450c028378e2
+      current_sha: c7839eddffc1b2963fae15545f6a8c2105ed8714
     validation:
       status: VALIDATED
       scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura."
@@ -886,7 +911,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: bf0abb9af73adcd9825837de66d493c0f80888cb
+      current_sha: f608c39f105cba5dc5057cf20718dd6af5dd91bc
     validation:
       status: VALIDATED
       scope: Caminho feliz e push sem mudança no log em runs reais. Verificações de violação só testadas localmente.
@@ -1033,7 +1058,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 430ca6130aeaf70c1d0d1ef6735a7f99498f84cd
+      current_sha: 76c5ec8130526a4b31c3224bf926501db320d5bb
     validation:
       status: NOT_VALIDATED
     relationships:
@@ -1102,7 +1127,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 086b8bfec52ee240654d2cf6727ab0228a138704
+      current_sha: 56ee86c901249dcc4797b6140aef9bbfec923564
     validation:
       status: VALIDATED
       scope: "Run real completo (req-20261003-003, run 37089900544, Moriblo/backup_teste_issues, repositório privado): o token clássico read:project não enxerga o repositório; a descoberta alternativa lista os Projects do dono e a regra E confirma o vínculo pelos títulos: o quadro nº 13 ficou com TITLE_MATCH 6/6 (7 itens, 14 campos, 1 view, 6 workflows, Status e Prioridade conferidos contra a tela) e os nº 12 e nº 5 foram excluídos (TITLES_DO_NOT_MATCH, 0/101 e 0/1) e NÃO entraram no pacote (api-project-items.json de 177 KB para 12 KB). Classe PARTIALLY-PRESERVED: 6 itens com a referência da issue oculta (o estado do quadro sobrevive). Paginação real exercitada no run anterior (101 itens em 2 páginas, run 37087638922). Não provado - falso positivo por título repetido entre repositórios, origem sem issues, Project só com rascunhos, os escopos PROJECT e OWNER_PROJECT_SET, Projects de organização, valores de campo de iteração, data e número, itens arquivados e status updates."
@@ -1126,10 +1151,54 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 9f02b0b4b24a820ca5bab9156ffe777fb68e4bef
+      current_sha: 6e5b6957bfd4a418659be87e6f4a5a59026b8969
     validation:
       status: NOT_VALIDATED
-      scope: Executado localmente (28 testes, mais verificação de mutação). Não roda no Actions.
+      scope: Executado localmente e no CI dos pull requests (29 testes, mais verificação de mutação).
+    relationships:
+      - {capability_id: backup_repository, relationship: VALIDATES}
+      - {capability_id: backup_projects, relationship: VALIDATES}
+
+  # ---------------------------------------------------------------------------
+  # Teste local do schema da linha do commands.log e do dispatch_check.py (BKP_REPO e BKP_PROJ). Roda com python3 (PyYAML e jsonschema).
+  # ---------------------------------------------------------------------------
+  - artifact_id: dispatch_check_test
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/tests/test_dispatch_check.py
+    purpose: "Local test of the commands.log line schema and the dispatcher check: valid and invalid lines for both Mnemonics, shared preflight_decision, BKP_REPO matrix regression, BKP_PROJ matrix, fixed mapping, dispatcher jobs and workflow inputs."
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 2bb685f0116255653892b7e8cb652296c205a61b
+    validation:
+      status: NOT_VALIDATED
+      scope: "Executado localmente e no CI dos pull requests (13 testes, mais verificação de mutação). Não roda no dispatcher real."
+    relationships:
+      - {capability_id: backup_repository, relationship: VALIDATES}
+      - {capability_id: backup_projects, relationship: VALIDATES}
+
+  # ---------------------------------------------------------------------------
+  # Teste local ponta a ponta do bkp_repo.py nos dois modos (BKP_PROJ e regressão do BKP_REPO), contra APIs simuladas.
+  # ---------------------------------------------------------------------------
+  - artifact_id: bkp_proj_test
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/tests/test_bkp_proj.py
+    purpose: "Local end-to-end test of bkp_repo.py in both modes against simulated REST and GraphQL APIs: input validation, single-class preflight, evidence and manifest of BKP_PROJ in the three scopes, title match, restriction accepted, and BKP_REPO regression."
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 23aa36c7958baf4fa342e4e4fa6ac957be19b6eb
+    validation:
+      status: NOT_VALIDATED
+      scope: "Executado localmente e no CI dos pull requests (12 testes, mais verificação de mutação). Não roda no Actions real nem contra o OneDrive."
     relationships:
       - {capability_id: backup_repository, relationship: VALIDATES}
       - {capability_id: backup_projects, relationship: VALIDATES}

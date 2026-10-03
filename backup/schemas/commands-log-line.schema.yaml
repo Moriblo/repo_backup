@@ -20,10 +20,19 @@
 #   - `additionalProperties: false`: campo desconhecido é rejeitado (fail-closed).
 #   - O arquivo é append-only; linhas existentes não podem ser alteradas.
 #
+# MNEMONICS ATUAIS
+#   BKP_REPO  backup de um repositório (params: source_repository, destination)
+#   BKP_PROJ  backup só de Projects v2 (params: scope, scope_identifiers, destination)
+#   `preflight_decision` (linha de continuação) é igual nos dois: definição única em $defs.
+#
 # EXEMPLO DE LINHA VÁLIDA (uma única linha no arquivo real):
 #   {"request_id":"req-20260929-01","mnemonic":"BKP_REPO","ts":"2026-09-29T12:00:00Z",
 #    "authorization":{"decision":"GO","authorized_scope":"EXACT_COMMAND_REQUEST","reusable":false},
 #    "params":{"source_repository":"Moriblo/exemplo","destination":"backups/exemplo"}}
+# EXEMPLO BKP_PROJ (uma única linha no arquivo real):
+#   {"request_id":"req-20261004-001","mnemonic":"BKP_PROJ","ts":"2026-10-04T12:00:00Z",
+#    "authorization":{"decision":"GO","authorized_scope":"EXACT_COMMAND_REQUEST","reusable":false},
+#    "params":{"scope":"PROJECT","scope_identifiers":{"owner":"Moriblo","number":13},"destination":"backups/projetos"}}
 # =============================================================================
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: commands-log-line.schema.yaml
@@ -47,7 +56,7 @@ properties:
     description: Unique per line. A repeated request_id MUST be rejected by the dispatcher.
   # Comando a executar. Cada valor tem um workflow fixo no dispatcher.
   mnemonic:
-    enum: [BKP_REPO]
+    enum: [BKP_REPO, BKP_PROJ]
   # Momento em que o engine gravou a linha (UTC, ISO 8601).
   ts:
     type: string
@@ -93,38 +102,98 @@ allOf:
               description: Path relative to the OneDrive AppFolder (approot).
               pattern: "^[A-Za-z0-9_][A-Za-z0-9._/-]*$"
               not: {pattern: "\\.\\."}
-            # Presente somente numa linha de CONTINUAÇÃO: quando uma execução anterior
-            # terminou BLOCKED por lacunas do Capability Preflight e o HITL escolheu
-            # CONTINUE_WITH_RESTRICTIONS. Sem este campo, é uma 1ª execução.
-            preflight_decision:
-              description: >
-                Present only on a follow-up line issued after a run ended BLOCKED
-                by a material Capability Preflight gap and HITL chose to continue.
+            # Presente somente numa linha de CONTINUAÇÃO (definição em $defs.preflight_decision).
+            preflight_decision: {$ref: "#/$defs/preflight_decision"}
+
+  # ---- BKP_PROJ: backup só de Projects v2 (GitHub) para o OneDrive ----
+  - if:
+      properties:
+        mnemonic: {const: BKP_PROJ}
+      required: [mnemonic]
+    then:
+      properties:
+        params:
+          type: object
+          additionalProperties: false
+          required: [scope, scope_identifiers, destination]
+          properties:
+            # Escopo do backup (capabilities.yaml, backup_projects). Os identificadores
+            # exigidos dependem do escopo (ver o `allOf` interno).
+            scope:
+              enum: [SOURCE_REPOSITORY, PROJECT, OWNER_PROJECT_SET]
+            scope_identifiers:
               type: object
-              additionalProperties: false
-              required: [previous_request_id, hitl_decision, accepted_restrictions]
-              properties:
-                # request_id da execução que terminou BLOCKED (deve ser diferente do atual).
-                previous_request_id: {type: string, minLength: 1}
-                # Única decisão que gera nova linha; STOP simplesmente não grava nada.
-                hitl_decision: {const: CONTINUE_WITH_RESTRICTIONS}
-                # Restrições aceitas pelo HITL, uma por lacuna. O workflow exige que
-                # TODAS as restrições da lacuna estejam aqui; faltando alguma, continua BLOCKED.
-                accepted_restrictions:
-                  type: array
-                  minItems: 1
-                  items:
+            # Mesma regra do BKP_REPO: relativo ao AppFolder, sem "/" inicial e sem "..".
+            destination:
+              type: string
+              description: Path relative to the OneDrive AppFolder (approot).
+              pattern: "^[A-Za-z0-9_][A-Za-z0-9._/-]*$"
+              not: {pattern: "\\.\\."}
+            preflight_decision: {$ref: "#/$defs/preflight_decision"}
+          allOf:
+            - if: {properties: {scope: {const: SOURCE_REPOSITORY}}, required: [scope]}
+              then:
+                properties:
+                  scope_identifiers:
                     type: object
                     additionalProperties: false
-                    required: [restriction_id, object_class, restriction, source_gap_classification]
+                    required: [source_repository]
                     properties:
-                      # ID estável (ex.: RST-issues-EXECUTION_CAPABILITY_GAP); segue
-                      # rastreável na evidência, no manifest e no relatório final.
-                      restriction_id: {type: string, minLength: 1}
-                      # Classe de objeto afetada (git, issues, pull_requests...).
-                      object_class: {type: string, minLength: 1}
-                      # Texto da restrição aceita, como o HITL a leu.
-                      restriction: {type: string, minLength: 1}
-                      # Tipo da lacuna que originou a restrição.
-                      source_gap_classification:
-                        enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]
+                      source_repository: {type: string, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}
+            - if: {properties: {scope: {const: PROJECT}}, required: [scope]}
+              then:
+                properties:
+                  scope_identifiers:
+                    type: object
+                    additionalProperties: false
+                    required: [owner, number]
+                    properties:
+                      owner: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"}
+                      number: {type: integer, minimum: 1}
+            - if: {properties: {scope: {const: OWNER_PROJECT_SET}}, required: [scope]}
+              then:
+                properties:
+                  scope_identifiers:
+                    type: object
+                    additionalProperties: false
+                    required: [owner]
+                    properties:
+                      owner: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"}
+
+$defs:
+  # Decisão do HITL após um BLOCKED de preflight; comum a todos os Mnemonics.
+  # Presente somente numa linha de CONTINUAÇÃO: quando uma execução anterior
+  # terminou BLOCKED por lacunas do Capability Preflight e o HITL escolheu
+  # CONTINUE_WITH_RESTRICTIONS. Sem este campo, é uma 1ª execução.
+  preflight_decision:
+    description: >
+      Present only on a follow-up line issued after a run ended BLOCKED
+      by a material Capability Preflight gap and HITL chose to continue.
+    type: object
+    additionalProperties: false
+    required: [previous_request_id, hitl_decision, accepted_restrictions]
+    properties:
+      # request_id da execução que terminou BLOCKED (deve ser diferente do atual).
+      previous_request_id: {type: string, minLength: 1}
+      # Única decisão que gera nova linha; STOP simplesmente não grava nada.
+      hitl_decision: {const: CONTINUE_WITH_RESTRICTIONS}
+      # Restrições aceitas pelo HITL, uma por lacuna. O workflow exige que
+      # TODAS as restrições da lacuna estejam aqui; faltando alguma, continua BLOCKED.
+      accepted_restrictions:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          additionalProperties: false
+          required: [restriction_id, object_class, restriction, source_gap_classification]
+          properties:
+            # ID estável (ex.: RST-issues-EXECUTION_CAPABILITY_GAP); segue
+            # rastreável na evidência, no manifest e no relatório final.
+            restriction_id: {type: string, minLength: 1}
+            # Classe de objeto afetada (git, issues, pull_requests...).
+            object_class: {type: string, minLength: 1}
+            # Texto da restrição aceita, como o HITL a leu.
+            restriction: {type: string, minLength: 1}
+            # Tipo da lacuna que originou a restrição.
+            source_gap_classification:
+              enum: [ARCHITECTURAL_GAP, EXECUTION_CAPABILITY_GAP, ACCESS_PERMISSION_GAP]

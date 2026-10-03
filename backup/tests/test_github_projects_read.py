@@ -331,6 +331,19 @@ class ReadTest(unittest.TestCase):
         self.assertEqual(st["count"], 1)
         self.assertEqual(self.load("api-projects.json")[0]["linkage"], {"method": "REQUESTED_SCOPE"})
 
+    def test_titulos_lidos_de_outra_pasta_com_source_titles_dir(self):
+        # No BKP_PROJ as issues ficam numa pasta de trabalho, fora do pacote (SOURCE_TITLES_DIR).
+        FakeGraph.repo_visible = False
+        FakeGraph.projects = [make_project(13, repos=(None,), hidden=True)]
+        work = self.root / "titles-work"
+        work.mkdir()
+        (work / "api-issues.json").write_text(json.dumps([{"number": n, "title": t} for n, t in enumerate(DEFAULT_TITLES, 1)]), encoding="utf-8")
+        with unittest.mock.patch.dict(os.environ, {"SOURCE_TITLES_DIR": str(work)}):
+            st = self.run_read()
+        self.assertEqual((st["status"], st["count"]), ("PARTIAL", 1))
+        self.assertEqual(self.load("api-projects.json")[0]["linkage"]["method"], "TITLE_MATCH")
+        self.assertFalse((self.root / "package" / "api-issues.json").exists())
+
     def test_vinculo_visivel_tem_linkage_visible_link(self):
         self.run_read()
         self.assertEqual(self.load("api-projects.json")[0]["linkage"], {"method": "VISIBLE_LINK"})
