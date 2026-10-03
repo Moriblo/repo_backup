@@ -536,6 +536,50 @@ capabilities:
       destination: {type: string, required: true, source: HITL_OR_EXPLICIT_CONFIRMATION}
       additional_parameters: {type: object, required: false, source: HITL_WHEN_APPLICABLE}
 
+  # Backup só de labels, milestones e issues de UM repositório. Chamável sozinho (Mnemonic BKP_ISSUES) e também incluído
+  # pelo backup_repository. Mesmo leitor do BKP_REPO (github_api_read.py, API REST, só GET); sem clone, sem Projects,
+  # sem pull requests. Um repositório por linha, de propósito.
+  - id: backup_issues
+    name: Backup Issues
+    # Mnemonic que o engine grava no commands.log; o dispatcher o mapeia, de forma FIXA, para o workflow abaixo.
+    mnemonic: BKP_ISSUES
+    command_workflow:
+      # Único vínculo com o workflow: o `artifact_id` no registro de artefatos (o caminho vem de lá).
+      artifact_id: backup_issues_executor
+      invocation: workflow_call
+      secrets: inherit
+      ecr_source: WORKFLOW_ON_WORKFLOW_CALL_INPUTS
+      result_log_marker: BKP_RESULT
+    command_log:
+      path: commands.log
+      line_schema: backup/schemas/commands-log-line.schema.yaml
+    class: PRESERVATION_EXECUTION
+    hitl_required: true
+    source_repository_mode: READ_ONLY
+    deterministic_executor:
+      artifact_id: backup_issues_executor
+      reference: github_actions:backup-issues.yml
+      required_for_capability_definition: false
+    # As três classes juntas: as issues citam etiquetas e marcos, e o leitor confere que todo item citado existe.
+    # O preflight (bkp_repo.py, CAPABILITY_ID=backup_issues) calcula as restrições como `includes` menos `implemented_classes`.
+    includes: [labels, milestones, issues]
+    implemented_classes: [labels, milestones, issues]
+    # Usa o SOURCE_READ_TOKEN (fine-grained, Issues: Read), o mesmo do BKP_REPO: sem ele, ACCESS_PERMISSION_GAP.
+    relationship_to_backup_repository:
+      related_issues_included_by_backup_repository: true
+      independently_callable: true
+    required_routes: [REST_API]
+    preservation_representation:
+      machine_readable: true
+      schema_controlled: true
+      reconstructible_equivalent: true
+      downstream_reusable: true
+      evidence_and_provenance_required: true
+    parameters:
+      source_repository: {type: string, required: true, source: HITL}
+      destination: {type: string, required: true, source: HITL_OR_EXPLICIT_CONFIRMATION}
+      additional_parameters: {type: object, required: false, source: HITL_WHEN_APPLICABLE}
+
   # Restauração de um backup do BKP_REPO (OneDrive) para um repositório NOVO do GitHub. Primeira capability que ESCREVE no
   # GitHub, por isso é a mais restritiva: o alvo é criado pelo workflow, sempre privado, nunca pode existir antes nem ser a
   # origem, e só recebe branches e tags (sem --force). Nesta etapa restaura SÓ a classe git; labels, milestones, issues e
@@ -681,6 +725,7 @@ implementation_artifacts:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
     relationships:
+      - {capability_id: backup_issues, relationship: CONFIGURES}
       - {capability_id: restore_repository, relationship: CONFIGURES}
       - {capability_id: backup_repository, relationship: CONFIGURES}
       - {capability_id: backup_projects, relationship: CONFIGURES}
@@ -703,7 +748,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: cb45c4de67e326ca8dc2e01e7b7ea5757b76ec12
+      current_sha: 5021ca00e82dd1924a1b1622f8338d86945dc94d
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -763,6 +808,7 @@ implementation_artifacts:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
     relationships:
+      - {capability_id: backup_issues, relationship: SCHEMATIZES}
       - {capability_id: restore_repository, relationship: SCHEMATIZES}
       - {capability_id: backup_repository, relationship: SCHEMATIZES}
       - {capability_id: backup_projects, relationship: SCHEMATIZES}
@@ -790,6 +836,7 @@ implementation_artifacts:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
     relationships:
+      - {capability_id: backup_issues, relationship: SCHEMATIZES}
       - {capability_id: restore_repository, relationship: SCHEMATIZES}
       - {capability_id: backup_repository, relationship: SCHEMATIZES}
       - {capability_id: backup_projects, relationship: SCHEMATIZES}
@@ -891,7 +938,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 526d6628b90907cf7ff09787765de9e2fdb0aaf8
+      current_sha: 15c7c55f0b21c33a66495741389dbf8fad683b33
     validation:
       status: VALIDATED
       scope: "Linha inicial e linha de continuação validadas pelo dispatcher e revalidadas pelo BKP_REPO. Duas linhas BKP_PROJ (escopos PROJECT e OWNER_PROJECT_SET) validadas pelo dispatcher e revalidadas pelo backup-projects.yml em runs reais. Casos de rejeição só testados localmente. Depois da mudança do schema (preflight_decision em $defs), o BKP_REPO foi rodado de verdade com a primeira linha (req-20261003-006, BLOCKED no preflight) e a linha de continuação com as 13 restrições (req-20261003-007, COMPLETE_WITH_EXCEPTIONS), e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008). Não provado - linha de continuação do BKP_PROJ. Linha RST_REPO (backup_path) validada pelo dispatcher e revalidada pelo restore-repository.yml no Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues. Não provado - target_name e linha de continuação do RST_REPO."
@@ -904,6 +951,7 @@ implementation_artifacts:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522316207", commit: f8af5ec377bdbdb2f68bd8b65069f356ef5b7aa4}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
     relationships:
+      - {capability_id: backup_issues, relationship: SCHEMATIZES}
       - {capability_id: restore_repository, relationship: SCHEMATIZES}
       - {capability_id: backup_repository, relationship: SCHEMATIZES}
 
@@ -922,7 +970,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 97df13685bf539012e444d64f3371789550e308c
+      current_sha: fa60c9659232f3d03c394fd7a88189f6a21f1c66
     validation:
       status: VALIDATED
       scope: "Caminho feliz (uma linha aceita e despachada, linha de continuação) e push sem mudança no log (merge de PR). Duas linhas BKP_PROJ aceitas e despachadas só para o backup-projects.yml, com o job do BKP_REPO pulado (runs 37091894311 e 37092140044). Recusas por violação só testadas localmente. Depois da mudança do dispatcher, o job do BKP_REPO rodou de verdade com a primeira linha (req-20261003-006, preflight BLOCKED) e a de continuação (req-20261003-007, 14 arquivos de pacote e 18 de evidência no OneDrive), e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008), sempre com o job do outro Mnemonic pulado. Não provado - mais de uma linha na mesma matriz e o dispatcher com duas linhas de Mnemonics diferentes no mesmo push. Linha RST_REPO aceita e despachada só para o restore-repository.yml, com os jobs BKP_REPO e BKP_PROJ pulados (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues)."
@@ -936,6 +984,7 @@ implementation_artifacts:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36520216638", commit: 37fae536b5eebcc26eb42a35de20bba86db2b6e0}
     relationships:
+      - {capability_id: backup_issues, relationship: EXECUTES}
       - {capability_id: restore_repository, relationship: EXECUTES}
       - {capability_id: backup_repository, relationship: EXECUTES}
 
@@ -957,7 +1006,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 68c85369866b47eca7cff45fbd48ce2b76992194
+      current_sha: 7429373f15ac2dfd149077bd38be26050394e3ec
     validation:
       status: VALIDATED
       scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. (e) com CAPABILITY_ID=backup_projects (BKP_PROJ), em dois runs reais (PROJECT nº 13, e OWNER_PROJECT_SET com 8 Projects e 201 itens): preflight de uma só classe sem exigir o SOURCE_READ_TOKEN, evidência e manifest 2.0 com o escopo no lugar do repositório e só o objeto projects (PARTIALLY-PRESERVED), COMPLETE_WITH_EXCEPTIONS. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura. (f) regressão do BKP_REPO depois da generalização por CAPABILITY_ID, em dois runs reais no repositório de teste de issues - req-20261003-006 (preflight BLOCKED com as mesmas 13 restrições, sem exigir mudança) e req-20261003-007 (continuação, COMPLETE_WITH_EXCEPTIONS - git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION, projects PARTIALLY-PRESERVED, 13 NOT-VERIFIED, 14 arquivos de pacote e 18 de evidência com hash conferido); e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008, 1 Project e 7 itens). validate-inputs e preflight de uma classe (git) com CAPABILITY_ID=restore_repository, sem exigir o SOURCE_READ_TOKEN, e destino validado em run real (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues). Não provado - preflight BLOCKED da restauração sem o RESTORE_WRITE_TOKEN."
@@ -973,6 +1022,7 @@ implementation_artifacts:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
     relationships:
+      - {capability_id: backup_issues, relationship: EXECUTES}
       - {capability_id: restore_repository, relationship: EXECUTES}
       - {capability_id: backup_repository, relationship: EXECUTES}
 
@@ -993,7 +1043,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 53cec7e903ba53f82c2e79beeb27e68eff92e164
+      current_sha: 799298613bb4f5c08f92031d005ce47d5540b9b8
     validation:
       status: VALIDATED
       scope: "Caminho feliz e push sem mudança no log em runs reais, inclusive a matriz do BKP_PROJ (duas linhas despachadas). Verificações de violação só testadas localmente. A matriz do BKP_REPO depois da generalização por Mnemonic foi provada em run real (req-20261003-006 e req-20261003-007). Não provado - mais de uma linha por matriz e duas linhas de Mnemonics diferentes no mesmo push. Matriz do RST_REPO (request_id, backup_path, target_name vazio, preflight_decision) despachada em run real (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues)."
@@ -1007,6 +1057,7 @@ implementation_artifacts:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36522761039", commit: 5ff59801d4066a4e56144b8e7ca6c085da9ad650}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36520216638", commit: 37fae536b5eebcc26eb42a35de20bba86db2b6e0}
     relationships:
+      - {capability_id: backup_issues, relationship: EXECUTES}
       - {capability_id: restore_repository, relationship: EXECUTES}
       - {capability_id: backup_repository, relationship: EXECUTES}
 
@@ -1038,6 +1089,7 @@ implementation_artifacts:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36651475470", commit: ebe8fd237daa14d5cdf405fde54b6fbc59ecfd91}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/36648211861", commit: b019c7d1844cd32d8909bd2b2e0c93d5c76e8134}
     relationships:
+      - {capability_id: backup_issues, relationship: EXECUTES}
       - {capability_id: restore_repository, relationship: EXECUTES}
       - {capability_id: backup_repository, relationship: EXECUTES}
 
@@ -1177,6 +1229,7 @@ implementation_artifacts:
       evidence:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37076443670", commit: edebe8a30e2e360f4987d77aa5ac25d2dad36873}
     relationships:
+      - {capability_id: backup_issues, relationship: EXECUTES}
       - {capability_id: backup_repository, relationship: EXECUTES}
 
   # ---------------------------------------------------------------------------
@@ -1198,6 +1251,7 @@ implementation_artifacts:
       status: NOT_VALIDATED
       scope: Executado localmente e no CI dos pull requests (12 testes).
     relationships:
+      - {capability_id: backup_issues, relationship: VALIDATES}
       - {capability_id: backup_repository, relationship: VALIDATES}
 
   # ---------------------------------------------------------------------------
@@ -1266,11 +1320,12 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: e4f28eb60d1c7984290572821a51f927986ab64d
+      current_sha: b50ad56e66513bfac11c9c19a932cbe19bbb6a4e
     validation:
       status: NOT_VALIDATED
-      scope: "Executado localmente e no CI dos pull requests (15 testes, mais verificação de mutação). Não roda no dispatcher real."
+      scope: "Executado localmente e no CI dos pull requests (17 testes, mais verificação de mutação). Não roda no dispatcher real."
     relationships:
+      - {capability_id: backup_issues, relationship: VALIDATES}
       - {capability_id: restore_repository, relationship: VALIDATES}
       - {capability_id: backup_repository, relationship: VALIDATES}
       - {capability_id: backup_projects, relationship: VALIDATES}
@@ -1365,3 +1420,46 @@ implementation_artifacts:
       scope: "Executado localmente e no CI dos pull requests (35 testes, mais verificação de mutação dos pontos de segurança). Não roda contra o GitHub nem contra o OneDrive reais."
     relationships:
       - {capability_id: restore_repository, relationship: VALIDATES}
+
+  # ---------------------------------------------------------------------------
+  # Executor do BKP_ISSUES: workflow_call chamado pelo dispatcher.yml. Os inputs do `on: workflow_call` dele definem o
+  # ECR. Ainda não rodou de verdade (NOT_VALIDATED até o primeiro run real).
+  # ---------------------------------------------------------------------------
+  - artifact_id: backup_issues_executor
+    artifact_type: GITHUB_ACTIONS_WORKFLOW
+    location:
+      repository: Moriblo/repo_backup
+      path: .github/workflows/backup-issues.yml
+    purpose: Deterministic executor referenced by backup_issues.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 1ebfdf1e76b585ef489139e3879ccbd336bf324c
+    validation:
+      status: NOT_VALIDATED
+      scope: "Ainda não executado no Actions; a lógica compartilhada (schema, dispatcher, preflight, evidência) é coberta pelos testes locais."
+    relationships:
+      - {capability_id: backup_issues, relationship: EXECUTES}
+
+  # ---------------------------------------------------------------------------
+  # Teste local ponta a ponta do BKP_ISSUES (API do GitHub simulada). Roda com python3 (PyYAML e jsonschema).
+  # ---------------------------------------------------------------------------
+  - artifact_id: bkp_issues_test
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/tests/test_bkp_issues.py
+    purpose: Local end-to-end test of bkp_repo.py in the backup_issues mode against a simulated GitHub REST API (input validation, three-class preflight, evidence and manifest without git, failures, disabled feature, restriction accepted).
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 6e92d9d4c64f1855af1ed121d26ccf575ec2d3ee
+    validation:
+      status: NOT_VALIDATED
+      scope: "Executado localmente e no CI dos pull requests (11 testes, mais verificação de mutação). Não roda no Actions real nem contra o OneDrive."
+    relationships:
+      - {capability_id: backup_issues, relationship: VALIDATES}

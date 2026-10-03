@@ -3,7 +3,7 @@
 
 O QUE É
     Um único script com quatro subcomandos, compartilhado pelos dois workflows. A capability é
-    escolhida pela variável CAPABILITY_ID (backup_repository, o padrão, backup_projects ou, só para
+    escolhida pela variável CAPABILITY_ID (backup_repository, o padrão, backup_projects, backup_issues ou, só para
     validate-inputs, preflight e validate-destination, restore_repository).
     Cada workflow chama os subcomandos em um ponto fixo da execução. Manter a lógica aqui (e não em YAML inline) permite
     testar localmente e revisar com facilidade.
@@ -192,7 +192,8 @@ def cmd_validate_inputs():
         if os.environ.get("TARGET_NAME"):
             params["target_name"] = os.environ["TARGET_NAME"]
     else:
-        mnemonic = "BKP_REPO"
+        # backup_repository (BKP_REPO) e backup_issues (BKP_ISSUES) têm os mesmos params.
+        mnemonic = "BKP_ISSUES" if CAPABILITY_ID == "backup_issues" else "BKP_REPO"
         params = {
             "source_repository": os.environ.get("SOURCE_REPOSITORY", ""),
             "destination": os.environ.get("DESTINATION", ""),
