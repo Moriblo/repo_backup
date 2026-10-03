@@ -184,6 +184,8 @@ jobs:
             api-issue-comments.json Os comentarios das issues.
             api-issue-events.json   Os eventos das issues (fechou, reabriu, etiquetou...).
             api-issue-reactions.json As reacoes das issues e dos comentarios.
+            api-issue-sub-issues.json   Quem e filha de quem (so as issues que tem sub-issues). Outro repositorio: so a referencia.
+            api-issue-dependencies.json Bloqueios entre issues (bloqueada por / bloqueando), so onde existem.
             api-inventory.json      Contagens, conferencias e SHA-256 de cada arquivo.
             repo-metadata.json      Visibilidade, descricao, topicos e branch padrao do repositorio no dia do backup.
 

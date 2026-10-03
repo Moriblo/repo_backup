@@ -144,8 +144,10 @@ class IssuesTest(unittest.TestCase):
         issues_obj = next(o for o in ev["objects"] if o["object_class"] == "issues")
         self.assertIn("api-issues.json", issues_obj["evidence"])
         self.assertIn("api-issue-comments.json", issues_obj["evidence"])
+        for name in ("api-issue-sub-issues.json", "api-issue-dependencies.json"):
+            self.assertIn(name, issues_obj["evidence"])
         paths = [a["path"] for a in man["artifacts"]]
-        for expected in ("backups/x/req-test-0001/package/api-issues.json", "backups/x/req-test-0001/package/repo-metadata.json", "api-status.json"):
+        for expected in ("backups/x/req-test-0001/package/api-issues.json", "backups/x/req-test-0001/package/repo-metadata.json", "backups/x/req-test-0001/package/api-issue-sub-issues.json", "backups/x/req-test-0001/package/api-issue-dependencies.json", "api-status.json"):
             self.assertIn(expected, paths)
         self.assertEqual({a["object_class"] for a in man["artifacts"]}, {"preservation-package", "evidence"})
         # Somente GET na origem e o token nunca vaza.

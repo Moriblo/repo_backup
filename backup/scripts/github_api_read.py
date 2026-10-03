@@ -42,6 +42,8 @@ ARQUIVOS GERADOS
     package/api-issue-comments.json   comentários das issues
     package/api-issue-events.json     eventos das issues (rotulou, fechou, atribuiu...)
     package/api-issue-reactions.json  reações detalhadas (só onde há reações)
+    package/api-issue-sub-issues.json     sub-issues por issue pai (só onde o resumo diz que há)
+    package/api-issue-dependencies.json   bloqueios por issue (só onde o resumo diz que há)
     package/api-inventory.json        contagens, SHA-256 de cada arquivo, conferências e limitações
     evidence/api-status.json          resultado por classe (lido pelo build-evidence)
 
@@ -80,9 +82,9 @@ sleep = time.sleep
 LIMITATIONS = [
     "Pull requests are not preserved by this reader: they are listed in api-inventory.json "
     "(numbers only) and remain a pending object class (pull_requests).",
-    "Issue relationships are limited to the fields present in the issue JSON "
-    "(for example parent_issue_url and sub_issues_summary); the dedicated sub-issue and "
-    "dependency endpoints and the full timeline are not read.",
+    "Sub-issues and issue dependencies (blocked by / blocking) are preserved as references "
+    "(repository, number, id, state) read from the dedicated endpoints; the issues on the other "
+    "end of a cross-repository relationship are not read. The full timeline is not read.",
     "Issues are an equivalent representation: the original number, author and dates cannot "
     "be restored identically by the GitHub API.",
 ]
@@ -207,8 +209,89 @@ def read_milestones(client, repo):
     return {"files": {"api-milestones.json": items}, "count": len(items), "checks": []}
 
 
+def repo_of(url):
+    """'dono/nome' a partir de uma repository_url ('.../repos/dono/nome'); None se não for possível."""
+    parts = (url or "").rstrip("/").split("/")
+    return "/".join(parts[-2:]) if len(parts) >= 2 and "repos" in parts else None
+
+
+def relation_ref(item):
+    """Referência enxuta a uma issue na outra ponta de uma relação (repositório, número, id, estado)."""
+    return {"number": item.get("number"), "id": item.get("id"), "state": item.get("state"),
+            "repository": repo_of(item.get("repository_url"))}
+
+
+def read_relations(client, repo, issues, numbers):
+    """Sub-issues e dependências. Só chama os endpoints onde o resumo da própria issue diz que há algo.
+
+    Devolve (sub_issues, dependencies, checks, extra). Resumo ausente no JSON da issue = recurso
+    indisponível para ela: não chama nada e registra o número em `summary_missing` (não é falha).
+    Erro de API nas rotas dedicadas sobe como ApiError (a classe vira FAILED com a rota).
+    """
+    sub_issues, dependencies, missing = [], [], []
+    for issue in issues:
+        n = issue["number"]
+        sub = issue.get("sub_issues_summary")
+        dep = issue.get("issue_dependencies_summary")
+        if sub is None and dep is None:
+            missing.append(n)
+        if (sub or {}).get("total"):
+            children = client.pages(f"/repos/{repo}/issues/{n}/sub_issues")
+            sub_issues.append({"parent": n, "children": [relation_ref(c) for c in children]})
+        blocked_by = blocking = []
+        if (dep or {}).get("total_blocked_by"):
+            blocked_by = [relation_ref(b) for b in client.pages(f"/repos/{repo}/issues/{n}/dependencies/blocked_by")]
+        if (dep or {}).get("total_blocking"):
+            blocking = [relation_ref(b) for b in client.pages(f"/repos/{repo}/issues/{n}/dependencies/blocking")]
+        if blocked_by or blocking or (dep or {}).get("total_blocked_by") or (dep or {}).get("total_blocking"):
+            dependencies.append({"issue": n, "blocked_by": blocked_by, "blocking": blocking})
+
+    lower = repo.lower()
+    same = lambda ref: (ref.get("repository") or "").lower() == lower
+    by_number = {i["number"]: i for i in issues}
+    checks = []
+    # 1. Quantas filhas e quantos bloqueios foram lidos, contra o resumo da issue.
+    read_children = {e["parent"]: len(e["children"]) for e in sub_issues}
+    read_deps = {e["issue"]: e for e in dependencies}
+    bad_sub = sorted(i["number"] for i in issues
+                     if (i.get("sub_issues_summary") or {}).get("total", 0) != read_children.get(i["number"], 0))
+    bad_dep = sorted(i["number"] for i in issues
+                     if (i.get("issue_dependencies_summary") or {}).get("total_blocked_by", 0)
+                     != len(read_deps.get(i["number"], {}).get("blocked_by", []))
+                     or (i.get("issue_dependencies_summary") or {}).get("total_blocking", 0)
+                     != len(read_deps.get(i["number"], {}).get("blocking", [])))
+    checks.append({"check": "sub_issues_count", "ok": not bad_sub, "mismatched_issues": bad_sub,
+                   "read": sum(read_children.values())})
+    checks.append({"check": "dependencies_count", "ok": not bad_dep, "mismatched_issues": bad_dep,
+                   "read": sum(len(e["blocked_by"]) + len(e["blocking"]) for e in dependencies)})
+    # 2. Toda filha do mesmo repositório existe, e o parent_issue_url dela aponta para o pai que a lista.
+    absent = sorted({c["number"] for e in sub_issues for c in e["children"] if same(c) and c["number"] not in by_number})
+    unlinked = sorted(c["number"] for e in sub_issues for c in e["children"]
+                      if same(c) and c["number"] in by_number
+                      and issue_number_of(by_number[c["number"]].get("parent_issue_url")) != e["parent"])
+    # E o contrário: quem declara um pai deste repositório precisa estar na lista de filhas dele.
+    listed = {(e["parent"], c["number"]) for e in sub_issues for c in e["children"] if same(c)}
+    orphan = sorted(i["number"] for i in issues
+                    if i.get("parent_issue_url") and f"/repos/{repo}/issues/".lower() in i["parent_issue_url"].lower()
+                    and (issue_number_of(i["parent_issue_url"]), i["number"]) not in listed)
+    checks.append({"check": "sub_issues_links", "ok": not (absent or unlinked or orphan),
+                   "missing_children": absent, "children_with_other_parent": unlinked, "not_listed_by_parent": orphan})
+    # 3. Simetria: cada bloqueio aparece nos dois lados (só quando as duas pontas são deste repositório).
+    nums = set(by_number)
+    from_blocked_by = {(r["number"], e["issue"]) for e in dependencies for r in e["blocked_by"]
+                       if same(r) and r["number"] in nums and e["issue"] in nums}
+    from_blocking = {(e["issue"], r["number"]) for e in dependencies for r in e["blocking"]
+                     if same(r) and r["number"] in nums and e["issue"] in nums}
+    asym = sorted(from_blocked_by ^ from_blocking)
+    checks.append({"check": "dependencies_symmetric", "ok": not asym,
+                   "asymmetric": [{"blocker": a, "blocked": b} for a, b in asym]})
+    extra = {"sub_issue_parents": len(sub_issues), "dependency_issues": len(dependencies),
+             "relations_summary_missing": missing}
+    return sub_issues, dependencies, checks, extra
+
+
 def read_issues(client, repo, known_labels=None, known_milestones=None):
-    """Classe issues: issues, comentários, eventos e reações. Pull requests ficam de fora.
+    """Classe issues: issues, comentários, eventos, reações, sub-issues e dependências. Pull requests ficam de fora.
 
     A API de issues devolve também os pull requests; eles são separados pelo campo
     `pull_request` e só têm o número registrado no inventário.
@@ -216,7 +299,9 @@ def read_issues(client, repo, known_labels=None, known_milestones=None):
     Conferências (qualquer falha vira FAILED, nunca sucesso):
       - total de abertos (issues + pull requests) igual ao `open_issues_count` do repositório;
       - por issue, o campo `comments` igual ao número de comentários lidos;
-      - toda etiqueta e todo marco citados pelas issues existem nas listas lidas.
+      - toda etiqueta e todo marco citados pelas issues existem nas listas lidas;
+      - sub-issues e dependências lidas batem com os resumos das issues, as filhas existem e
+        apontam para o pai que as lista, e cada bloqueio aparece nos dois lados.
     """
     everything = client.pages(f"/repos/{repo}/issues", {"state": "all", "sort": "created", "direction": "asc"})
     issues = [i for i in everything if "pull_request" not in i]
@@ -247,6 +332,8 @@ def read_issues(client, repo, known_labels=None, known_milestones=None):
             reactions.append({"target": f"comment:{comment['id']}",
                               "reactions": client.pages(f"/repos/{repo}/issues/comments/{comment['id']}/reactions")})
 
+    sub_issues, dependencies, relation_checks, relation_extra = read_relations(client, repo, issues, numbers)
+
     checks = []
     # 1. Total de abertos contra o que o próprio repositório informa.
     expected_open = client.get(f"/repos/{repo}")["open_issues_count"]
@@ -270,11 +357,14 @@ def read_issues(client, repo, known_labels=None, known_milestones=None):
         missing = sorted(used - known_milestones)
         checks.append({"check": "milestones_exist", "ok": not missing, "missing": missing})
 
+    checks.extend(relation_checks)
+
     return {"files": {"api-issues.json": issues, "api-issue-comments.json": comments,
-                      "api-issue-events.json": events, "api-issue-reactions.json": reactions},
+                      "api-issue-events.json": events, "api-issue-reactions.json": reactions,
+                      "api-issue-sub-issues.json": sub_issues, "api-issue-dependencies.json": dependencies},
             "count": len(issues), "checks": checks,
             "extra": {"comments": len(comments), "events": len(events), "reaction_targets": len(reactions),
-                      "pull_requests_skipped": prs}}
+                      "pull_requests_skipped": prs, **relation_extra}}
 
 
 def write_json(path, data):
