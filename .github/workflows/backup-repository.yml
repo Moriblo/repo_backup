@@ -379,6 +379,8 @@ jobs:
       # api-status.json e o build-evidence marca a classe FAILED (o job termina em falha ao
       # final), depois de o pacote Git já ter sido enviado. O token precisa de Issues: Read.
       - name: Read API object classes (labels, milestones, issues)
+        # Rede de segurança (como no passo de Projects): sem api-status.json o build-evidence marca FAILED.
+        continue-on-error: true
         shell: bash
         env:
           SOURCE_TOKEN: ${{ steps.token.outputs.token }}
@@ -395,6 +397,9 @@ jobs:
       # (PRESERVED-AS-EQUIVALENT-REPRESENTATION, PARTIALLY-PRESERVED ou FAILED).
       - name: Read Projects linked to the source repository
         if: steps.projects_token.outcome == 'success'
+        # Rede de segurança: o leitor já trata exceções, mas uma falha dele nunca pode impedir o
+        # envio do pacote Git. Sem api-projects-status.json, o build-evidence marca a classe FAILED.
+        continue-on-error: true
         shell: bash
         env:
           PROJECTS_TOKEN: ${{ steps.projects_token.outputs.token }}

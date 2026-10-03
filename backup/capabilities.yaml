@@ -623,7 +623,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 1482d23344371fb774cfd16981412fbeae7f7646
+      current_sha: 05dd68e7265c128e53fdd3edd7f46b2213967eaf
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -729,7 +729,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 3982460a446b5aefba40c8062e33919f15f4903c
+      current_sha: 07b2edb1c9bb66a7e941b19db6f2edffc09d1af4
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
@@ -1100,10 +1100,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 99738bc135c4cc1ff51862d8a96dec073049ac01
+      current_sha: 59e6db033812fc652be7ddd56f85242047cd9114
     validation:
       status: NOT_VALIDATED
-      scope: Testado só contra um servidor GraphQL simulado (backup/tests/test_github_projects_read.py). Os nomes de campo do schema GraphQL foram escritos de memória; não provado contra a API real nem em run do Actions.
+      scope: "Testado contra um servidor GraphQL simulado (backup/tests/test_github_projects_read.py). O primeiro run real (req-20261003-001, run 37087001653) provou só a descoberta: o token clássico read:project lista os Projects do dono, não enxerga o repositório privado e recebe null no lugar dos repositórios ligados; o leitor estourou nesse null (corrigido). Não provado - leitura de campos, itens e valores contra a API real."
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
       - {capability_id: backup_projects, relationship: EXECUTES}
@@ -1122,10 +1122,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 1578dc300777360a2027a1d8058772c9cc54b887
+      current_sha: e0e2f47f9596454ae5ad46b3fdcdd6d68594dfa9
     validation:
       status: NOT_VALIDATED
-      scope: Executado localmente (17 testes, mais verificação de mutação). Não roda no Actions.
+      scope: Executado localmente (20 testes, mais verificação de mutação). Não roda no Actions.
     relationships:
       - {capability_id: backup_repository, relationship: VALIDATES}
       - {capability_id: backup_projects, relationship: VALIDATES}

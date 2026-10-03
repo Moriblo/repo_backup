@@ -5,7 +5,9 @@ O QUE PROVA
     - leitura completa e paginada de um Project (o simulado espelha o quadro de teste nº 13:
       6 issues, 1 rascunho, campos Status e Prioridade) nos três escopos;
     - a descoberta por repositório, e a alternativa quando o token não enxerga o repositório
-      (PARTIAL, nunca "sem Projects" como prova);
+      (PARTIAL, nunca "sem Projects" como prova); um repositório ligado e OCULTO chega como `null`
+      (o que o GitHub devolveu no run real req-20261003-001) e o Project vira candidato;
+    - uma exceção inesperada (resposta fora do formato) vira FAILED, nunca derruba o job;
     - conferências: total de itens, conexões cortadas, opções de seleção; itens ocultos = PARTIAL;
     - falhas (HTTP 403, erro GraphQL de escopo, Project inexistente) viram FAILED com causa;
     - repetição em erro 500 e em limite de taxa;
@@ -68,7 +70,7 @@ def make_project(number=13, title="Quadro de teste (backup_teste_issues)", repos
     details = {"id": f"PVT_{number}", "number": number, "title": title, "shortDescription": None, "readme": None, "public": False, "closed": False,
                "closedAt": None, "createdAt": "2026-10-02T19:26:15Z", "updatedAt": "2026-10-02T19:26:30Z", "url": f"https://github.com/users/dono/projects/{number}",
                "owner": {"__typename": "User", "login": "dono"}, "creator": {"login": "Moriblo"},
-               "repositories": page([{"nameWithOwner": r} for r in repos]),
+               "repositories": page([{"nameWithOwner": r} if r else None for r in repos]),
                "fields": page([title_field, status, prio]),
                "views": page([{"id": "V1", "name": "View 1", "number": 1, "layout": "TABLE_LAYOUT", "filter": None, "createdAt": "x", "updatedAt": "x"}]),
                "workflows": page([{"id": f"W{i}", "name": f"wf{i}", "number": i, "enabled": True, "createdAt": "x", "updatedAt": "x"} for i in range(1, 7)]),
@@ -128,7 +130,7 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
         if op == "ProjectsOfRepository":
             if not cls.repo_visible:
                 return self._send(200, {"data": {"repository": None}, "errors": [{"type": "NOT_FOUND", "message": "Could not resolve to a Repository"}]})
-            mine = [p for p in cls.projects if SOURCE in [r["nameWithOwner"] for r in p["details"]["repositories"]["nodes"]]]
+            mine = [p for p in cls.projects if SOURCE in [r["nameWithOwner"] for r in p["details"]["repositories"]["nodes"] if r]]
             return self._send(200, {"data": {"repository": {"nameWithOwner": SOURCE, "projectsV2": self._page([refs(p) for p in mine], variables, size)}}})
         if op == "ProjectsOfOwner":
             if not cls.owner_exists:
@@ -230,6 +232,33 @@ class ReadTest(unittest.TestCase):
         FakeGraph.projects = [make_project(repos=())]
         st = self.run_read()
         self.assertEqual((st["status"], st["count"]), ("PARTIAL", 0))
+
+    def test_vinculo_oculto_null_vira_candidato_partial(self):
+        # Caso REAL (run req-20261003-001): o token não vê o repositório privado, o GitHub devolve
+        # `null` no lugar dele em `repositories.nodes`, e o Project ligado a ele é só um candidato.
+        FakeGraph.repo_visible = False
+        FakeGraph.projects = [make_project(13, repos=(None,)),                 # vínculo oculto: candidato
+                              make_project(14, "De outro repo", repos=("dono/outro",)),   # vínculo visível a outro: fora
+                              make_project(15, "Sem vínculo", repos=())]       # sem vínculo: fora
+        st = self.run_read()
+        self.assertEqual((st["status"], st["count"]), ("PARTIAL", 1))
+        self.assertEqual([p["number"] for p in self.load("api-projects.json")], [13])
+        self.assertIn("candidates", st["detail"])
+        self.assertIn("#13", st["detail"])
+
+    def test_vinculo_visivel_e_oculto_no_mesmo_project(self):
+        FakeGraph.repo_visible = False
+        FakeGraph.projects = [make_project(13, repos=(SOURCE, None))]
+        st = self.run_read()
+        self.assertEqual((st["status"], st["count"]), ("PARTIAL", 1))
+
+    def test_excecao_inesperada_vira_failed_sem_derrubar(self):
+        # Resposta fora do formato (um campo que o schema real não tem): o leitor não pode estourar.
+        del FakeGraph.projects[0]["details"]["fields"]
+        st = self.run_read()
+        self.assertEqual(st["status"], "FAILED")
+        self.assertIn("Unexpected", st["detail"])
+        self.assertTrue((self.root / "evidence" / "api-projects-status.json").exists())
 
     def test_itens_ocultos_viram_partial(self):
         FakeGraph.projects[0]["items"][0].update(type="REDACTED", content=None)
