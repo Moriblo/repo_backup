@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Restaura um backup do BKP_REPO (OneDrive) para um repositório NOVO do GitHub (RST_REPO): git, labels e milestones.
+"""Restaura um backup do BKP_REPO (OneDrive) para um repositório NOVO do GitHub (RST_REPO): git, labels, milestones e issues.
 
 O QUE É
     Script do workflow restore-repository.yml, com três subcomandos. É a primeira escrita no GitHub do
@@ -16,13 +16,18 @@ SUBCOMANDOS
                     manifest e o onedrive-package.json; só aceita um backup do BKP_REPO que não terminou
                     FAILED e cuja classe git foi preservada. Baixa também api-labels.json e api-milestones.json,
                     quando a evidência do backup diz que a classe foi preservada; senão a classe fica NOT-VERIFIED
-                    (não é restaurada, nem tratada como vazia). Grava restore-work/plan.json.
+                    (não é restaurada, nem tratada como vazia). Para as issues baixa api-issues.json e
+                    api-issue-comments.json. Grava restore-work/plan.json.
     restore         confere o bundle, define o alvo (<dono>/<nome>-restaurado, ou TARGET_NAME), recusa se o
                     alvo for a origem ou já existir, cria o repositório PRIVADO, envia SÓ refs/heads/* e
                     refs/tags/* (sem --force, sem refs/pull/*), envia o LFS, define a branch padrão e confere
                     as refs do alvo contra o refs.tsv. Só depois disso restaura as labels e os milestones (API REST,
                     sem DELETE) e confere o que ficou no alvo campo a campo. Grava evidence/restore-result.json e
-                    evidence/restore-map.json (milestone antigo -> novo, para a restauração das issues).
+                    evidence/restore-map.json (milestone e issue antigos -> novos).
+                    Depois de labels e milestones, recria as issues e os comentários como CÓPIA EQUIVALENTE: cabeçalho
+                    com número, autor e datas originais, @menções e referências cruzadas neutralizadas (entre crases),
+                    sem assignees; só roda se labels e milestones voltaram OK e se o total de escritas cabe no teto
+                    (RESTORE_MAX_WRITES, padrão 450); confere o alvo lendo de volta.
     build-evidence  monta evidence.json e manifest.json (schemas 2.0) da restauração.
                     (saída 21 = destino não validado; 1 = FAILED)
 
@@ -39,7 +44,7 @@ CÓDIGOS DE SAÍDA
     44  falha no envio de branches e tags
     45  as refs do alvo não conferem com o refs.tsv
     46  falha no envio dos objetos LFS
-    48  git restaurado e conferido, mas labels ou milestones não voltaram como no backup (o alvo NÃO é apagado)
+    48  git restaurado e conferido, mas labels, milestones ou issues não voltaram como no backup (o alvo NÃO é apagado)
     64  uso incorreto ou variável ausente
 
 VARIÁVEIS DE AMBIENTE
@@ -60,6 +65,8 @@ REGRAS QUE ESTE SCRIPT NUNCA QUEBRA
     - O alvo parcial (falha no meio) NÃO é apagado: o resultado diz qual é, e o HITL decide.
     - Nada é apagado no GitHub: as labels padrão que o GitHub cria e que não existem na origem ficam no alvo e são
       só listadas no resultado.
+    - Nunca toca a origem, nem indiretamente: nenhum texto restaurado cita `dono/repo#N` nem URL de issue sem
+      estar entre crases (a referência cruzada criaria um evento na issue original); nenhuma @menção é ativa.
     - Sucesso do workflow NÃO prova restauração: a prova é o manifest validado e as refs conferidas.
 """
 import base64
@@ -89,9 +96,15 @@ GIT_BASE = os.environ.get("GITHUB_GIT_BASE", "https://github.com").rstrip("/")
 
 # Arquivos do pacote: os dois primeiros são obrigatórios; os outros, só se existirem no backup.
 REQUIRED = ("source.bundle", "refs.tsv")
-OPTIONAL = ("lfs-objects.tar", "repo-metadata.json", "api-labels.json", "api-milestones.json")
-# Classes de API restauradas por esta etapa e o arquivo do pacote de cada uma.
-DATA_CLASSES = {"labels": "api-labels.json", "milestones": "api-milestones.json"}
+OPTIONAL = ("lfs-objects.tar", "repo-metadata.json", "api-labels.json", "api-milestones.json", "api-issues.json", "api-issue-comments.json")
+# Classes de API restauradas e o arquivo principal do pacote de cada uma (as issues também usam os comentários).
+DATA_CLASSES = {"labels": "api-labels.json", "milestones": "api-milestones.json", "issues": "api-issues.json"}
+EXTRA_FILES = {"issues": ("api-issue-comments.json",)}
+# Teto de escritas de conteúdo (issues, fechamentos e comentários) por execução: o GitHub limita cerca de 500 por hora.
+# Acima do teto a restauração de issues RECUSA antes de escrever qualquer coisa (não restaura pela metade).
+MAX_WRITES = int(os.environ.get("RESTORE_MAX_WRITES", "450"))
+# Limite do GitHub para o corpo de uma issue ou comentário é 65536 caracteres; sobra margem.
+MAX_BODY = 65000
 # Disposições do backup que dizem que a classe foi lida e preservada (o resto não é restaurado).
 DATA_READY = ("PRESERVED", "PRESERVED-AS-EQUIVALENT-REPRESENTATION")
 # O GitHub limita escritas em sequência (limite secundário): pausa entre escritas e espera quando ele pede.
@@ -105,6 +118,10 @@ RESTORE_LIMITATIONS = {
     "labels": "Restored through the API: name, color and description match the backup; the internal label id is not preserved.",
     "milestones": "Restored through the API: title, state, description and due date match the backup; creation and closing dates and the "
                   "creator cannot be set, and milestone numbers may change when the source had gaps.",
+    "issues": "Restored through the API as an equivalent copy (issues and comments): the original number, author and dates are kept only in a "
+              "header at the top of each body; @mentions, cross-repository references and issue URLs are wrapped in backticks so nobody is notified "
+              "and the source is never touched; no assignees are set; reactions, events, edit history, lock state, issue types, sub-issues and "
+              "dependencies are not restored; issue numbers may change when the source had gaps or pull requests.",
 }
 # Só estas refs voltam ao GitHub; refs/pull/* e outras são gerenciadas por ele e não aceitam envio.
 PUSHABLE = ("refs/heads/", "refs/tags/")
@@ -244,17 +261,19 @@ def data_classes_plan(ev, files):
             out[cls] = {"status": "NOT_VERIFIED", "reason": f"a evidência do backup não traz a classe {cls}"}
         elif obj["disposition"] not in DATA_READY:
             out[cls] = {"status": "NOT_VERIFIED", "reason": f"a classe {cls} ficou {obj['disposition']} no backup"}
-        elif fname not in files:
-            out[cls] = {"status": "NOT_VERIFIED", "reason": f"{fname} não está no pacote do backup"}
+        elif any(n not in files for n in (fname,) + EXTRA_FILES.get(cls, ())):
+            missing = [n for n in (fname,) + EXTRA_FILES.get(cls, ()) if n not in files]
+            out[cls] = {"status": "NOT_VERIFIED", "reason": f"{', '.join(missing)} não está no pacote do backup"}
         else:
             try:
-                items = json.loads((RESTORE_DIR / "package" / fname).read_text(encoding="utf-8"))
-                if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
-                    raise ValueError("não é uma lista de objetos")
+                for name in (fname,) + EXTRA_FILES.get(cls, ()):
+                    items = json.loads((RESTORE_DIR / "package" / name).read_text(encoding="utf-8"))
+                    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+                        raise ValueError("não é uma lista de objetos")
             except ValueError as exc:
-                out[cls] = {"status": "NOT_VERIFIED", "reason": f"{fname} não pôde ser lido: {exc}"}
+                out[cls] = {"status": "NOT_VERIFIED", "reason": f"{name} não pôde ser lido: {exc}"}
                 continue
-            out[cls] = {"status": "READY", "file": fname, "count": len(items)}
+            out[cls] = {"status": "READY", "file": fname, "count": len(json.loads((RESTORE_DIR / "package" / fname).read_text(encoding="utf-8")))}
     return out
 
 
@@ -447,10 +466,181 @@ def restore_milestones(repo, milestones):
     return out, mapping
 
 
+# --- issues e comentários (etapa 3) -------------------------------------------------------
+
+# Um só padrão, para cada trecho ser embrulhado uma única vez: URL de issue ou PR, referência dono/repo#N e @menção.
+_NEUTRAL = re.compile(
+    r"(?P<url>https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/\d+(?:#[\w-]+)?)"
+    r"|(?<![\w`/.-])(?P<ref>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d+)"
+    r"|(?<![\w`/.@+-])(?P<mention>@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:/[A-Za-z0-9_-]+)?)")
+_CODE_SPAN = re.compile(r"(`+)(.+?)\1")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
+def neutralize(text):
+    """Põe entre crases @menções, referências dono/repo#N e URLs de issues/PRs, fora de código.
+
+    Não mexe em blocos de código (cercas ``` ou ~~~), em trechos já entre crases nem em e-mails. Assim o texto
+    restaurado não notifica ninguém e não cria referência cruzada (evento) na issue original.
+    """
+    out, fence = [], None
+    for line in (text or "").split("\n"):
+        m = _FENCE.match(line)
+        if fence:
+            out.append(line)
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = None
+            continue
+        if m:
+            fence = m.group(1)
+            out.append(line)
+            continue
+        parts, pos = [], 0
+        for span in _CODE_SPAN.finditer(line):
+            parts.append(_NEUTRAL.sub(lambda g: "`" + g.group(0) + "`", line[pos:span.start()]))
+            parts.append(span.group(0))
+            pos = span.end()
+        parts.append(_NEUTRAL.sub(lambda g: "`" + g.group(0) + "`", line[pos:]))
+        out.append("".join(parts))
+    return "\n".join(out)
+
+
+def issue_header(source, issue):
+    """Cabeçalho do corpo da issue restaurada: número, autor e datas originais (tudo entre crases: nada ativo)."""
+    login = (issue.get("user") or {}).get("login") or "desconhecido"
+    bits = [f"original: `{source}#{issue.get('number')}`", f"autor: `@{login}`", f"criada em {issue.get('created_at')}"]
+    if issue.get("state") == "closed":
+        bits.append(f"fechada em {issue.get('closed_at')} ({issue.get('state_reason') or 'completed'})")
+    assignees = [a.get("login") for a in issue.get("assignees") or [] if a.get("login")]
+    if assignees:
+        bits.append("atribuída originalmente a " + ", ".join(f"`@{a}`" for a in assignees))
+    return ("> **Cópia restaurada de um backup** · " + " · ".join(bits) + "\n"
+            "> Número, autor e datas originais não podem ser restaurados de forma idêntica; esta é uma cópia equivalente.\n\n")
+
+
+def comment_header(comment):
+    login = (comment.get("user") or {}).get("login") or "desconhecido"
+    return (f"> **Comentário restaurado** · autor: `@{login}` · em {comment.get('created_at')}"
+            f" · id original `{comment.get('id')}`\n\n")
+
+
+def issue_number_of(url):
+    tail = (url or "").rstrip("/").rsplit("/", 1)[-1]
+    return int(tail) if tail.isdigit() else None
+
+
+def plan_issue_writes(source, issues, comments, label_names, milestone_map):
+    """Monta, SEM escrever nada, o que será enviado. Devolve (plano, motivo): motivo != None recusa a restauração."""
+    ordered = sorted(issues, key=lambda i: i.get("number", 0))
+    numbers = {i["number"] for i in ordered}
+    by_issue = {}
+    for c in sorted(comments, key=lambda c: (c.get("created_at") or "", c.get("id") or 0)):
+        n = issue_number_of(c.get("issue_url"))
+        if n not in numbers:
+            return None, f"o comentário {c.get('id')} pertence à issue {n}, que não está no backup"
+        by_issue.setdefault(n, []).append(c)
+    plan = []
+    for i in ordered:
+        labels = [lb["name"] for lb in i.get("labels") or []]
+        unknown = [n for n in labels if n not in label_names]
+        if unknown:
+            return None, f"a issue {i['number']} cita labels que o backup não traz: {', '.join(unknown[:3])}"
+        ms = (i.get("milestone") or {}).get("number")
+        if ms is not None and ms not in milestone_map:
+            return None, f"a issue {i['number']} cita o milestone {ms}, que não foi restaurado"
+        body = issue_header(source, i) + neutralize(i.get("body") or "")
+        cbodies = [comment_header(c) + neutralize(c.get("body") or "") for c in by_issue.get(i["number"], [])]
+        if len(body) > MAX_BODY or any(len(b) > MAX_BODY for b in cbodies):
+            return None, f"a issue {i['number']} ou um comentário dela passa do limite de {MAX_BODY} caracteres do GitHub"
+        closed = i.get("state") == "closed"
+        reason = i.get("state_reason") if i.get("state_reason") in ("completed", "not_planned", "duplicate") else "completed"
+        plan.append({"old": i["number"], "title": i.get("title") or "(sem título)", "body": body, "labels": labels,
+                     "milestone": milestone_map.get(ms) if ms is not None else None, "closed": closed, "reason": reason,
+                     "comments": cbodies})
+    writes = sum(1 + int(p["closed"]) + len(p["comments"]) for p in plan)
+    if writes > MAX_WRITES:
+        return None, (f"a restauração exigiria {writes} escritas (issues, fechamentos e comentários), acima do teto de {MAX_WRITES} "
+                      "por execução (o GitHub limita cerca de 500 por hora); nada foi escrito")
+    return plan, None
+
+
+def restore_issues(repo, plan):
+    """Cria as issues e os comentários do plano, em ordem, e confere lendo de volta. Devolve (resultado, mapa antigo -> novo)."""
+    mapping, errors, writes = {}, [], 0
+    closed = 0
+    for p in plan:
+        body = {"title": p["title"], "body": p["body"]}
+        if p["labels"]:
+            body["labels"] = p["labels"]
+        if p["milestone"] is not None:
+            body["milestone"] = p["milestone"]
+        status, created = gh_write("POST", f"/repos/{repo}/issues", body)
+        writes += 1
+        if status != 201 or "number" not in created:
+            errors.append(f"issue {p['old']}: " + short(status, created))
+            break
+        new = created["number"]
+        mapping[p["old"]] = new
+        if p["closed"]:
+            status, payload = gh_write("PATCH", f"/repos/{repo}/issues/{new}", {"state": "closed", "state_reason": p["reason"]})
+            writes += 1
+            if status != 200:
+                errors.append(f"issue {p['old']}: não foi possível fechar: " + short(status, payload))
+                break
+            closed += 1
+        for n, cbody in enumerate(p["comments"], 1):
+            status, payload = gh_write("POST", f"/repos/{repo}/issues/{new}/comments", {"body": cbody})
+            writes += 1
+            if status != 201:
+                errors.append(f"issue {p['old']}, comentário {n}: " + short(status, payload))
+                break
+        if errors:
+            break
+    out = {"status": "OK", "expected": len(plan), "created": len(mapping), "closed": closed, "writes": writes,
+           "comments": sum(len(p["comments"]) for p in plan),
+           "numbers_changed": sorted(old for old, new in mapping.items() if old != new)}
+    if errors:
+        # Interrompe na primeira falha: continuar deslocaria a numeração das próximas. Nada é apagado.
+        out.update(status="FAILED", errors=errors[:10], reason=f"{len(errors)} erro(s) de escrita; a restauração das issues foi interrompida")
+        return out, mapping
+    # Conferência: lê de volta issues e comentários e compara com o que foi enviado.
+    status, after = gh_list(f"/repos/{repo}/issues?state=all")
+    if status != 200:
+        return dict(out, status="FAILED", reason="não foi possível conferir as issues do alvo: " + short(status, after)), mapping
+    status, after_comments = gh_list(f"/repos/{repo}/issues/comments")
+    if status != 200:
+        return dict(out, status="FAILED", reason="não foi possível conferir os comentários do alvo: " + short(status, after_comments)), mapping
+    got = {i["number"]: i for i in after}
+    got_comments = {}
+    for c in sorted(after_comments, key=lambda c: c.get("id", 0)):
+        got_comments.setdefault(issue_number_of(c.get("issue_url")), []).append(c.get("body"))
+    mismatches = []
+    for p in plan:
+        item = got.get(mapping[p["old"]])
+        if item is None:
+            mismatches.append(p["old"])
+            continue
+        same = (item.get("title") == p["title"] and item.get("body") == p["body"]
+                and item.get("state") == ("closed" if p["closed"] else "open")
+                and sorted(l["name"] for l in item.get("labels") or []) == sorted(p["labels"])
+                and ((item.get("milestone") or {}).get("number") == p["milestone"])
+                and not (item.get("assignees") or [])
+                and got_comments.get(item["number"], []) == p["comments"])
+        if not same:
+            mismatches.append(p["old"])
+    if len(got) != len(plan):
+        mismatches.append(f"o alvo tem {len(got)} issues, esperado {len(plan)}")
+    if mismatches:
+        out.update(status="FAILED", mismatches=[m for m in mismatches][:10], reason=f"{len(mismatches)} divergência(s) na leitura de volta")
+    return out, mapping
+
+
 def restore_data_classes(plan, repo):
-    """Restaura labels e milestones do plano. Devolve ({classe: resultado}, mapa de milestones)."""
-    results, mapping = {}, {}
+    """Restaura labels, milestones e issues do plano. Devolve ({classe: resultado}, mapa de milestones, mapa de issues)."""
+    results, mapping, issue_map = {}, {}, {}
     for cls, fname in DATA_CLASSES.items():
+        if cls == "issues":
+            continue
         info = plan.get("classes", {}).get(cls, {"status": "NOT_VERIFIED", "reason": "o plano não traz a classe"})
         if info["status"] != "READY":
             results[cls] = {"status": "NOT_VERIFIED", "reason": info["reason"]}
@@ -460,7 +650,24 @@ def restore_data_classes(plan, repo):
             results[cls] = restore_labels(repo, items)
         else:
             results[cls], mapping = restore_milestones(repo, items)
-    return results, mapping
+    # Issues: só se labels e milestones voltaram OK (as issues dependem deles) e se o plano cabe no teto.
+    info = plan.get("classes", {}).get("issues", {"status": "NOT_VERIFIED", "reason": "o plano não traz a classe issues"})
+    not_ok = [c for c in ("labels", "milestones") if results.get(c, {}).get("status") != "OK"]
+    if info["status"] != "READY":
+        results["issues"] = {"status": "NOT_VERIFIED", "reason": info["reason"]}
+    elif not_ok:
+        results["issues"] = {"status": "NOT_VERIFIED", "reason": "as issues dependem de " + " e ".join(not_ok) + ", que não foram restauradas com sucesso"}
+    else:
+        pkg = RESTORE_DIR / "package"
+        issues = json.loads((pkg / "api-issues.json").read_text(encoding="utf-8"))
+        comments = json.loads((pkg / "api-issue-comments.json").read_text(encoding="utf-8"))
+        labels = {lb.get("name") for lb in json.loads((pkg / "api-labels.json").read_text(encoding="utf-8"))}
+        wplan, reason = plan_issue_writes(plan["source_repository"], issues, comments, labels, mapping)
+        if reason:
+            results["issues"] = {"status": "NOT_VERIFIED", "reason": reason}
+        else:
+            results["issues"], issue_map = restore_issues(repo, wplan)
+    return results, mapping, issue_map
 
 
 def cmd_restore():
@@ -574,12 +781,13 @@ def cmd_restore():
         status, repo = gh("GET", f"/repos/{created['full_name']}")
         if default_branch and status == 200 and repo.get("default_branch") != default_branch:
             notes.append(f"a branch padrão do alvo é {repo.get('default_branch')}, não {default_branch}")
-        # 7. Labels e milestones, só depois de o git estar restaurado e conferido. Uma falha aqui não apaga nada:
+        # 7. Labels, milestones e issues, só depois de o git estar restaurado e conferido. Uma falha aqui não apaga nada:
         # o git fica como está, o resultado diz o que não voltou e o job termina com o código 48.
-        classes, mapping = restore_data_classes(plan, created["full_name"])
+        classes, mapping, issue_map = restore_data_classes(plan, created["full_name"])
         (EVIDENCE / "restore-map.json").write_text(json.dumps(
             {"schema": "restore-map/1", "source_repository": source, "target_repository": created["full_name"],
-             "milestones": {str(old): new for old, new in sorted(mapping.items())}}, indent=2, sort_keys=True) + "\n")
+             "milestones": {str(old): new for old, new in sorted(mapping.items())},
+             "issues": {str(old): new for old, new in sorted(issue_map.items())}}, indent=2, sort_keys=True) + "\n")
         data = {"status": "OK", **state, "default_branch": default_branch, "heads": len(heads),
                 "tags": len(to_push) - len(heads), "skipped_refs": len(skipped), "skipped_examples": skipped[:5],
                 "lfs": plan["has_lfs"], "notes": notes, "backup_request_id": plan["backup_request_id"], "classes": classes}
@@ -627,7 +835,7 @@ def cmd_build_evidence():
     objects = [{"object_class": "git", "object_id": f"{target}", "disposition": disposition, "evidence": evidence_files,
                 "limitation": limitation}]
     limitations = [{"limitation_id": "LIM-restore-scope", "restriction_id": None, "object_class": None,
-                    "description": "This stage restores git (branches, tags, LFS), labels and milestones. Issues, projects and every "
+                    "description": "This stage restores git (branches, tags, LFS), labels, milestones and issues (with comments). Sub-issues, dependencies, projects and every "
                                    "other class kept in the backup package are NOT restored; see RESTAURAR.txt."}]
     # Labels e milestones: o resultado de cada classe vem do restore; sem ele (git não restaurado), NOT-VERIFIED.
     planned = plan.get("classes", {})
@@ -644,9 +852,9 @@ def cmd_build_evidence():
             disp = "PRESERVED-AS-EQUIVALENT-REPRESENTATION"
             lim = RESTORE_LIMITATIONS[cls]
             if cls == "labels" and r.get("extras"):
-                lim += f" Labels padrão do GitHub que não existem na origem permanecem no alvo: {', '.join(r['extras'][:12])}."
-            if cls == "milestones" and r.get("numbers_changed"):
-                lim += f" Números de milestone que mudaram (origem: {', '.join(str(n) for n in r['numbers_changed'][:12])}); o mapa está em restore-map.json."
+                lim += f" Default GitHub labels that do not exist in the source remain in the target: {', '.join(r['extras'][:12])}."
+            if cls in ("milestones", "issues") and r.get("numbers_changed"):
+                lim += f" {cls[:-1]} numbers that changed (source: {', '.join(str(n) for n in r['numbers_changed'][:12])}); the map is in restore-map.json."
             if r.get("notes"):
                 lim += " " + "; ".join(r["notes"][:3]) + "."
             limitations.append({"limitation_id": f"LIM-{cls}-restore", "description": lim, "restriction_id": None, "object_class": cls})

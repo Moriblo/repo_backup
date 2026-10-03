@@ -13,8 +13,12 @@ O QUE PROVA
       que não existem na origem ficam e são só listadas; milestones em ordem de número com mapa antigo -> novo; milestone
       fechado; classe NOT-VERIFIED quando o backup não a preservou (sem escrever nada); falha vira saída 48 sem apagar o alvo;
       paginação, limite de taxa, divergência na leitura de volta; nunca DELETE;
+    - issues e comentários (etapa 3): cópia equivalente com cabeçalho (número, autor, datas), @menções e referências
+      cruzadas neutralizadas (a origem nunca é citada de forma ativa), sem assignees, labels e milestone pelo mapa,
+      fechamento com motivo, comentários em ordem, numeração com buracos, teto de escritas, dependência de labels e
+      milestones, interrupção na primeira falha, conferência de volta; nunca DELETE;
     - evidência e manifest 2.0 da restauração (capability_id restore_repository), inclusive o caso FAILED;
-    - preflight de três classes (git, labels, milestones) sem o RESTORE_WRITE_TOKEN: BLOCKED com TRÊS restrições;
+    - preflight de quatro classes (git, labels, milestones, issues) sem o RESTORE_WRITE_TOKEN: BLOCKED com QUATRO restrições;
     - o token nunca aparece na saída nem nos arquivos de evidência.
     NÃO prova nada contra o GitHub ou o OneDrive reais, nem o envio LFS que funciona: isso só um run real prova.
 
@@ -129,6 +133,17 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
     due_shift = None             # muda o due_on devolvido (ex.: "T07:00:00Z" mesma data, ou "+1" outro dia)
     rate_limited = 0             # quantas escritas respondem 403 de limite de taxa antes de funcionar
     order = []                   # títulos de milestones na ordem de criação
+    issues = {}                  # repo -> lista de issues
+    issue_comments = {}          # repo -> lista de comentários
+    issue_bodies = []            # tudo o que foi enviado em POST de issue ou comentário (corpo e payload)
+    issue_fail = {}              # título -> status de erro na criação
+    close_fail = False           # recusa o fechamento de issues
+    comment_fail = None          # trecho do corpo cujo comentário é recusado
+    alter_body = False           # o servidor altera o corpo da issue (a conferência tem de pegar)
+    drop_labels = False          # o servidor ignora as labels na criação da issue
+    ignore_milestone = False     # o servidor ignora o milestone na criação da issue
+    force_assignee = False       # o servidor atribui alguém à issue
+    alter_comment = False        # o servidor altera o corpo do comentário
 
     def log_message(self, *args):
         pass
@@ -161,7 +176,7 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
         """('labels'|'milestones', repo, resto) se o caminho é de labels ou milestones de um repositório existente."""
         path = urllib.parse.urlparse(self.path).path
         parts = path.split("/")
-        if len(parts) >= 5 and parts[1] == "repos" and parts[4] in ("labels", "milestones"):
+        if len(parts) >= 5 and parts[1] == "repos" and parts[4] in ("labels", "milestones", "issues"):
             return parts[4], f"{parts[2]}/{parts[3]}", [urllib.parse.unquote(x) for x in parts[5:]]
         return None
 
@@ -191,6 +206,8 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
             if not cls.ignore_description:
                 item["description"] = body.get("description") or None
             return self._send(200, item)
+        if kind == "issues":
+            return self._issue_write(repo, rest, body)
         items = cls.milestones.setdefault(repo, [])
         if self.command == "POST":
             if cls.milestone_fail.get(body.get("title")):
@@ -215,13 +232,48 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
         item.update({k: v for k, v in body.items() if k in ("state", "title", "description", "due_on")})
         return self._send(200, item)
 
+    def _issue_write(self, repo, rest, body):
+        cls = FakeGitHub
+        issues = cls.issues.setdefault(repo, [])
+        comments = cls.issue_comments.setdefault(repo, [])
+        if self.command == "POST" and not rest:
+            cls.issue_bodies.append(dict(body))
+            if cls.issue_fail.get(body.get("title")):
+                return self._send(cls.issue_fail[body["title"]], {"message": "boom"})
+            ms = next((m for m in cls.milestones.get(repo, []) if m["number"] == body.get("milestone")), None)
+            item = {"number": len(issues) + 1, "title": body["title"], "body": ("ALTERADO" if cls.alter_body else body.get("body")),
+                    "state": "open", "state_reason": None, "labels": [] if cls.drop_labels else [{"name": n} for n in body.get("labels", [])],
+                    "milestone": {"number": ms["number"]} if ms and not cls.ignore_milestone else None,
+                    "assignees": [{"login": a} for a in body.get("assignees", [])] + ([{"login": "intruso"}] if cls.force_assignee else [])}
+            issues.append(item)
+            return self._send(201, item)
+        if self.command == "POST" and len(rest) == 2 and rest[1] == "comments":
+            cls.issue_bodies.append(dict(body, _comment_on=rest[0]))
+            if cls.comment_fail and cls.comment_fail in body.get("body", ""):
+                return self._send(500, {"message": "boom"})
+            c = {"id": 9000 + len(comments), "issue_url": f"https://api.github.com/repos/{repo}/issues/{rest[0]}",
+                 "body": ("ALTERADO" if cls.alter_comment else body["body"])}
+            comments.append(c)
+            return self._send(201, c)
+        if self.command == "PATCH" and len(rest) == 1:
+            item = next((i for i in issues if str(i["number"]) == rest[0]), None)
+            if item is None:
+                return self._send(404, {"message": "Not Found"})
+            if cls.close_fail and body.get("state") == "closed":
+                return self._send(500, {"message": "boom"})
+            item.update({k: v for k, v in body.items() if k in ("state", "state_reason")})
+            return self._send(200, item)
+        self._send(404, {"message": "Not Found"})
+
     def do_GET(self):  # noqa: N802
         if not self._auth():
             return
         cls = FakeGitHub
         route = self._data_route()
         if route:
-            kind, repo, _ = route
+            kind, repo, rest = route
+            if kind == "issues":
+                return self._paged(cls.issue_comments.get(repo, []) if rest == ["comments"] else cls.issues.get(repo, []))
             items = cls.labels.get(repo, []) if kind == "labels" else cls.milestones.get(repo, [])
             return self._paged(items)
         if self.path == "/user":
@@ -255,6 +307,7 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
         cls.created.append(full)
         cls.labels[full] = [{"name": n, "color": "ededed", "description": None} for n in cls.default_labels]
         cls.milestones[full] = []
+        cls.issues[full], cls.issue_comments[full] = [], []
         self._send(201, {"full_name": full, "private": cls.create_private, "html_url": f"https://example.invalid/{full}"})
 
     def do_PATCH(self):  # noqa: N802
@@ -346,14 +399,33 @@ class Base(unittest.TestCase):
               {"name": "prioridade ✔ alta", "color": "B60205", "description": "acentuação e símbolo"}]
     MILESTONES = [{"number": 1, "title": "Marco de teste", "state": "open", "description": "primeiro", "due_on": "2026-12-31T08:00:00Z"},
                   {"number": 3, "title": "Marco antigo", "state": "closed", "description": None, "due_on": None}]
+    # Issues com buraco (o #3 foi um pull request): #1 aberta com label e milestone, #2 fechada sem planejar, #4 fechada.
+    ISSUES = [{"number": 1, "title": "Erro ao salvar", "state": "open", "state_reason": None, "user": {"login": "octocat"},
+               "created_at": "2026-01-01T10:00:00Z", "closed_at": None, "assignees": [{"login": "zed"}], "labels": [{"name": "Bug"}],
+               "milestone": {"number": 1}, "body": "Veja @maria e @org/time, dono/outro#5 e dono/teste#2.\nContato a@b.com e `@ja`.\n```\n@no-codigo dono/x#1\n```"},
+              {"number": 2, "title": "Ideia descartada", "state": "closed", "state_reason": "not_planned", "user": {"login": "maria"},
+               "created_at": "2026-01-02T10:00:00Z", "closed_at": "2026-01-03T10:00:00Z", "assignees": [], "labels": [], "milestone": None, "body": None},
+              {"number": 4, "title": "Tarefa concluída", "state": "closed", "state_reason": "completed", "user": {"login": "octocat"},
+               "created_at": "2026-01-04T10:00:00Z", "closed_at": "2026-01-05T10:00:00Z", "assignees": [], "milestone": {"number": 3},
+               "labels": [{"name": "teste-backup"}, {"name": "prioridade ✔ alta"}], "body": "Feito, ver #2 e https://github.com/dono/teste/issues/1#issuecomment-7"}]
+    COMMENTS = [{"id": 101, "issue_url": f"https://api.github.com/repos/{SOURCE}/issues/1", "user": {"login": "zed"},
+                 "created_at": "2026-01-01T12:00:00Z", "body": "segundo (id maior, mas mais tarde)"},
+                {"id": 100, "issue_url": f"https://api.github.com/repos/{SOURCE}/issues/1", "user": {"login": "maria"},
+                 "created_at": "2026-01-01T11:00:00Z", "body": "primeiro @octocat"},
+                {"id": 102, "issue_url": f"https://api.github.com/repos/{SOURCE}/issues/4", "user": {"login": "octocat"},
+                 "created_at": "2026-01-04T12:00:00Z", "body": None}]
 
     def make_backup(self, *, metadata=True, lfs_tar=None, bundle=None, refs_tsv=None, status="COMPLETE_WITH_EXCEPTIONS",
                     capability="backup_repository", git_disposition="PRESERVED", drop=(), bad_manifest_hash=None,
-                    data=True, labels=None, milestones=None, label_disposition=None, milestone_disposition=None, raw=None):
+                    data=True, labels=None, milestones=None, label_disposition=None, milestone_disposition=None, raw=None,
+                    issues=True, issue_items=None, issue_comments=None, issue_disposition=None):
         package = {"source.bundle": bundle or self.bundle, "refs.tsv": (refs_tsv or self.refs_tsv).encode()}
         if data:
             package["api-labels.json"] = json.dumps(self.LABELS if labels is None else labels).encode()
             package["api-milestones.json"] = json.dumps(self.MILESTONES if milestones is None else milestones).encode()
+        if data and issues:
+            package["api-issues.json"] = json.dumps(self.ISSUES if issue_items is None else issue_items).encode()
+            package["api-issue-comments.json"] = json.dumps(self.COMMENTS if issue_comments is None else issue_comments).encode()
         for name, content in (raw or {}).items():
             package[name] = content
         if metadata:
@@ -373,7 +445,9 @@ class Base(unittest.TestCase):
                        + ([{"object_class": "labels", "object_id": f"{SOURCE}#labels", "disposition": label_disposition or self.EQUIV,
                             "evidence": ["api-labels.json"]},
                            {"object_class": "milestones", "object_id": f"{SOURCE}#milestones", "disposition": milestone_disposition or self.EQUIV,
-                            "evidence": ["api-milestones.json"]}] if data else []),
+                            "evidence": ["api-milestones.json"]}] if data else [])
+                       + ([{"object_class": "issues", "object_id": f"{SOURCE}#issues", "disposition": issue_disposition or self.EQUIV,
+                            "evidence": ["api-issues.json", "api-issue-comments.json"]}] if data and issues else []),
             "execution": {"source_repository_mode": "READ_ONLY", "destination_validated": True, "authorization_request_id": "req-20260101-001",
                           "restrictions_reconciled": True}}
         ev_bytes = (json.dumps(evidence, indent=2, sort_keys=True) + "\n").encode()
@@ -408,6 +482,9 @@ class Base(unittest.TestCase):
         FakeGitHub.labels, FakeGitHub.milestones, FakeGitHub.label_fail, FakeGitHub.milestone_fail = {}, {}, {}, {}
         FakeGitHub.ignore_color = FakeGitHub.ignore_state = FakeGitHub.ignore_description = False
         FakeGitHub.due_shift, FakeGitHub.rate_limited, FakeGitHub.order = None, 0, []
+        FakeGitHub.issues, FakeGitHub.issue_comments, FakeGitHub.issue_bodies, FakeGitHub.issue_fail = {}, {}, [], {}
+        FakeGitHub.close_fail, FakeGitHub.comment_fail, FakeGitHub.alter_body = False, None, False
+        FakeGitHub.drop_labels = FakeGitHub.ignore_milestone = FakeGitHub.force_assignee = FakeGitHub.alter_comment = False
         FakeOneDrive.blob_auth = []
         self.make_backup()
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("CAPABILITY_ID", "RESTORE_", "PREFLIGHT", "TARGET_"))}
@@ -461,13 +538,15 @@ class FetchTest(Base):
         self.fetched()
         plan = json.loads((self.root / "work" / "plan.json").read_text())
         self.assertEqual((plan["source_repository"], plan["backup_request_id"], plan["has_lfs"]), (SOURCE, "req-20260101-001", False))
-        self.assertEqual(sorted(plan["files"]), ["api-labels.json", "api-milestones.json", "refs.tsv", "repo-metadata.json", "source.bundle"])
+        self.assertEqual(sorted(plan["files"]), ["api-issue-comments.json", "api-issues.json", "api-labels.json", "api-milestones.json", "refs.tsv",
+                                                    "repo-metadata.json", "source.bundle"])
         self.assertEqual(plan["classes"], {"labels": {"status": "READY", "file": "api-labels.json", "count": 3},
-                                           "milestones": {"status": "READY", "file": "api-milestones.json", "count": 2}})
+                                           "milestones": {"status": "READY", "file": "api-milestones.json", "count": 2},
+                                           "issues": {"status": "READY", "file": "api-issues.json", "count": 3}})
         self.assertEqual((self.root / "work" / "package" / "source.bundle").read_bytes(), self.bundle)
         self.assertEqual(plan["metadata"]["default_branch"], "feature")
         # O download pré-autenticado (blob) é feito sem Authorization, uma vez por arquivo baixado.
-        self.assertEqual(FakeOneDrive.blob_auth, [None] * 8)
+        self.assertEqual(FakeOneDrive.blob_auth, [None] * 10)
 
     def test_hash_adulterado_no_onedrive_e_recusado_e_o_arquivo_apagado(self):
         FakeOneDrive.served[f"{BASE}/package/source.bundle"] = self.bundle + b"x"
@@ -696,17 +775,17 @@ class DataClassesTest(Base):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         ev, man = self.evidence("evidence.json"), self.evidence("manifest.json")
         objs = {o["object_class"]: o for o in ev["objects"]}
-        self.assertEqual((objs["git"]["disposition"], objs["labels"]["disposition"], objs["milestones"]["disposition"]),
-                         ("PARTIALLY-PRESERVED", Base.EQUIV, Base.EQUIV))        # a origem tem refs/pull/*, que não voltam
+        self.assertEqual((objs["git"]["disposition"], objs["labels"]["disposition"], objs["milestones"]["disposition"], objs["issues"]["disposition"]),
+                         ("PARTIALLY-PRESERVED", Base.EQUIV, Base.EQUIV, Base.EQUIV))        # a origem tem refs/pull/*, que não voltam
         self.assertEqual(objs["labels"]["object_id"], "dono/teste-restaurado#labels")
         self.assertIn("restore-map.json", objs["milestones"]["evidence"])
         lims = {l["limitation_id"]: l["description"] for l in man["limitations"]}
         self.assertIn("documentation, enhancement", lims["LIM-labels-restore"])           # padrão do GitHub listadas
         self.assertIn("internal label id is not preserved", lims["LIM-labels-restore"])
         self.assertIn("3", lims["LIM-milestones-restore"])                                # número que mudou
-        self.assertIn("Issues, projects", lims["LIM-restore-scope"])
-        self.assertNotIn("labels, milestones", lims["LIM-restore-scope"].replace("labels and milestones", ""))
-        self.assertEqual((man["status"], man["reconciliation"]["equivalent"], man["reconciliation"]["preserved"]), ("COMPLETE_WITH_EXCEPTIONS", 2, 0))
+        self.assertIn("Sub-issues, dependencies, projects", lims["LIM-restore-scope"])
+        self.assertIn("numbers that changed (source: 4)", lims["LIM-issues-restore"])
+        self.assertEqual((man["status"], man["reconciliation"]["equivalent"], man["reconciliation"]["preserved"]), ("COMPLETE_WITH_EXCEPTIONS", 3, 0))
 
     def test_milestones_criados_em_ordem_de_numero(self):
         self.make_backup(milestones=[
@@ -726,24 +805,27 @@ class DataClassesTest(Base):
         proc = self.go()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         res = self.evidence("restore-result.json")
-        self.assertEqual({c: v["status"] for c, v in res["classes"].items()}, {"labels": "NOT_VERIFIED", "milestones": "NOT_VERIFIED"})
-        self.assertFalse([c for c in FakeGitHub.calls if "/labels" in c[1] or "/milestones" in c[1]])
+        self.assertEqual({c: v["status"] for c, v in res["classes"].items()},
+                         {"labels": "NOT_VERIFIED", "milestones": "NOT_VERIFIED", "issues": "NOT_VERIFIED"})
+        self.assertFalse([c for c in FakeGitHub.calls if "/labels" in c[1] or "/milestones" in c[1] or "/issues" in c[1]])
         self.assertEqual(FakeGitHub.labels["dono/teste-restaurado"], [{"name": n, "color": "ededed", "description": None} for n in FakeGitHub.default_labels])
         self.assertEqual(self.bkp("preflight", RESTORE_TOKEN_OUTCOME="success").returncode, 0)
         self.assertEqual(self.restore("build-evidence").returncode, 0)
         ev, man = self.evidence("evidence.json"), self.evidence("manifest.json")
-        self.assertEqual([o["disposition"] for o in ev["objects"][1:]], ["NOT-VERIFIED", "NOT-VERIFIED"])
+        self.assertEqual([o["disposition"] for o in ev["objects"][1:]], ["NOT-VERIFIED"] * 3)
         self.assertEqual((man["status"], man["reconciliation"]["not_verified"], man["reconciliation"]["unreconciled_object_classes"]),
-                         ("COMPLETE_WITH_EXCEPTIONS", 2, ["labels", "milestones"]))
+                         ("COMPLETE_WITH_EXCEPTIONS", 3, ["labels", "milestones", "issues"]))
         self.assertIn("LIM-labels-not-restored", [l["limitation_id"] for l in man["limitations"]])
 
     def test_classe_que_o_backup_nao_preservou_nao_e_restaurada(self):
         self.make_backup(label_disposition="FAILED", milestone_disposition="NOT-VERIFIED")
         self.assertEqual(self.go().returncode, 0)
         classes = self.evidence("restore-result.json")["classes"]
-        self.assertEqual({c: v["status"] for c, v in classes.items()}, {"labels": "NOT_VERIFIED", "milestones": "NOT_VERIFIED"})
+        self.assertEqual({c: v["status"] for c, v in classes.items()},
+                         {"labels": "NOT_VERIFIED", "milestones": "NOT_VERIFIED", "issues": "NOT_VERIFIED"})
         self.assertIn("FAILED", classes["labels"]["reason"])
-        self.assertFalse([c for c in FakeGitHub.calls if "/labels" in c[1] or "/milestones" in c[1]])
+        self.assertIn("dependem", classes["issues"]["reason"])
+        self.assertFalse([c for c in FakeGitHub.calls if "/labels" in c[1] or "/milestones" in c[1] or "/issues" in c[1]])
 
     def test_so_uma_das_classes(self):
         self.make_backup(milestone_disposition="FAILED")
@@ -784,7 +866,8 @@ class DataClassesTest(Base):
         proc = self.restore("build-evidence")
         self.assertEqual(proc.returncode, 1)
         ev, man = self.evidence("evidence.json"), self.evidence("manifest.json")
-        self.assertEqual([o["disposition"] for o in ev["objects"]], ["PARTIALLY-PRESERVED", "FAILED", Base.EQUIV])
+        self.assertEqual([o["disposition"] for o in ev["objects"]], ["PARTIALLY-PRESERVED", "FAILED", Base.EQUIV, "NOT-VERIFIED"])
+        self.assertEqual(res["classes"]["issues"]["status"], "NOT_VERIFIED")        # as issues dependem das labels
         self.assertEqual((man["status"], man["reconciliation"]["failed"]), ("FAILED", 1))
 
     def test_servidor_que_ignora_a_cor_e_pego_pela_conferencia(self):
@@ -880,6 +963,291 @@ class DataClassesTest(Base):
         self.assertEqual(writes, [])
 
 
+class IssuesTest(Base):
+    """Etapa 3: issues e comentários como cópia equivalente."""
+    T = "dono/teste-restaurado"
+
+    def go(self, **env):
+        self.fetched()
+        return self.restore("restore", **env)
+
+    def again(self, **env):
+        import shutil
+        FakeGitHub.existing.discard(self.T)
+        shutil.rmtree(self.root / "work", ignore_errors=True)
+        return self.go(**env)
+
+    def issue_writes(self):
+        return [c for c in FakeGitHub.calls if "/issues" in c[1] and c[0] in ("POST", "PATCH")]
+
+    def test_restaura_issues_e_comentarios_como_copia_equivalente(self):
+        proc = self.go()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        issues = FakeGitHub.issues[self.T]
+        # Numeração com buraco na origem (1, 2, 4): o alvo cria 1, 2, 3 e o mapa registra a mudança.
+        self.assertEqual([(i["number"], i["title"], i["state"], i["state_reason"]) for i in issues],
+                         [(1, "Erro ao salvar", "open", None), (2, "Ideia descartada", "closed", "not_planned"),
+                          (3, "Tarefa concluída", "closed", "completed")])
+        self.assertEqual(self.evidence("restore-map.json")["issues"], {"1": 1, "2": 2, "4": 3})
+        res = self.evidence("restore-result.json")["classes"]["issues"]
+        self.assertEqual((res["status"], res["created"], res["closed"], res["comments"], res["writes"], res["numbers_changed"]),
+                         ("OK", 3, 2, 3, 8, [4]))
+        # Labels pelo nome e milestone pelo mapa da etapa 2 (o milestone 3 virou o 2); nenhum assignee é enviado.
+        self.assertEqual([l["name"] for l in issues[0]["labels"]], ["Bug"])
+        self.assertEqual([i["milestone"] and i["milestone"]["number"] for i in issues], [1, None, 2])
+        self.assertTrue(all("assignees" not in b for b in FakeGitHub.issue_bodies))
+        self.assertTrue(all(not i["assignees"] for i in issues))
+        # Cabeçalho com número, autor e datas originais, tudo entre crases.
+        body = issues[0]["body"]
+        self.assertIn("`dono/teste#1`", body)
+        self.assertIn("autor: `@octocat`", body)
+        self.assertIn("criada em 2026-01-01T10:00:00Z", body)
+        self.assertIn("atribuída originalmente a `@zed`", body)
+        self.assertIn("fechada em 2026-01-03T10:00:00Z (not_planned)", issues[1]["body"])
+        # Comentários em ordem cronológica (não pelo id), com cabeçalho; comentário sem corpo continua com o cabeçalho.
+        comments = FakeGitHub.issue_comments[self.T]
+        self.assertEqual([("primeiro" in c["body"], "segundo" in c["body"]) for c in comments[:2]], [(True, False), (False, True)])
+        self.assertIn("id original `100`", comments[0]["body"])
+        self.assertEqual(comments[2]["issue_url"].rsplit("/", 1)[-1], "3")
+        self.assertNotIn("DELETE", {m for m, _ in FakeGitHub.calls})
+        self.assert_no_leak()
+
+    def test_mencoes_e_referencias_cruzadas_nunca_ficam_ativas(self):
+        self.assertEqual(self.go().returncode, 0)
+        body = FakeGitHub.issues[self.T][0]["body"]
+        for wrapped in ("`@maria`", "`@org/time`", "`dono/outro#5`", "`dono/teste#2`", "`@ja`"):
+            self.assertIn(wrapped, body)
+        self.assertIn("a@b.com", body)                                       # e-mail intacto
+        self.assertIn("```\n@no-codigo dono/x#1\n```", body)                 # código intacto
+        self.assertIn("`@maria`", "".join(c["body"] for c in FakeGitHub.issue_comments[self.T]) + "`@maria`")
+        self.assertIn("primeiro `@octocat`", FakeGitHub.issue_comments[self.T][0]["body"])
+        self.assertIn("`https://github.com/dono/teste/issues/1#issuecomment-7`", FakeGitHub.issues[self.T][2]["body"])
+        self.assertIn(" #2 ", FakeGitHub.issues[self.T][2]["body"])           # #N simples fica
+        # Em TUDO o que foi enviado, nenhuma referência à origem ou @menção fora de crases ou de código.
+        import re
+        for sent in FakeGitHub.issue_bodies:
+            text = (sent.get("body") or "")
+            text = re.sub(r"```.*?```", "", text, flags=re.S)
+            text = re.sub(r"`[^`]*`", "", text)
+            self.assertIsNone(re.search(r"dono/[\w.-]+#\d+|github\.com/dono/", text), text)
+            self.assertIsNone(re.search(r"(?<![\w@])@[A-Za-z]", text), text)
+
+    def test_origem_nunca_e_escrita(self):
+        self.assertEqual(self.go().returncode, 0)
+        self.assertEqual([p for m, p in FakeGitHub.calls if m in ("POST", "PATCH", "PUT") and (p == f"/repos/{SOURCE}" or p.startswith(f"/repos/{SOURCE}/"))], [])
+
+    def test_evidencia_das_issues(self):
+        self.assertEqual(self.go().returncode, 0)
+        self.assertEqual(self.bkp("preflight", RESTORE_TOKEN_OUTCOME="success").returncode, 0)
+        self.assertEqual(self.restore("build-evidence").returncode, 0)
+        ev, man = self.evidence("evidence.json"), self.evidence("manifest.json")
+        issues = next(o for o in ev["objects"] if o["object_class"] == "issues")
+        self.assertEqual((issues["disposition"], issues["object_id"]), (Base.EQUIV, "dono/teste-restaurado#issues"))
+        lim = {l["limitation_id"]: l["description"] for l in man["limitations"]}["LIM-issues-restore"]
+        for text in ("equivalent copy", "header", "backticks", "no assignees", "sub-issues and dependencies"):
+            self.assertIn(text, lim)
+        self.assertEqual((man["status"], man["reconciliation"]["equivalent"], man["reconciliation"]["failed"]), ("COMPLETE_WITH_EXCEPTIONS", 3, 0))
+
+    def test_teto_de_escritas_recusa_antes_de_escrever(self):
+        proc = self.go(RESTORE_MAX_WRITES="7")                # o plano precisa de 8
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        res = self.evidence("restore-result.json")["classes"]
+        self.assertEqual(res["issues"]["status"], "NOT_VERIFIED")
+        self.assertIn("8 escritas", res["issues"]["reason"])
+        self.assertIn("teto de 7", res["issues"]["reason"])
+        self.assertEqual(self.issue_writes(), [])
+        self.assertEqual(res["labels"]["status"], "OK")       # as demais classes seguem
+        self.assertEqual(self.go_again_ok(), 0)
+
+    def go_again_ok(self):
+        FakeGitHub.issue_bodies = []
+        return self.again(RESTORE_MAX_WRITES="8").returncode
+
+    def test_issues_dependem_de_labels_e_milestones(self):
+        FakeGitHub.label_fail = {"teste-backup": 500}
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48)
+        classes = self.evidence("restore-result.json")["classes"]
+        self.assertEqual((classes["labels"]["status"], classes["issues"]["status"]), ("FAILED", "NOT_VERIFIED"))
+        self.assertIn("labels", classes["issues"]["reason"])
+        self.assertEqual(self.issue_writes(), [])
+        FakeGitHub.label_fail = {}
+        FakeGitHub.milestone_fail = {"Marco antigo": 422}
+        proc = self.again()
+        self.assertEqual(proc.returncode, 48)
+        self.assertIn("milestones", self.evidence("restore-result.json")["classes"]["issues"]["reason"])
+        self.assertEqual(self.issue_writes(), [])
+
+    def test_backup_sem_issues_nao_escreve_issues(self):
+        self.make_backup(issues=False)
+        self.assertEqual(self.go().returncode, 0)
+        classes = self.evidence("restore-result.json")["classes"]
+        self.assertEqual((classes["labels"]["status"], classes["issues"]["status"]), ("OK", "NOT_VERIFIED"))
+        self.assertEqual(self.issue_writes(), [])
+
+    def test_issues_nao_preservadas_no_backup(self):
+        self.make_backup(issue_disposition="FAILED")
+        self.assertEqual(self.go().returncode, 0)
+        self.assertIn("FAILED", self.evidence("restore-result.json")["classes"]["issues"]["reason"])
+        self.assertEqual(self.issue_writes(), [])
+
+    def test_arquivo_de_comentarios_ausente_ou_malformado(self):
+        self.make_backup(drop=("api-issue-comments.json",))
+        self.assertEqual(self.go().returncode, 0)
+        self.assertIn("api-issue-comments.json não está no pacote", self.evidence("restore-result.json")["classes"]["issues"]["reason"])
+        self.make_backup(raw={"api-issue-comments.json": b'{"x": 1}'})
+        self.assertEqual(self.again().returncode, 0)
+        self.assertIn("não pôde ser lido", self.evidence("restore-result.json")["classes"]["issues"]["reason"])
+
+    def test_comentario_de_issue_inexistente_recusa_sem_escrever(self):
+        orphan = dict(self.COMMENTS[0], issue_url=f"https://api.github.com/repos/{SOURCE}/issues/99")
+        self.make_backup(issue_comments=[orphan])
+        self.assertEqual(self.go().returncode, 0)
+        self.assertIn("issue 99", self.evidence("restore-result.json")["classes"]["issues"]["reason"])
+        self.assertEqual(self.issue_writes(), [])
+
+    def test_label_ou_milestone_desconhecidos_recusam_sem_escrever(self):
+        bad = [dict(self.ISSUES[0], labels=[{"name": "inexistente"}])]
+        self.make_backup(issue_items=bad, issue_comments=[])
+        self.assertEqual(self.go().returncode, 0)
+        self.assertIn("inexistente", self.evidence("restore-result.json")["classes"]["issues"]["reason"])
+        self.assertEqual(self.issue_writes(), [])
+        bad = [dict(self.ISSUES[0], milestone={"number": 77})]
+        self.make_backup(issue_items=bad, issue_comments=[])
+        self.assertEqual(self.again().returncode, 0)
+        self.assertIn("milestone 77", self.evidence("restore-result.json")["classes"]["issues"]["reason"])
+        self.assertEqual(self.issue_writes(), [])
+
+    def test_corpo_acima_do_limite_recusa_antes_de_escrever(self):
+        big = [dict(self.ISSUES[0], body="x" * 66000)]
+        self.make_backup(issue_items=big, issue_comments=[])
+        self.assertEqual(self.go().returncode, 0)
+        self.assertIn("limite", self.evidence("restore-result.json")["classes"]["issues"]["reason"])
+        self.assertEqual(self.issue_writes(), [])
+
+    def test_falha_ao_criar_issue_interrompe_na_primeira(self):
+        FakeGitHub.issue_fail = {"Ideia descartada": 422}
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48)
+        res = self.evidence("restore-result.json")["classes"]["issues"]
+        self.assertEqual((res["status"], res["created"]), ("FAILED", 1))
+        self.assertEqual([i["title"] for i in FakeGitHub.issues[self.T]], ["Erro ao salvar"])    # a #4 não foi criada: a numeração não desliza
+        self.assertEqual(self.evidence("restore-map.json")["issues"], {"1": 1})
+        self.assertEqual(self.bare_refs(self.T), {"refs/heads/main", "refs/heads/feature", "refs/tags/v1"})
+        self.assertEqual(self.bkp("preflight", RESTORE_TOKEN_OUTCOME="success").returncode, 0)
+        self.assertEqual(self.restore("build-evidence").returncode, 1)
+        ev, man = self.evidence("evidence.json"), self.evidence("manifest.json")
+        self.assertEqual(next(o for o in ev["objects"] if o["object_class"] == "issues")["disposition"], "FAILED")
+        self.assertEqual((man["status"], man["reconciliation"]["failed"]), ("FAILED", 1))
+
+    def test_falha_ao_fechar_ou_comentar_sai_com_48(self):
+        FakeGitHub.close_fail = True
+        self.assertEqual(self.go().returncode, 48)
+        self.assertIn("fechar", self.evidence("restore-result.json")["classes"]["issues"]["errors"][0])
+        FakeGitHub.close_fail = False
+        FakeGitHub.comment_fail = "segundo"
+        self.assertEqual(self.again().returncode, 48)
+        self.assertIn("comentário 2", self.evidence("restore-result.json")["classes"]["issues"]["errors"][0])
+        self.assertEqual(len(FakeGitHub.issues[self.T]), 1)                      # parou na primeira issue
+
+    def test_servidor_que_altera_o_corpo_e_pego_pela_conferencia(self):
+        FakeGitHub.alter_body = True
+        self.assertEqual(self.go().returncode, 48)
+        res = self.evidence("restore-result.json")["classes"]["issues"]
+        self.assertEqual(res["status"], "FAILED")
+        self.assertEqual(sorted(res["mismatches"]), [1, 2, 4])
+
+    def test_conferencia_pega_labels_milestone_assignee_e_comentario_errados(self):
+        for flag, expected in (("drop_labels", [1, 4]), ("ignore_milestone", [1, 4]), ("force_assignee", [1, 2, 4]), ("alter_comment", [1, 4])):
+            setattr(FakeGitHub, flag, True)
+            proc = self.again()
+            self.assertEqual(proc.returncode, 48, flag)
+            res = self.evidence("restore-result.json")["classes"]["issues"]
+            self.assertEqual((res["status"], sorted(res["mismatches"])), ("FAILED", expected), flag)
+            setattr(FakeGitHub, flag, False)
+
+    def test_issue_a_mais_no_alvo_e_divergencia(self):
+        # Uma issue estranha aparece no alvo antes da leitura de volta.
+        FakeGitHub.issues.setdefault(self.T, [])
+        self.fetched()
+        orig_get = FakeGitHub.do_GET
+        def spy(handler):
+            if "/issues?state=all" in handler.path and not getattr(spy, "done", False):
+                spy.done = True
+                FakeGitHub.issues[self.T].append({"number": 99, "title": "intrusa", "body": "x", "state": "open", "labels": [], "milestone": None, "assignees": []})
+            return orig_get(handler)
+        FakeGitHub.do_GET = spy
+        try:
+            proc = self.restore("restore")
+        finally:
+            FakeGitHub.do_GET = orig_get
+        self.assertEqual(proc.returncode, 48)
+        self.assertTrue(any("tem 4 issues" in str(m) for m in self.evidence("restore-result.json")["classes"]["issues"]["mismatches"]))
+
+    def test_limite_de_taxa_nas_issues_espera_e_repete(self):
+        FakeGitHub.rate_limited = 0
+        original = FakeGitHub._data_write
+        state = {"n": 0}
+        def limited(handler, kind, repo, rest, body):
+            if kind == "issues" and state["n"] == 0:
+                state["n"] = 1
+                return handler._send(403, {"message": "API rate limit exceeded"})
+            return original(handler, kind, repo, rest, body)
+        FakeGitHub._data_write = limited
+        try:
+            self.assertEqual(self.go().returncode, 0)
+        finally:
+            FakeGitHub._data_write = original
+        self.assertEqual(len(FakeGitHub.issues[self.T]), 3)
+
+    def test_ordem_das_issues_e_dos_comentarios(self):
+        shuffled = list(reversed(self.ISSUES))
+        self.make_backup(issue_items=shuffled)
+        self.assertEqual(self.go().returncode, 0)
+        self.assertEqual([i["title"] for i in FakeGitHub.issues[self.T]], ["Erro ao salvar", "Ideia descartada", "Tarefa concluída"])
+
+    def test_issue_sem_titulo_e_corpo_vazio(self):
+        self.make_backup(issue_items=[dict(self.ISSUES[1], title=None, body=None, user=None)], issue_comments=[])
+        self.assertEqual(self.go().returncode, 0)
+        issue = FakeGitHub.issues[self.T][0]
+        self.assertEqual(issue["title"], "(sem título)")
+        self.assertIn("autor: `@desconhecido`", issue["body"])
+
+
+class NeutralizeTest(unittest.TestCase):
+    """Neutralização de @menções e referências cruzadas (unitário)."""
+
+    def n(self, text):
+        import restore_repo
+        return restore_repo.neutralize(text)
+
+    def test_mencoes(self):
+        self.assertEqual(self.n("oi @maria e @org/time."), "oi `@maria` e `@org/time`.")
+        self.assertEqual(self.n("(@fulano) e @a-b's"), "(`@fulano`) e `@a-b`'s")
+        self.assertEqual(self.n("a@b.com x@y"), "a@b.com x@y")                      # e-mail não é menção
+        self.assertEqual(self.n("@@ruim e @-ruim"), "@@ruim e @-ruim")             # nome inválido
+
+    def test_referencias_e_urls(self):
+        self.assertEqual(self.n("veja dono/repo#12 e dono/repo#3."), "veja `dono/repo#12` e `dono/repo#3`.")
+        self.assertEqual(self.n("https://github.com/d/r/pull/9"), "`https://github.com/d/r/pull/9`")
+        self.assertEqual(self.n("https://github.com/d/r/issues/9#issuecomment-5 fim"), "`https://github.com/d/r/issues/9#issuecomment-5` fim")
+        self.assertEqual(self.n("ver #3 e GH-4"), "ver #3 e GH-4")                  # #N simples fica
+
+    def test_codigo_nao_e_alterado(self):
+        text = "`@x dono/r#1`\n```\n@y dono/r#2\n```\n~~~\n@z\n~~~\n````\n```\n@w\n````\n@fora"
+        self.assertEqual(self.n(text), text.replace("@fora", "`@fora`"))
+
+    def test_idempotente_e_sem_perda(self):
+        text = "Oi @maria, dono/r#1, https://github.com/d/r/issues/2 e `@ja`.\n```\n@x\n```"
+        once = self.n(text)
+        self.assertEqual(self.n(once), once)
+        import re
+        self.assertEqual(once.replace("`", ""), text.replace("`", ""))             # só acrescenta crases
+
+    def test_texto_vazio(self):
+        self.assertEqual((self.n(None), self.n("")), ("", ""))
+
+
 class StaticGuardsTest(unittest.TestCase):
     """Garantias de código que os testes ponta a ponta não conseguem observar (lidas pela árvore sintática)."""
 
@@ -911,12 +1279,13 @@ class StaticGuardsTest(unittest.TestCase):
 
 
 class EvidenceAndPreflightTest(Base):
-    def test_preflight_sem_token_bloqueia_com_tres_restricoes(self):
+    def test_preflight_sem_token_bloqueia_com_quatro_restricoes(self):
         proc = self.bkp("preflight", RESTORE_TOKEN_OUTCOME="failure")
         self.assertEqual(proc.returncode, 10)
         required = self.result(proc)["required_restrictions"]
         self.assertEqual(sorted(r["restriction_id"] for r in required),
-                         ["RST-git-ACCESS_PERMISSION_GAP", "RST-labels-ACCESS_PERMISSION_GAP", "RST-milestones-ACCESS_PERMISSION_GAP"])
+                         ["RST-git-ACCESS_PERMISSION_GAP", "RST-issues-ACCESS_PERMISSION_GAP", "RST-labels-ACCESS_PERMISSION_GAP",
+                          "RST-milestones-ACCESS_PERMISSION_GAP"])
         pf = json.loads((self.root / "evidence" / "preflight.json").read_text())
         route = next(r for r in pf["assessments"][0]["routes"] if r["route_type"] == "DETERMINISTIC_EXECUTOR")
         self.assertEqual(route["route_reference"], "github_actions:restore-repository.yml")
@@ -926,7 +1295,7 @@ class EvidenceAndPreflightTest(Base):
         self.assertEqual((proc.returncode, self.result(proc)["preflight_status"]), (0, "PASS"))
         pf = json.loads((self.root / "evidence" / "preflight.json").read_text())
         self.assertEqual(([a["object_class"] for a in pf["assessments"]], pf["factual_inventory_pending"], pf["gaps"]),
-                         (["git", "labels", "milestones"], [], []))
+                         (["git", "labels", "milestones", "issues"], [], []))
 
     def test_validate_inputs(self):
         self.assertEqual(self.bkp("validate-inputs").returncode, 0)
@@ -949,12 +1318,12 @@ class EvidenceAndPreflightTest(Base):
         self.assertEqual(ev["source_scope"], {"backup_path": BASE, "source_repository": SOURCE, "target_repository": "dono/teste-restaurado",
                                               "destination": f"{BASE}/restores"})
         self.assertEqual([(o["object_class"], o["disposition"]) for o in ev["objects"]],
-                         [("git", "PARTIALLY-PRESERVED"), ("labels", Base.EQUIV), ("milestones", Base.EQUIV)])
+                         [("git", "PARTIALLY-PRESERVED"), ("labels", Base.EQUIV), ("milestones", Base.EQUIV), ("issues", Base.EQUIV)])
         self.assertEqual(man["status"], "COMPLETE_WITH_EXCEPTIONS")
         ids = [l["limitation_id"] for l in man["limitations"]]
-        self.assertTrue({"LIM-restore-scope", "LIM-git-refs", "LIM-labels-restore", "LIM-milestones-restore"} <= set(ids), ids)
+        self.assertTrue({"LIM-restore-scope", "LIM-git-refs", "LIM-labels-restore", "LIM-milestones-restore", "LIM-issues-restore"} <= set(ids), ids)
         rec = man["reconciliation"]
-        self.assertEqual((rec["partial"], rec["equivalent"], rec["failed"], rec["not_verified"], rec["unreconciled_object_classes"]), (1, 2, 0, 0, []))
+        self.assertEqual((rec["partial"], rec["equivalent"], rec["failed"], rec["not_verified"], rec["unreconciled_object_classes"]), (1, 3, 0, 0, []))
         self.assertIn("restore-map.json", [a["path"] for a in man["artifacts"]])
         self.assertIn("refs-restored.tsv", [a["path"] for a in man["artifacts"]])
         self.assert_no_leak()
@@ -968,8 +1337,9 @@ class EvidenceAndPreflightTest(Base):
         self.assertEqual(ev["objects"][0]["disposition"], "PRESERVED")
         self.assertEqual(man["reconciliation"]["preserved"], 1)
         # Resultado sem a seção de classes: labels e milestones ficam NOT-VERIFIED, nunca sucesso presumido.
-        self.assertEqual([(o["object_class"], o["disposition"]) for o in ev["objects"][1:]], [("labels", "NOT-VERIFIED"), ("milestones", "NOT-VERIFIED")])
-        self.assertEqual(man["reconciliation"]["unreconciled_object_classes"], ["labels", "milestones"])
+        self.assertEqual([(o["object_class"], o["disposition"]) for o in ev["objects"][1:]],
+                         [("labels", "NOT-VERIFIED"), ("milestones", "NOT-VERIFIED"), ("issues", "NOT-VERIFIED")])
+        self.assertEqual(man["reconciliation"]["unreconciled_object_classes"], ["labels", "milestones", "issues"])
 
     def test_falha_vira_failed_com_saida_1(self):
         self.fetched()
@@ -978,7 +1348,7 @@ class EvidenceAndPreflightTest(Base):
         proc, ev, man = self.finish()
         self.assertEqual(proc.returncode, 1)
         self.assertEqual((ev["objects"][0]["disposition"], man["status"], man["reconciliation"]["failed"]), ("FAILED", "FAILED", 1))
-        self.assertEqual([o["disposition"] for o in ev["objects"][1:]], ["NOT-VERIFIED", "NOT-VERIFIED"])    # o git não chegou a ser restaurado
+        self.assertEqual([o["disposition"] for o in ev["objects"][1:]], ["NOT-VERIFIED"] * 3)    # o git não chegou a ser restaurado
         self.assertIn("TARGET_EXISTS", ev["objects"][0]["limitation"])
 
     def test_sem_resultado_da_restauracao_e_failed(self):
