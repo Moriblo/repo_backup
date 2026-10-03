@@ -748,7 +748,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 5021ca00e82dd1924a1b1622f8338d86945dc94d
+      current_sha: a4d63bdea03decc69e715069a610cdb2172bff99
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -1438,8 +1438,10 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: 1ebfdf1e76b585ef489139e3879ccbd336bf324c
     validation:
-      status: NOT_VALIDATED
-      scope: "Ainda não executado no Actions; a lógica compartilhada (schema, dispatcher, preflight, evidência) é coberta pelos testes locais."
+      status: VALIDATED
+      scope: "Run real completo pelo dispatcher (req-20261003-010, run 37139570337): backup de labels, milestones e issues de Moriblo/backup_teste_issues para backups/backup_teste_issues. Preflight PASS de três classes com o SOURCE_READ_TOKEN, destino validado, leitura da API (4 labels, 1 milestone, 6 issues, comentários, eventos, repo-metadata.json), 9 arquivos do pacote e 5 de evidência enviados com hash conferido, COMPLETE_WITH_EXCEPTIONS (três objetos PRESERVED-AS-EQUIVALENT-REPRESENTATION, sem objeto git, limitações LIM-labels/milestones/issues-equivalent, capability_id backup_issues). evidence.json e manifest.json foram lidos (anexados pelo HITL) e conferem com o esperado. Não provado - repositório grande e limite de taxa da API, reações (o repositório de teste não tem; api-issue-reactions.json saiu vazio), relações entre issues, Issues desativado (410), continuação sem o token, mais de uma linha por push e linhas de Mnemonics diferentes no mesmo push. Sub-issues e dependências ainda não são lidas (PR seguinte)."
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37139570337", commit: 5e891f22083118f28281da59184b5083e5368ff5}
     relationships:
       - {capability_id: backup_issues, relationship: EXECUTES}
 
