@@ -18,7 +18,9 @@
 # ESCOPOS (input `scope`; identificadores em `scope_identifiers`, JSON)
 #   SOURCE_REPOSITORY  {"source_repository": "dono/nome"}  Projects ligados ao repositório
 #   PROJECT            {"owner": "dono", "number": N}      um Project
-#   OWNER_PROJECT_SET  {"owner": "dono"}                   todos os Projects do dono
+#   OWNER_PROJECT_SET  {"owner": "dono"}                   TODOS os Projects do dono, sem filtro
+#                                                          (inclusive os de outros repositórios; run
+#                                                          req-20261003-005: 8 Projects, 201 itens)
 #
 # SEQUÊNCIA DOS PASSOS (não reordenar; ver BACKUP_REPOSITORY.md)
 #   1. Revalidar inputs            -> rejeita valores fora do schema
@@ -54,7 +56,7 @@ on:
         type: string
       # Escopo do backup de Projects.
       scope:
-        description: "Projects scope: SOURCE_REPOSITORY, PROJECT or OWNER_PROJECT_SET (required; READ-ONLY)"
+        description: "Projects scope: SOURCE_REPOSITORY, PROJECT or OWNER_PROJECT_SET (required; READ-ONLY). WARNING: OWNER_PROJECT_SET reads and stores ALL Projects of the owner, with no filter, including Projects unrelated to any repository."
         required: true
         type: string
       # Identificadores do escopo, em JSON (inputs de workflow_call só aceitam string).
