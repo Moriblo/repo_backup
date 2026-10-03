@@ -748,7 +748,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 4bb28a75e332147814ce3cfa4c1c0fda05510663
+      current_sha: 52b2b28106432c57e17a20f1853462981ebb226f
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -1225,9 +1225,10 @@ implementation_artifacts:
       current_sha: 9f5b5e01fe9955876db163cef35ed24cab6d21f6
     validation:
       status: VALIDATED
-      scope: "Run real completo (req-20261002-001, Moriblo/backup_teste_issues): 4 etiquetas, 1 marco, 6 issues (pull requests fora) e 5 comentários lidos pela API, com as conferências aprovadas; api-*.json enviados ao OneDrive com hash por quickXorHash; api-issues.json conferido pelo HITL contra o repositório (textos e acentos, etiquetas, marco, issue editada e issue fechada). Não provado - repositórios grandes (paginação real e limite de taxa), reações (o repositório de teste não tem), pull requests, relações entre issues (campos zerados no teste) e restauração pela API. Posterior a este run - a leitura de sub-issues e dependências (api-issue-sub-issues.json, api-issue-dependencies.json) foi acrescentada depois e está provada só em teste local; não é coberta por este run."
+      scope: "Run real completo (req-20261002-001, Moriblo/backup_teste_issues): 4 etiquetas, 1 marco, 6 issues (pull requests fora) e 5 comentários lidos pela API, com as conferências aprovadas; api-*.json enviados ao OneDrive com hash por quickXorHash; api-issues.json conferido pelo HITL contra o repositório (textos e acentos, etiquetas, marco, issue editada e issue fechada). Não provado - repositórios grandes (paginação real e limite de taxa), reações (o repositório de teste não tem), pull requests, relações entre issues (campos zerados no teste) e restauração pela API. Sub-issues e dependências (api-issue-sub-issues.json, api-issue-dependencies.json) acrescentadas depois deste run e provadas em outro, req-20261003-011 (run 37141791507): pai #5 com filhas #4 (aberta) e #6 (fechada) e bloqueio #2 bloqueada por #4, conferidos pelo HITL nos dois arquivos, com as conferências de contagem, vínculo ao pai e simetria aprovadas. Não provado nas relações - filho ou bloqueador de outro repositório, resumo ausente, 403/404 nas rotas dedicadas e páginas além da primeira."
       evidence:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37076443670", commit: edebe8a30e2e360f4987d77aa5ac25d2dad36873}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37141791507", commit: 5e60103a47eca0d9740ff008c2a5a107a64be273}
     relationships:
       - {capability_id: backup_issues, relationship: EXECUTES}
       - {capability_id: backup_repository, relationship: EXECUTES}
@@ -1439,9 +1440,10 @@ implementation_artifacts:
       current_sha: 3b7c07fc4f6306b14e74e67ab206385a9a44a6fc
     validation:
       status: VALIDATED
-      scope: "Run real completo pelo dispatcher (req-20261003-010, run 37139570337): backup de labels, milestones e issues de Moriblo/backup_teste_issues para backups/backup_teste_issues. Preflight PASS de três classes com o SOURCE_READ_TOKEN, destino validado, leitura da API (4 labels, 1 milestone, 6 issues, comentários, eventos, repo-metadata.json), 9 arquivos do pacote e 5 de evidência enviados com hash conferido, COMPLETE_WITH_EXCEPTIONS (três objetos PRESERVED-AS-EQUIVALENT-REPRESENTATION, sem objeto git, limitações LIM-labels/milestones/issues-equivalent, capability_id backup_issues). evidence.json e manifest.json foram lidos (anexados pelo HITL) e conferem com o esperado. Não provado - repositório grande e limite de taxa da API, reações (o repositório de teste não tem; api-issue-reactions.json saiu vazio), relações entre issues, Issues desativado (410), continuação sem o token, mais de uma linha por push e linhas de Mnemonics diferentes no mesmo push. Sub-issues e dependências ainda não são lidas (PR seguinte)."
+      scope: "Run real completo pelo dispatcher (req-20261003-010, run 37139570337): backup de labels, milestones e issues de Moriblo/backup_teste_issues para backups/backup_teste_issues. Preflight PASS de três classes com o SOURCE_READ_TOKEN, destino validado, leitura da API (4 labels, 1 milestone, 6 issues, comentários, eventos, repo-metadata.json), 9 arquivos do pacote e 5 de evidência enviados com hash conferido, COMPLETE_WITH_EXCEPTIONS (três objetos PRESERVED-AS-EQUIVALENT-REPRESENTATION, sem objeto git, limitações LIM-labels/milestones/issues-equivalent, capability_id backup_issues). evidence.json e manifest.json foram lidos (anexados pelo HITL) e conferem com o esperado. Não provado - repositório grande e limite de taxa da API, reações (o repositório de teste não tem; api-issue-reactions.json saiu vazio), relações entre issues, Issues desativado (410), continuação sem o token, mais de uma linha por push e linhas de Mnemonics diferentes no mesmo push. Sub-issues e dependências foram provadas em run posterior (req-20261003-011, run 37141791507; ver o leitor)."
       evidence:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37139570337", commit: 5e891f22083118f28281da59184b5083e5368ff5}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37141791507", commit: 5e60103a47eca0d9740ff008c2a5a107a64be273}
     relationships:
       - {capability_id: backup_issues, relationship: EXECUTES}
 
