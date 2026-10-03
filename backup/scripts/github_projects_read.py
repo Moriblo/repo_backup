@@ -27,6 +27,7 @@ REGRAS QUE ESTE SCRIPT NUNCA QUEBRA
       conexões truncadas, opções referenciadas). Divergência = FAILED; referência que o token
       não consegue ver = PARTIAL (nunca PRESERVED).
     - Erro de permissão ou de escopo nunca é "sem Projects": é FAILED com a causa.
+    - Uma exceção inesperada NUNCA derruba o job (o backup do código segue): vira FAILED com a causa.
     - O token nunca é impresso nem gravado. Mensagens de erro mostram só o status e a rota.
 
 ESCOPOS (variável PROJECTS_SCOPE; identificadores em PROJECTS_SCOPE_IDS, um JSON)
@@ -38,8 +39,10 @@ DESCOBERTA (SOURCE_REPOSITORY)
     1. `repository(...).projectsV2`: o caminho direto. Falha se o token não enxerga o repositório
        (repositório privado e token sem `repo`).
     2. Alternativa: lista os Projects do dono do repositório e fica com os que têm o repositório
-       entre os ligados (`repositories`). Esse caminho é PARTIAL: um vínculo com repositório
-       privado pode ficar oculto, e então "sem Projects ligados" não é uma prova.
+       entre os ligados (`repositories`). O GraphQL devolve `null` no lugar de um repositório
+       ligado que o token não vê; por isso, além dos Projects que ligam a origem de forma visível,
+       ficam como CANDIDATOS os que têm algum vínculo oculto. Esse caminho é PARTIAL, e "sem
+       Projects ligados" não é uma prova.
 
 VARIÁVEIS DE AMBIENTE
     PROJECTS_TOKEN        token clássico com `read:project` (o secret PROJECTS_READ_TOKEN).
@@ -298,13 +301,28 @@ def discover(graph, scope, ids):
             if exc.kind != "NOT_FOUND":
                 raise
             # Caminho alternativo: o token não enxerga o repositório (privado, sem `repo`).
+            # O GraphQL devolve `null` no lugar de um repositório ligado que o token não pode ver
+            # (confirmado no run real req-20261003-001), então um vínculo oculto não dá para comparar
+            # por nome. Regra: fica o Project que liga o repositório de origem de forma VISÍVEL e,
+            # também, o que tem algum vínculo OCULTO (candidato: pode ser a origem ou outro
+            # repositório privado). Incluir a mais é seguro para um backup; omitir não seria.
             owner = source.split("/", 1)[0]
-            projects = [p for p in list_owner_projects(graph, owner)
-                        if any(r["nameWithOwner"].lower() == source.lower() for r in p["repositories"]["nodes"])]
+            matched, candidates = [], []
+            for project in list_owner_projects(graph, owner):
+                linked = ((project.get("repositories") or {}).get("nodes")) or []
+                visible = [r for r in linked if r]
+                if any(r["nameWithOwner"].lower() == source.lower() for r in visible):
+                    matched.append(project)
+                elif len(visible) < len(linked):
+                    candidates.append(project)
             notes.append("repository not visible to the token: Projects discovered by listing the owner's Projects "
-                         "and filtering by linked repository; a link to a private repository may be hidden, so an empty "
-                         "result is not proof of absence.")
-            return projects, notes, True
+                         "and filtering by linked repository; a link to a private repository is hidden from the token, "
+                         "so an empty result is not proof of absence.")
+            if candidates:
+                numbers = ", ".join(f"#{c['number']}" for c in candidates)
+                notes.append(f"Project(s) {numbers} have linked repositories hidden from the token and were included as "
+                             "candidates (they may be linked to the source or to another private repository).")
+            return matched + candidates, notes, True
     if scope == "OWNER_PROJECT_SET":
         return list_owner_projects(graph, ids["owner"]), notes, partial
     # PROJECT
@@ -409,6 +427,11 @@ def cmd_read():
         hint = " (token clássico com read:project? o repositório é privado e o token não tem `repo`?)" if exc.kind in ("HTTP 401", "HTTP 403", "NOT_FOUND", "INSUFFICIENT_SCOPES", "FORBIDDEN") else ""
         entry["detail"] = f"{exc}{hint}"
         print(f"::error::API_READ projects: FAILED: {exc}{hint}")
+    except Exception as exc:  # noqa: BLE001
+        # Resposta fora do formato esperado (por exemplo, um campo que o schema real não tem) ou bug
+        # deste leitor. Nunca derruba o job: o backup do código segue e a classe fica FAILED com a causa.
+        entry["detail"] = f"Unexpected {type(exc).__name__} while reading Projects: {exc}"
+        print(f"::error::API_READ projects: FAILED: {entry['detail']}")
     else:
         files = []
         for name, data in (("api-projects.json", projects), ("api-project-items.json", all_items)):
