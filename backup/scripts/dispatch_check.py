@@ -65,6 +65,7 @@ ZEROS = "0" * 40
 MNEMONIC_WORKFLOWS = {
     "BKP_REPO": ".github/workflows/backup-repository.yml",
     "BKP_PROJ": ".github/workflows/backup-projects.yml",
+    "BKP_ISSUES": ".github/workflows/backup-issues.yml",
     "RST_REPO": ".github/workflows/restore-repository.yml",
 }
 
@@ -256,7 +257,7 @@ def matrix_entry(obj):
     p = obj["params"]
     entry = {"request_id": obj["request_id"], "destination": p.get("destination", ""),
              "preflight_decision": json.dumps(p["preflight_decision"], sort_keys=True) if "preflight_decision" in p else ""}
-    if obj["mnemonic"] == "BKP_REPO":
+    if obj["mnemonic"] in ("BKP_REPO", "BKP_ISSUES"):
         entry["source_repository"] = p["source_repository"]
     elif obj["mnemonic"] == "BKP_PROJ":
         entry["scope"] = p["scope"]

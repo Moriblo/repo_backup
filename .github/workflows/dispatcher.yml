@@ -20,11 +20,13 @@
 #                Qualquer violação falha o job e NADA é despachado (fail-closed).
 #   run-bkp-repo Chama o workflow do BKP_REPO uma vez por linha nova válida.
 #   run-bkp-proj Chama o workflow do BKP_PROJ (backup só de Projects) idem.
+#   run-bkp-issues Chama o workflow do BKP_ISSUES (backup só de labels, milestones e issues) idem.
 #   run-rst-repo Chama o workflow do RST_REPO (restauração para um repositório novo) idem.
 #
 # MAPEAMENTO FIXO (Mnemonic -> workflow)
 #   BKP_REPO -> .github/workflows/backup-repository.yml
 #   BKP_PROJ -> .github/workflows/backup-projects.yml
+#   BKP_ISSUES -> .github/workflows/backup-issues.yml
 #   RST_REPO -> .github/workflows/restore-repository.yml
 #   Um Mnemonic novo exige: (1) entrada em MNEMONIC_WORKFLOWS no dispatch_check.py,
 #   (2) um job `run-<mnemonic>` aqui, (3) registro em backup/capabilities.yaml.
@@ -75,6 +77,9 @@ jobs:
       # Idem para o BKP_PROJ (backup só de Projects).
       bkp_proj_matrix: ${{ steps.check.outputs.bkp_proj_matrix }}
       bkp_proj_count: ${{ steps.check.outputs.bkp_proj_count }}
+      # Idem para o BKP_ISSUES (backup só de labels, milestones e issues).
+      bkp_issues_matrix: ${{ steps.check.outputs.bkp_issues_matrix }}
+      bkp_issues_count: ${{ steps.check.outputs.bkp_issues_count }}
       # Idem para o RST_REPO (restauração).
       rst_repo_matrix: ${{ steps.check.outputs.rst_repo_matrix }}
       rst_repo_count: ${{ steps.check.outputs.rst_repo_count }}
@@ -163,6 +168,32 @@ jobs:
       request_id: ${{ matrix.request_id }}
       scope: ${{ matrix.scope }}
       scope_identifiers: ${{ matrix.scope_identifiers }}
+      destination: ${{ matrix.destination }}
+      preflight_decision: ${{ matrix.preflight_decision }}
+
+  # ---------------------------------------------------------------------------
+  # run-bkp-issues: chama o workflow do Mnemonic BKP_ISSUES (backup só de labels, milestones e issues).
+  # Uma execução por linha nova (matrix). Só roda se houver ao menos uma.
+  # ---------------------------------------------------------------------------
+  run-bkp-issues:
+    name: BKP_ISSUES ${{ matrix.request_id }}
+    needs: guard
+    if: needs.guard.outputs.bkp_issues_count != '0'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.guard.outputs.bkp_issues_matrix) }}
+    concurrency:
+      group: bkp-issues-${{ matrix.request_id }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    # Caminho LITERAL (mapeamento fixo), como nos outros jobs.
+    uses: ./.github/workflows/backup-issues.yml
+    secrets: inherit
+    # Os inputs do ECR do BKP_ISSUES, vindos da linha validada do commands.log.
+    with:
+      request_id: ${{ matrix.request_id }}
+      source_repository: ${{ matrix.source_repository }}
       destination: ${{ matrix.destination }}
       preflight_decision: ${{ matrix.preflight_decision }}
 

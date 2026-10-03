@@ -23,6 +23,7 @@
 # MNEMONICS ATUAIS
 #   BKP_REPO  backup de um repositório (params: source_repository, destination)
 #   BKP_PROJ  backup só de Projects v2 (params: scope, scope_identifiers, destination)
+#   BKP_ISSUES backup só de labels, milestones e issues de UM repositório (params: source_repository, destination)
 #   RST_REPO  restauração de um backup do BKP_REPO num repositório NOVO (params: backup_path, target_name opcional)
 #   `preflight_decision` (linha de continuação) é igual nos dois: definição única em $defs.
 #
@@ -61,7 +62,7 @@ properties:
     description: Unique per line. A repeated request_id MUST be rejected by the dispatcher.
   # Comando a executar. Cada valor tem um workflow fixo no dispatcher.
   mnemonic:
-    enum: [BKP_REPO, BKP_PROJ, RST_REPO]
+    enum: [BKP_REPO, BKP_PROJ, BKP_ISSUES, RST_REPO]
   # Momento em que o engine gravou a linha (UTC, ISO 8601).
   ts:
     type: string
@@ -84,10 +85,11 @@ properties:
 
 # Validação de `params` conforme o Mnemonic.
 allOf:
-  # ---- BKP_REPO: backup de repositório GitHub para o OneDrive ----
+  # ---- BKP_REPO e BKP_ISSUES: backup de um repositório GitHub (completo, ou só labels, milestones e issues) para o OneDrive ----
+  # Os dois têm os mesmos params: o que muda é o workflow e as classes lidas.
   - if:
       properties:
-        mnemonic: {const: BKP_REPO}
+        mnemonic: {enum: [BKP_REPO, BKP_ISSUES]}
       required: [mnemonic]
     then:
       properties:
