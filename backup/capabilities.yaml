@@ -623,7 +623,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 05dd68e7265c128e53fdd3edd7f46b2213967eaf
+      current_sha: 070d2d0a956e9f23659a2577756282cf9a5f3c21
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -1100,10 +1100,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 59e6db033812fc652be7ddd56f85242047cd9114
+      current_sha: 086b8bfec52ee240654d2cf6727ab0228a138704
     validation:
       status: NOT_VALIDATED
-      scope: "Testado contra um servidor GraphQL simulado (backup/tests/test_github_projects_read.py). O primeiro run real (req-20261003-001, run 37087001653) provou só a descoberta: o token clássico read:project lista os Projects do dono, não enxerga o repositório privado e recebe null no lugar dos repositórios ligados; o leitor estourou nesse null (corrigido). Não provado - leitura de campos, itens e valores contra a API real."
+      scope: "Dois runs reais (req-20261003-001, que falhou, e req-20261003-002, run 37087638922, que funcionou): a API real aceitou as consultas GraphQL, o quadro nº 13 foi lido por inteiro (7 itens, 14 campos, 1 view, 6 workflows; Status e Prioridade conferidos contra a tela) e o estado do quadro sobrevive à ocultação do conteúdo das issues privadas. O 2º run incluiu às cegas 3 Projects (2 alheios); a regra E (confirmação dos candidatos pelos títulos das issues da origem) corrige isso e foi testada só contra servidor simulado (backup/tests/test_github_projects_read.py, 28 testes). Não provado - a regra E em run real, falso positivo por título repetido, repositório sem issues, e os escopos PROJECT e OWNER_PROJECT_SET."
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
       - {capability_id: backup_projects, relationship: EXECUTES}
@@ -1122,10 +1122,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: e0e2f47f9596454ae5ad46b3fdcdd6d68594dfa9
+      current_sha: 9f02b0b4b24a820ca5bab9156ffe777fb68e4bef
     validation:
       status: NOT_VALIDATED
-      scope: Executado localmente (20 testes, mais verificação de mutação). Não roda no Actions.
+      scope: Executado localmente (28 testes, mais verificação de mutação). Não roda no Actions.
     relationships:
       - {capability_id: backup_repository, relationship: VALIDATES}
       - {capability_id: backup_projects, relationship: VALIDATES}

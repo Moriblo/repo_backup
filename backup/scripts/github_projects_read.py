@@ -23,6 +23,7 @@ POR QUE UM TOKEN PRÓPRIO (PROJECTS_READ_TOKEN)
 REGRAS QUE ESTE SCRIPT NUNCA QUEBRA
     - A origem é somente leitura: só consultas GraphQL (`query`). Uma consulta que contenha
       `mutation` é recusada ANTES de ser enviada (função `run_query`).
+    - Dado de outro repositório não entra no pacote: Project candidato não confirmado é excluído.
     - Leitura incompleta nunca vira sucesso: cada projeto é conferido (total de itens,
       conexões truncadas, opções referenciadas). Divergência = FAILED; referência que o token
       não consegue ver = PARTIAL (nunca PRESERVED).
@@ -38,11 +39,19 @@ ESCOPOS (variável PROJECTS_SCOPE; identificadores em PROJECTS_SCOPE_IDS, um JSO
 DESCOBERTA (SOURCE_REPOSITORY)
     1. `repository(...).projectsV2`: o caminho direto. Falha se o token não enxerga o repositório
        (repositório privado e token sem `repo`).
-    2. Alternativa: lista os Projects do dono do repositório e fica com os que têm o repositório
-       entre os ligados (`repositories`). O GraphQL devolve `null` no lugar de um repositório
-       ligado que o token não vê; por isso, além dos Projects que ligam a origem de forma visível,
-       ficam como CANDIDATOS os que têm algum vínculo oculto. Esse caminho é PARTIAL, e "sem
-       Projects ligados" não é uma prova.
+    2. Alternativa: lista os Projects do dono do repositório. Os que ligam a origem de forma
+       VISÍVEL (`repositories`) entram. O GraphQL devolve `null` no lugar de um repositório ligado
+       que o token não vê, então os que têm algum vínculo OCULTO são só CANDIDATOS: o token sabe
+       QUANTOS repositórios estão ligados, mas não QUAIS.
+    3. Confirmação dos candidatos pelos TÍTULOS (regra E): lê os itens do candidato e o compara com
+       as issues da origem, que o passo anterior do workflow já gravou em package/api-issues.json
+       (a leitura REST enxerga o repositório privado). O candidato fica se pelo menos 1 título de
+       item de issue bate e se bate pelo menos metade deles; senão é EXCLUÍDO e NÃO entra no
+       pacote: o inventário guarda só número, título do Project e contagens
+       (extra.excluded_candidates). É uma heurística, não uma prova: título repetido entre
+       repositórios pode dar falso positivo, e uma origem sem issues (ou um Project só com
+       rascunhos) não confirma nada. Para um Project específico, use o escopo PROJECT.
+    Todo esse caminho é PARTIAL, e "sem Projects ligados" não é uma prova.
 
 VARIÁVEIS DE AMBIENTE
     PROJECTS_TOKEN        token clássico com `read:project` (o secret PROJECTS_READ_TOKEN).
@@ -55,7 +64,8 @@ VARIÁVEIS DE AMBIENTE
 
 ARQUIVOS GERADOS
     package/api-projects.json             cada Project: metadados, campos e opções, views,
-                                          workflows, status updates e repositórios ligados
+                                          workflows, status updates, repositórios ligados e
+                                          `linkage` (como o vínculo com a origem foi estabelecido)
     package/api-project-items.json        itens de todos os Projects (valores de campo,
                                           arquivados, referências a issues e PRs, rascunhos)
     package/api-projects-inventory.json   contagens, SHA-256 dos arquivos, conferências, limites
@@ -303,9 +313,10 @@ def discover(graph, scope, ids):
             # Caminho alternativo: o token não enxerga o repositório (privado, sem `repo`).
             # O GraphQL devolve `null` no lugar de um repositório ligado que o token não pode ver
             # (confirmado no run real req-20261003-001), então um vínculo oculto não dá para comparar
-            # por nome. Regra: fica o Project que liga o repositório de origem de forma VISÍVEL e,
-            # também, o que tem algum vínculo OCULTO (candidato: pode ser a origem ou outro
-            # repositório privado). Incluir a mais é seguro para um backup; omitir não seria.
+            # por nome. Entra o Project que liga a origem de forma VISÍVEL; o que tem algum vínculo
+            # OCULTO é só CANDIDATO (`_candidate`) e cmd_read o confirma ou exclui pelos títulos
+            # (regra E, ver confirm_candidate). O 1º run com candidatos incluídos às cegas trouxe 2
+            # Projects alheios (108 itens).
             owner = source.split("/", 1)[0]
             matched, candidates = [], []
             for project in list_owner_projects(graph, owner):
@@ -314,14 +325,10 @@ def discover(graph, scope, ids):
                 if any(r["nameWithOwner"].lower() == source.lower() for r in visible):
                     matched.append(project)
                 elif len(visible) < len(linked):
-                    candidates.append(project)
+                    candidates.append(dict(project, _candidate=True))
             notes.append("repository not visible to the token: Projects discovered by listing the owner's Projects "
                          "and filtering by linked repository; a link to a private repository is hidden from the token, "
                          "so an empty result is not proof of absence.")
-            if candidates:
-                numbers = ", ".join(f"#{c['number']}" for c in candidates)
-                notes.append(f"Project(s) {numbers} have linked repositories hidden from the token and were included as "
-                             "candidates (they may be linked to the source or to another private repository).")
             return matched + candidates, notes, True
     if scope == "OWNER_PROJECT_SET":
         return list_owner_projects(graph, ids["owner"]), notes, partial
@@ -332,6 +339,60 @@ def discover(graph, scope, ids):
     if project is None:
         raise GraphqlError("NOT_FOUND", f"Project {ids['owner']}#{ids['number']} não encontrado")
     return [project], notes, partial
+
+
+def normalize_title(text):
+    """Título comparável: sem espaços sobrando e sem diferença de caixa."""
+    return " ".join(str(text).split()).casefold()
+
+
+def load_source_titles(package):
+    """Títulos das issues da origem, lidos de package/api-issues.json (gravado pelo passo anterior).
+
+    Devolve um conjunto (possivelmente vazio) ou None se o arquivo não existe ou não é legível:
+    sem os títulos nenhum candidato pode ser confirmado."""
+    path = package / "api-issues.json"
+    try:
+        return {normalize_title(i["title"]) for i in json.loads(path.read_text(encoding="utf-8")) if i.get("title")}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def item_title(item, title_field_id):
+    """Título de um item: do conteúdo, se visível, ou do valor do campo Title (que sobrevive à ocultação)."""
+    content = item.get("content")
+    if content and content.get("title"):
+        return content["title"]
+    for value in item["fieldValues"]["nodes"]:
+        if value.get("__typename") == "ProjectV2ItemFieldTextValue" and (value.get("field") or {}).get("id") == title_field_id:
+            return value.get("text")
+    return None
+
+
+def confirm_candidate(details, items, source, titles):
+    """Regra E: um Project com vínculo oculto está ligado à origem? Devolve {linked, matched, issue_items, reason}.
+
+    Conta os itens de issue: um item bate se o conteúdo visível é da origem ou se o título bate com uma
+    issue da origem. Fica se bateu pelo menos 1 e pelo menos metade (heurística: ver o cabeçalho)."""
+    title_field = next((f["id"] for f in details["fields"]["nodes"] if f.get("dataType") == "TITLE"), None)
+    issue_items = [i for i in items if i["type"] == "ISSUE"]
+    matched = 0
+    for item in issue_items:
+        content = item.get("content") or {}
+        if ((content.get("repository") or {}).get("nameWithOwner") or "").lower() == source.lower():
+            matched += 1
+        elif titles and normalize_title(item_title(item, title_field) or "") in titles:
+            matched += 1
+    linked = matched >= 1 and matched * 2 >= len(issue_items)
+    if linked:
+        reason = None
+    elif not issue_items:
+        reason = "NO_ISSUE_ITEMS"
+    elif titles is None or (not titles and not matched):
+        reason = "NO_SOURCE_TITLES"
+    else:
+        reason = "TITLES_DO_NOT_MATCH"
+    return {"linked": linked, "matched": matched, "issue_items": len(issue_items), "reason": reason}
 
 
 def read_items(graph, project_id):
@@ -410,12 +471,25 @@ def cmd_read():
     graph = Graph(os.environ.get("GITHUB_API_URL", "https://api.github.com"), token)
 
     entry = {"status": "FAILED", "count": 0, "files": [], "checks": []}
-    projects, all_items, notes, partial = [], [], [], False
+    projects, all_items, notes, partial, excluded = [], [], [], False, []
+    # Títulos das issues da origem (só para confirmar candidatos do escopo SOURCE_REPOSITORY).
+    titles = load_source_titles(package) if scope == "SOURCE_REPOSITORY" else None
     try:
         found, notes, partial = discover(graph, scope, ids)
         for ref in found:
             details = graph.run_query(Q_DETAILS, {"id": ref["id"]})["node"]
             items, total = read_items(graph, ref["id"])
+            if ref.get("_candidate"):
+                verdict = confirm_candidate(details, items, ids["source_repository"], titles)
+                if not verdict["linked"]:
+                    # Não confirmado: dado de outro repositório não entra no pacote (só número, título e contagens).
+                    excluded.append({"number": details["number"], "title": details["title"], "reason": verdict["reason"],
+                                     "matched": verdict["matched"], "issue_items": verdict["issue_items"],
+                                     "hidden_repository_links": details["repositories"]["totalCount"]})
+                    continue
+                details["linkage"] = {"method": "TITLE_MATCH", "matched": verdict["matched"], "issue_items": verdict["issue_items"]}
+            else:
+                details["linkage"] = {"method": "VISIBLE_LINK"} if scope == "SOURCE_REPOSITORY" else {"method": "REQUESTED_SCOPE"}
             checks, redacted = check_project(details, items, total)
             details["items_summary"] = {"total": total, "read": len(items), "redacted": redacted,
                                         "by_type": {t: sum(1 for i in items if i["type"] == t) for t in sorted({i["type"] for i in items})}}
@@ -439,10 +513,18 @@ def cmd_read():
             files.append({"file": name, "items": len(data), "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)})
         checks = [dict(c, project_number=p["number"]) for p in projects for c in p["checks"]]
         failed = [c for c in checks if not c["ok"]]
+        # Notas do que a regra E decidiu (aparecem no detail do status e na limitação do manifest).
+        confirmed = [p for p in projects if p["linkage"]["method"] == "TITLE_MATCH"]
+        if confirmed:
+            notes.append("Project(s) " + ", ".join(f"#{p['number']}" for p in confirmed) + " have repository links hidden from the token and were "
+                         "confirmed as related by title match (" + "; ".join(f"#{p['number']}: {p['linkage']['matched']}/{p['linkage']['issue_items']} issue items" for p in confirmed) + ").")
+        if excluded:
+            notes.append("Project(s) " + ", ".join(f"#{e['number']}" for e in excluded) + " have hidden repository links but were NOT confirmed "
+                         "as related by title match and were excluded from the package (see extra.excluded_candidates).")
         status = "FAILED" if failed else ("PARTIAL" if partial else "OK")
         entry = {"status": status, "count": len(projects), "files": files, "checks": checks,
                  "extra": {"scope": scope, "items": len(all_items), "redacted_items": sum(p["items_summary"]["redacted"] for p in projects),
-                           "discovery_notes": notes}}
+                           "discovery_notes": notes, "excluded_candidates": excluded}}
         if failed:
             entry["detail"] = "Reconciliation check failed: " + ", ".join(sorted({c["check"] for c in failed}))
         elif partial:
