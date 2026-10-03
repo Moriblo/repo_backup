@@ -38,8 +38,15 @@ TOKEN = "ghp_SEGREDO_PROJETOS_456"
 SOURCE = "dono/teste"
 
 
-def make_project(number=13, title="Quadro de teste (backup_teste_issues)", repos=(SOURCE,)):
-    """Um Project como o GraphQL o devolve, com 7 itens (6 issues e 1 rascunho)."""
+DEFAULT_TITLES = ["Erro ao salvar a configuração", "Melhorar a documentação inicial", "Atender chamado urgente",
+                  "Ideia: exportar relatório", "Revisar a política de senhas", "Tarefa já concluída"]
+
+
+def make_project(number=13, title="Quadro de teste (backup_teste_issues)", repos=(SOURCE,), issue_titles=None, hidden=False, drafts=1):
+    """Um Project como o GraphQL o devolve: 6 issues (ou `issue_titles`) e `drafts` rascunhos.
+
+    hidden=True imita o token sem acesso ao repositório privado (run real req-20261003-002): o item de
+    issue vem com `content: null`, mas o valor do campo Title e os de Status e Prioridade continuam lá."""
     status = {"id": "F_status", "name": "Status", "dataType": "SINGLE_SELECT", "__typename": "ProjectV2SingleSelectField",
               "options": [{"id": f"S{i}", "name": n, "color": "GRAY", "description": ""} for i, n in enumerate(("Todo", "In Progress", "Done"))]}
     prio = {"id": "F_prio", "name": "Prioridade", "dataType": "SINGLE_SELECT", "__typename": "ProjectV2SingleSelectField",
@@ -47,26 +54,32 @@ def make_project(number=13, title="Quadro de teste (backup_teste_issues)", repos
     title_field = {"id": "F_title", "name": "Title", "dataType": "TITLE", "__typename": "ProjectV2Field"}
     page = lambda nodes: {"totalCount": len(nodes), "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}
 
+    def text_value(text):
+        return {"__typename": "ProjectV2ItemFieldTextValue", "text": text, "field": {"id": title_field["id"], "name": "Title"}}
+
     def value(field, opt_id, name):
         return {"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": name, "optionId": opt_id, "color": "GRAY",
                 "description": "", "field": {"id": field["id"], "name": field["name"]}}
 
     items = []
-    plan = [("Erro ao salvar a configuração", "S1", "In Progress", "P0", "Alta"), ("Melhorar a documentação inicial", "S0", "Todo", "P2", "Baixa"),
-            ("Atender chamado urgente", "S1", "In Progress", "P0", "Alta"), ("Ideia: exportar relatório", "S0", "Todo", "P1", "Média"),
-            ("Revisar a política de senhas", "S0", "Todo", "P1", "Média"), ("Tarefa já concluída", "S2", "Done", "P2", "Baixa")]
+    states = [("S1", "In Progress", "P0", "Alta"), ("S0", "Todo", "P2", "Baixa"), ("S1", "In Progress", "P0", "Alta"),
+              ("S0", "Todo", "P1", "Média"), ("S0", "Todo", "P1", "Média"), ("S2", "Done", "P2", "Baixa")]
+    titles = DEFAULT_TITLES if issue_titles is None else issue_titles
+    plan = [(t,) + states[k % len(states)] for k, t in enumerate(titles)]
     for n, (t, s_id, s_name, p_id, p_name) in enumerate(plan, 1):
         items.append({"id": f"PVTI_{n}", "type": "ISSUE", "isArchived": False, "createdAt": "2026-10-02T19:26:00Z", "updatedAt": "2026-10-02T19:26:10Z",
                       "creator": {"login": "Moriblo"},
-                      "content": {"__typename": "Issue", "id": f"I_{n}", "number": n, "title": t, "url": f"https://github.com/{SOURCE}/issues/{n}",
+                      "content": None if hidden else {"__typename": "Issue", "id": f"I_{n}", "number": n, "title": t, "url": f"https://github.com/{SOURCE}/issues/{n}",
                                   "state": "CLOSED" if n == 6 else "OPEN", "repository": {"nameWithOwner": SOURCE}},
-                      "fieldValues": {"pageInfo": {"hasNextPage": False}, "nodes": [value(status, s_id, s_name), value(prio, p_id, p_name)]}})
-    items.append({"id": "PVTI_7", "type": "DRAFT_ISSUE", "isArchived": False, "createdAt": "2026-10-02T19:26:20Z", "updatedAt": "2026-10-02T19:26:20Z",
-                  "creator": {"login": "Moriblo"},
-                  "content": {"__typename": "DraftIssue", "id": "DI_7", "title": "Rascunho sem issue", "body": "Item de rascunho do quadro de teste.",
-                              "createdAt": "2026-10-02T19:26:20Z", "updatedAt": "2026-10-02T19:26:20Z", "creator": {"login": "Moriblo"},
-                              "assignees": {"nodes": []}},
-                  "fieldValues": {"pageInfo": {"hasNextPage": False}, "nodes": [value(status, "S0", "Todo")]}})
+                      "fieldValues": {"pageInfo": {"hasNextPage": False}, "nodes": [text_value(t), value(status, s_id, s_name), value(prio, p_id, p_name)]}})
+    for d in range(drafts):
+        k = len(plan) + d + 1
+        items.append({"id": f"PVTI_{k}", "type": "DRAFT_ISSUE", "isArchived": False, "createdAt": "2026-10-02T19:26:20Z", "updatedAt": "2026-10-02T19:26:20Z",
+                      "creator": {"login": "Moriblo"},
+                      "content": {"__typename": "DraftIssue", "id": f"DI_{k}", "title": "Rascunho sem issue", "body": "Item de rascunho do quadro de teste.",
+                                  "createdAt": "2026-10-02T19:26:20Z", "updatedAt": "2026-10-02T19:26:20Z", "creator": {"login": "Moriblo"},
+                                  "assignees": {"nodes": []}},
+                      "fieldValues": {"pageInfo": {"hasNextPage": False}, "nodes": [text_value("Rascunho sem issue"), value(status, "S0", "Todo")]}})
     details = {"id": f"PVT_{number}", "number": number, "title": title, "shortDescription": None, "readme": None, "public": False, "closed": False,
                "closedAt": None, "createdAt": "2026-10-02T19:26:15Z", "updatedAt": "2026-10-02T19:26:30Z", "url": f"https://github.com/users/dono/projects/{number}",
                "owner": {"__typename": "User", "login": "dono"}, "creator": {"login": "Moriblo"},
@@ -184,6 +197,11 @@ class ReadTest(unittest.TestCase):
         self.out = out.getvalue()
         return json.loads((self.root / "evidence" / "api-projects-status.json").read_text())["classes"]["projects"]
 
+    def seed_issues(self, titles):
+        """Grava package/api-issues.json como o passo de labels/milestones/issues faz (só os títulos importam)."""
+        (self.root / "package").mkdir(parents=True, exist_ok=True)
+        (self.root / "package" / "api-issues.json").write_text(json.dumps([{"number": n, "title": t} for n, t in enumerate(titles, 1)]), encoding="utf-8")
+
     def load(self, name):
         return json.loads((self.root / "package" / name).read_text(encoding="utf-8"))
 
@@ -198,9 +216,9 @@ class ReadTest(unittest.TestCase):
         items = self.load("api-project-items.json")
         self.assertEqual(len(items), 7)
         self.assertTrue(all(i["project_number"] == 13 for i in items))
-        # Status e Prioridade preenchidos nas 6 issues; o rascunho só tem Status (Prioridade vazia).
+        # Title, Status e Prioridade nas 6 issues; o rascunho só tem Title e Status (Prioridade vazia).
         names = lambda i: [v["field"]["name"] for v in i["fieldValues"]["nodes"]]
-        self.assertEqual([len(names(i)) for i in items], [2, 2, 2, 2, 2, 2, 1])
+        self.assertEqual([len(names(i)) for i in items], [3, 3, 3, 3, 3, 3, 2])
         self.assertEqual(items[6]["content"]["title"], "Rascunho sem issue")
         self.assertIn("Média", (self.root / "package" / "api-project-items.json").read_text(encoding="utf-8"))
         # Arquivos do pacote e do inventário coerentes.
@@ -233,18 +251,89 @@ class ReadTest(unittest.TestCase):
         st = self.run_read()
         self.assertEqual((st["status"], st["count"]), ("PARTIAL", 0))
 
-    def test_vinculo_oculto_null_vira_candidato_partial(self):
-        # Caso REAL (run req-20261003-001): o token não vê o repositório privado, o GitHub devolve
-        # `null` no lugar dele em `repositories.nodes`, e o Project ligado a ele é só um candidato.
+    def test_vinculo_oculto_confirmado_pelos_titulos(self):
+        # Caso REAL (run req-20261003-002): o token não vê o repositório privado, o GitHub devolve `null` no
+        # lugar dele, e as issues do Project vêm com o conteúdo oculto. O vínculo é confirmado porque os
+        # títulos dos itens batem com as issues da origem (lidas pela API REST no passo anterior).
         FakeGraph.repo_visible = False
-        FakeGraph.projects = [make_project(13, repos=(None,)),                 # vínculo oculto: candidato
-                              make_project(14, "De outro repo", repos=("dono/outro",)),   # vínculo visível a outro: fora
-                              make_project(15, "Sem vínculo", repos=())]       # sem vínculo: fora
+        FakeGraph.projects = [make_project(13, repos=(None,), hidden=True)]
+        self.seed_issues(DEFAULT_TITLES)
+        st = self.run_read()
+        self.assertEqual((st["status"], st["count"]), ("PARTIAL", 1))
+        project = self.load("api-projects.json")[0]
+        self.assertEqual(project["linkage"], {"method": "TITLE_MATCH", "matched": 6, "issue_items": 6})
+        self.assertEqual(project["items_summary"]["redacted"], 6)
+        self.assertEqual(st["extra"]["excluded_candidates"], [])
+        self.assertIn("title match", st["detail"])
+
+    def test_candidato_alheio_e_excluido_e_nao_entra_no_pacote(self):
+        FakeGraph.repo_visible = False
+        FakeGraph.projects = [make_project(13, repos=(None,), hidden=True),
+                              make_project(12, "Minha_Caixinha_de_Saude", repos=(None,), hidden=True,
+                                           issue_titles=["[MCS-PB-001] Use physical weekly pill organizer", "[MCS-PB-002] Keep backend invisible"], drafts=0),
+                              make_project(5, "ESG Value Mining", repos=(None,), hidden=True, issue_titles=["Algo sem relação"], drafts=0)]
+        self.seed_issues(DEFAULT_TITLES)
         st = self.run_read()
         self.assertEqual((st["status"], st["count"]), ("PARTIAL", 1))
         self.assertEqual([p["number"] for p in self.load("api-projects.json")], [13])
-        self.assertIn("candidates", st["detail"])
-        self.assertIn("#13", st["detail"])
+        self.assertEqual({i["project_number"] for i in self.load("api-project-items.json")}, {13})
+        excluded = {e["number"]: e for e in st["extra"]["excluded_candidates"]}
+        self.assertEqual(set(excluded), {12, 5})
+        self.assertEqual((excluded[12]["matched"], excluded[12]["issue_items"], excluded[12]["reason"]), (0, 2, "TITLES_DO_NOT_MATCH"))
+        self.assertEqual(excluded[12]["title"], "Minha_Caixinha_de_Saude")
+        # Nada do conteúdo dos excluídos vaza para os arquivos do pacote.
+        for name in ("api-projects.json", "api-project-items.json"):
+            text = (self.root / "package" / name).read_text(encoding="utf-8")
+            self.assertNotIn("MCS-PB", text)
+            self.assertNotIn("ESG Value Mining", text)
+        self.assertIn("#12", st["detail"])
+
+    def test_sem_titulos_da_origem_nao_confirma_nenhum_candidato(self):
+        FakeGraph.repo_visible = False
+        FakeGraph.projects = [make_project(13, repos=(None,), hidden=True)]
+        # (sem seed_issues: o passo das issues falhou ou a classe está desativada)
+        st = self.run_read()
+        self.assertEqual((st["status"], st["count"]), ("PARTIAL", 0))
+        self.assertEqual(st["extra"]["excluded_candidates"][0]["reason"], "NO_SOURCE_TITLES")
+
+    def test_candidato_so_com_rascunhos_nao_e_confirmado(self):
+        FakeGraph.repo_visible = False
+        FakeGraph.projects = [make_project(13, repos=(None,), hidden=True, issue_titles=[], drafts=3)]
+        self.seed_issues(DEFAULT_TITLES)
+        st = self.run_read()
+        self.assertEqual(st["count"], 0)
+        self.assertEqual(st["extra"]["excluded_candidates"][0]["reason"], "NO_ISSUE_ITEMS")
+
+    def test_limiar_de_metade_dos_itens_de_issue(self):
+        FakeGraph.repo_visible = False
+        self.seed_issues(["a", "b", "c", "d"])
+        FakeGraph.projects = [make_project(1, repos=(None,), hidden=True, issue_titles=["a", "x", "y", "z"], drafts=0)]   # 1 de 4: fora
+        self.assertEqual(self.run_read()["count"], 0)
+        FakeGraph.projects = [make_project(1, repos=(None,), hidden=True, issue_titles=["a", "b", "y", "z"], drafts=0)]   # 2 de 4: fica
+        self.assertEqual(self.run_read()["count"], 1)
+
+    def test_titulos_comparados_sem_diferenca_de_caixa_ou_espacos(self):
+        FakeGraph.repo_visible = False
+        FakeGraph.projects = [make_project(13, repos=(None,), hidden=True, issue_titles=["  Erro   ao SALVAR a configuração "], drafts=0)]
+        self.seed_issues(["Erro ao salvar a configuração"])
+        self.assertEqual(self.run_read()["count"], 1)
+
+    def test_conteudo_visivel_da_origem_confirma_sem_precisar_de_titulos(self):
+        FakeGraph.repo_visible = False
+        FakeGraph.projects = [make_project(13, repos=(None,))]   # itens COM conteúdo, repositório = origem
+        st = self.run_read()                                      # (sem seed_issues)
+        self.assertEqual(st["count"], 1)
+        self.assertEqual(self.load("api-projects.json")[0]["linkage"]["matched"], 6)
+
+    def test_escopos_explicitos_nao_filtram_por_titulo(self):
+        FakeGraph.projects = [make_project(13, repos=(None,), hidden=True)]
+        st = self.run_read("PROJECT", {"owner": "dono", "number": 13})   # sem seed_issues
+        self.assertEqual(st["count"], 1)
+        self.assertEqual(self.load("api-projects.json")[0]["linkage"], {"method": "REQUESTED_SCOPE"})
+
+    def test_vinculo_visivel_tem_linkage_visible_link(self):
+        self.run_read()
+        self.assertEqual(self.load("api-projects.json")[0]["linkage"], {"method": "VISIBLE_LINK"})
 
     def test_vinculo_visivel_e_oculto_no_mesmo_project(self):
         FakeGraph.repo_visible = False
@@ -280,7 +369,7 @@ class ReadTest(unittest.TestCase):
         self.assertIn("connections_complete", st["detail"])
 
     def test_opcao_de_selecao_inexistente(self):
-        FakeGraph.projects[0]["items"][0]["fieldValues"]["nodes"][0]["optionId"] = "NAO_EXISTE"
+        FakeGraph.projects[0]["items"][0]["fieldValues"]["nodes"][1]["optionId"] = "NAO_EXISTE"
         st = self.run_read()
         self.assertEqual(st["status"], "FAILED")
         self.assertIn("select_options_exist", st["detail"])
