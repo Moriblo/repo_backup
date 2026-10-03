@@ -23,7 +23,7 @@
 - Segredo em texto puro nunca aparece em chat, log ou evidência.
 - Código só entra por pull request. A única escrita direta no `main` é o `commands.log`, e só depois do GO.
 
-**Estado atual (02/10/2026).** O fluxo foi **provado de ponta a ponta em execução real** para um repositório pequeno (1 ref, sem LFS, sem submódulos): a escolha da capability, o GO, o `commands.log`, o Dispatcher, o preflight, o gate do destino no OneDrive real (com rotação do refresh token pelo App Writer), o mirror, o pacote e a evidência no OneDrive terminaram `COMPLETE_WITH_EXCEPTIONS`, e o **pacote restaurou para um repositório novo no GitHub** (bundle verificado, refs iguais ao `refs.tsv`, arquivos iguais ao zip, exceto o fim de linha do Windows). Hoje o backup prova o **código Git** em run real. As classes `labels`, `milestones` e `issues` são lidas pela API e foram **provadas em run real** (02/10/2026, repositório de teste de issues: 4 etiquetas, 1 marco, 6 issues e 5 comentários, `api-issues.json` conferido pelo HITL contra o repositório; seção I.14); as demais 14 classes são restrições aceitas. **Provado também:** repositório com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, 2 branches e 2 tags (a classe `git` fica `PARTIALLY-PRESERVED`: do submódulo só o gitlink), hash conferido no destino por `quickXorHash`, e restauração com LFS (4 refs iguais, arquivo LFS com o tamanho real). **Não provado:** repositórios muito grandes, conteúdo de submódulos, nomes com acento no OneDrive, reações e relações entre issues (o repositório de teste não tem), pull requests e restauração pela API.
+**Estado atual (02/10/2026).** O fluxo foi **provado de ponta a ponta em execução real** para um repositório pequeno (1 ref, sem LFS, sem submódulos): a escolha da capability, o GO, o `commands.log`, o Dispatcher, o preflight, o gate do destino no OneDrive real (com rotação do refresh token pelo App Writer), o mirror, o pacote e a evidência no OneDrive terminaram `COMPLETE_WITH_EXCEPTIONS`, e o **pacote restaurou para um repositório novo no GitHub** (bundle verificado, refs iguais ao `refs.tsv`, arquivos iguais ao zip, exceto o fim de linha do Windows). Hoje o backup prova o **código Git** em run real. As classes `labels`, `milestones` e `issues` são lidas pela API e foram **provadas em run real** (02/10/2026, repositório de teste de issues: 4 etiquetas, 1 marco, 6 issues e 5 comentários, `api-issues.json` conferido pelo HITL contra o repositório; seção I.14); a classe `projects` (GitHub Projects v2) está **implementada, mas ainda não provada em run real** (seção I.14); as demais 13 classes são restrições aceitas. **Provado também:** repositório com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, 2 branches e 2 tags (a classe `git` fica `PARTIALLY-PRESERVED`: do submódulo só o gitlink), hash conferido no destino por `quickXorHash`, e restauração com LFS (4 refs iguais, arquivo LFS com o tamanho real). **Não provado:** repositórios muito grandes, conteúdo de submódulos, nomes com acento no OneDrive, reações e relações entre issues (o repositório de teste não tem), pull requests e restauração pela API.
 
 **Onde encontrar cada coisa**
 
@@ -115,6 +115,7 @@ Se não conseguir ler o repositório, pare e me avise. Não siga de memória.
 | **Repositório `repo_backup`** (`main`) | Guarda o código, o `commands.log`, os segredos e as variáveis. Código só entra por pull request. |
 | **GitHub Actions** | Executa o Dispatcher e o workflow do `BKP_REPO` (e, temporariamente, o diagnóstico). |
 | **Token `SOURCE_READ_TOKEN`** | Token fine-grained (Contents, Metadata e **Issues** **somente leitura**, todos os repositórios; o *Issues: Read* é o que libera labels, milestones e issues), guardado como secret do environment `onedrive-backup`. É a credencial de leitura da origem. (O GitHub App "Repository Preservation Reader" continua só no workflow de diagnóstico temporário.) |
+| **Token `PROJECTS_READ_TOKEN`** (**a criar**) | Token **clássico** com o escopo `read:project` (somente leitura), guardado como secret do environment `onedrive-backup`. É a credencial da classe `projects`: token fine-grained não alcança Projects v2 de conta pessoal (a confirmar no primeiro run real). Esse token não enxerga repositórios privados. Sem ele, `projects` fica como restrição (`ACCESS_PERMISSION_GAP`). |
 | **GitHub App Writer** (**OPCIONAL**, criado) | Regrava o novo refresh token do OneDrive no secret do environment. Só *Secrets: Read and write* e *Environments: Read and write*. Sem ele, a rotação fica desligada (seção I.11). |
 | **Repositório de origem** | É lido e **nunca alterado**. |
 | **Microsoft Entra, app público** (configuração pelo HITL pendente) | Emite os tokens do OneDrive pela autoridade `consumers` (conta pessoal). |
@@ -122,7 +123,7 @@ Se não conseguir ler o repositório, pare e me avise. Não siga de memória.
 
 ## I.2 Preparação, uma única vez (feita pelo HITL)
 
-O código já está no repositório (SA-08). O HITL já fez (environment `onedrive-backup`): registro no Entra ("GitHub repo_backup", só contas pessoais, permissões delegadas `Files.ReadWrite.AppFolder` e `offline_access`), variável `ONEDRIVE_CLIENT_ID` e secrets `ONEDRIVE_REFRESH_TOKEN` e `SOURCE_READ_TOKEN`. O workflow declara `environment: onedrive-backup` para enxergá-los.
+O código já está no repositório (SA-08). O HITL já fez (environment `onedrive-backup`): registro no Entra ("GitHub repo_backup", só contas pessoais, permissões delegadas `Files.ReadWrite.AppFolder` e `offline_access`), variável `ONEDRIVE_CLIENT_ID` e secrets `ONEDRIVE_REFRESH_TOKEN` e `SOURCE_READ_TOKEN`. O workflow declara `environment: onedrive-backup` para enxergá-los. **Falta criar** o secret `PROJECTS_READ_TOKEN` (token clássico com `read:project`, seção I.10) para a classe `projects`; sem ele, `projects` continua como restrição.
 - **Opcional (rotação):** criar o GitHub App **Writer** (*Secrets: Read and write* e *Environments: Read and write*, instalado só em `Moriblo/repo_backup`; o *Environments* é necessário porque o secret fica em um environment) e gravar a variável `REPOSITORY_PRESERVATION_SECRETS_APP_ID` e o secret `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY`. Sem isso o backup funciona, mas o refresh token **não** é renovado (seção I.11).
 - **Atenção:** não rode dois backups ao mesmo tempo. Com rotação ligada, cada execução gira o refresh token; duas em paralelo podem invalidar uma à outra.
 - **Atenção:** se o environment tiver "Required reviewers", cada execução espera aprovação no GitHub.
@@ -150,7 +151,7 @@ O texto de cada passo, com o que entra, o que acontece, o que pode falhar e o qu
 | 15 | O engine reporta o resultado | Engine e HITL | Existe |
 
 **Observações**
-- Com as 14 restrições atuais (todas as classes, menos `git`, `labels`, `milestones` e `issues`), toda execução exige **duas linhas** no `commands.log`: a primeira termina `BLOCKED`, e a segunda carrega a decisão do HITL.
+- Com as 13 restrições atuais (todas as classes, menos `git`, `labels`, `milestones`, `issues` e `projects`; são 14 se o `PROJECTS_READ_TOKEN` não existir), toda execução exige **duas linhas** no `commands.log`: a primeira termina `BLOCKED`, e a segunda carrega a decisão do HITL.
 - O `request_id` de uma linha rejeitada ou bloqueada fica **queimado**: o log só recebe acréscimos, e a autorização não é reutilizável.
 - Enquanto o passo 11 falhar fechado, nada é copiado e nenhuma evidência é gerada.
 
@@ -218,12 +219,13 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
   1. Baixa este repositório (scripts e schemas) e instala as bibliotecas do validador.
   2. **`validate-inputs`:** revalida os inputs contra o mesmo schema (segunda barreira). Recusa também `preflight_decision` ilegível e a reutilização de autorização (`previous_request_id` igual ao `request_id`).
   3. **Token de leitura:** o workflow usa o secret `SOURCE_READ_TOKEN` (somente leitura). Se faltar, o preflight registra a lacuna de acesso.
+  4. **Token de Projects:** o workflow usa o secret `PROJECTS_READ_TOKEN` (token clássico, `read:project`) só para a classe `projects`. Se faltar, essa classe vira lacuna `ACCESS_PERMISSION_GAP` (restrição `RST-projects-ACCESS_PERMISSION_GAP`, que o HITL precisa aceitar) e o backup do código segue.
 - **Falha:** entrada inválida termina com saída **2** e `BKP_RESULT` **`REJECTED`**. A falha do **token não derruba** o workflow: vira uma lacuna no preflight.
 
 #### Passo 9: Capability Preflight
 - **Quem:** GitHub Actions, `bkp_repo.py preflight`.
-- **Acontece:** avalia as **18 classes** de objeto do `backup_repository`, cada rota separadamente. Hoje só a classe **`git`** tem rota implementada. As outras **17** viram lacuna `EXECUTION_CAPABILITY_GAP`. Se o token não foi emitido, o `git` também vira lacuna (`ACCESS_PERMISSION_GAP`), e são **18**. O resultado é validado contra o schema do command-request e gravado em `evidence/preflight.json`.
-- **De onde vêm as restrições:** não são uma lista fixa. São **calculadas** a cada execução: as classes de `includes` (em `backup/capabilities.yaml`) menos as de `implemented_classes` (também em `backup/capabilities.yaml`, na capability). Hoje, 18 menos 4 (`git`, `labels`, `milestones` e `issues`) dá **14**. Cada uma tem o nome `RST-<classe>-<tipo da lacuna>`. A lista completa aparece no `BKP_RESULT`, no `preflight.json` e, depois de aceita, no `commands.log`. Implementar uma classe a retira das restrições (seção I.14).
+- **Acontece:** avalia as **18 classes** de objeto do `backup_repository`, cada rota separadamente. Hoje têm rota implementada `git`, `labels`, `milestones`, `issues` e `projects`. As outras **13** viram lacuna `EXECUTION_CAPABILITY_GAP`. Se o token de leitura não foi emitido, as implementadas também viram lacuna (`ACCESS_PERMISSION_GAP`), e são **18**. Se só o token de Projects faltar, só `projects` vira `ACCESS_PERMISSION_GAP` (**14** restrições). O resultado é validado contra o schema do command-request e gravado em `evidence/preflight.json`.
+- **De onde vêm as restrições:** não são uma lista fixa. São **calculadas** a cada execução: as classes de `includes` (em `backup/capabilities.yaml`) menos as de `implemented_classes` (também em `backup/capabilities.yaml`, na capability). Hoje, 18 menos 5 (`git`, `labels`, `milestones`, `issues` e `projects`) dá **13**. Se o `PROJECTS_READ_TOKEN` faltar, `projects` volta como `RST-projects-ACCESS_PERMISSION_GAP` (ID **novo**, diferente do `RST-projects-EXECUTION_CAPABILITY_GAP` antigo) e são 14: o HITL precisa aceitá-lo. Cada uma tem o nome `RST-<classe>-<tipo da lacuna>`. A lista completa aparece no `BKP_RESULT`, no `preflight.json` e, depois de aceita, no `commands.log`. Implementar uma classe a retira das restrições (seção I.14).
 - **Decisão:** a execução só segue se **todas** as restrições exigidas estiverem em `preflight_decision.accepted_restrictions`. Aceitar menos mantém o bloqueio.
 - **Sai:** saída **10**, `BKP_RESULT` **`BLOCKED`** (`CAPABILITY_PREFLIGHT_GAPS`) com a lista `required_restrictions`, e os passos seguintes são pulados. Ou saída **0**, `BKP_RESULT` **`PREFLIGHT_OK`**. O artefato `bkp-repo-<request_id>` é publicado sempre.
 
@@ -259,6 +261,16 @@ Cada passo diz **quem** age, o que **entra**, o que **acontece** (com os arquivo
 - **Falha:** este passo não derruba o job. O pacote Git é enviado normalmente e o `build-evidence` marca a classe `FAILED`, o que deixa o job vermelho no final.
 - **Provado em run real (02/10/2026, `req-20261002-001`, `Moriblo/backup_teste_issues`):** `labels` 4, `milestones` 1, `issues` 6 (pull requests fora) e 5 comentários, com as conferências aprovadas; `api-*.json` enviados ao OneDrive com hash por `quickXorHash`; textos, acentos, etiquetas, marco, issue editada e issue fechada conferidos pelo HITL no `api-issues.json`.
 - **Limites:** relações entre issues só nos campos do próprio JSON da issue (a linha do tempo completa e os endpoints de sub-issues e dependências não são lidos); número, autor e datas originais não voltam idênticos; **não existe restauração pela API ainda**, os arquivos são registro.
+
+#### Passo 12c: leitura da classe `projects` (GitHub Projects v2)
+- **Quem:** GitHub Actions (passos "Provide Projects read token" e "Read Projects linked to the source repository"), com `backup/scripts/github_projects_read.py`. Roda depois do passo 12b e antes do pacote.
+- **Acontece:** só **consultas** GraphQL (uma `mutation` é recusada antes de enviar), com o `PROJECTS_READ_TOKEN`. Descobre os Projects **ligados ao repositório de origem** (escopo `SOURCE_REPOSITORY`) e, de cada um, lê metadados, campos e opções, views, workflows, status updates e os itens (valores de campo, arquivados, rascunhos e referências a issues e pull requests). Grava `package/api-projects.json`, `api-project-items.json` e `api-projects-inventory.json`, e `evidence/api-projects-status.json`.
+- **Descoberta:** primeiro `repository(...).projectsV2`. Se o token não enxerga o repositório (privado, sem o escopo `repo`), lista os Projects do dono e fica com os que têm o repositório entre os ligados. Esse caminho é **`PARTIAL`**: um vínculo com repositório privado pode ficar oculto, e "sem Projects ligados" deixa de ser prova.
+- **Conferências:** total de itens lido contra o `totalCount`; nenhuma conexão cortada (campos, views, workflows, status updates, repositórios, valores de campo); todo valor de seleção cita uma opção que existe. Divergência = `FAILED`. Itens cujo conteúdo o token não vê (`REDACTED`) são contados e tornam a classe `PARTIAL`.
+- **Disposição:** `PRESERVED-AS-EQUIVALENT-REPRESENTATION` se passou; `PARTIALLY-PRESERVED` se há itens ocultos ou a descoberta foi pela alternativa; `FAILED` se faltou permissão ou escopo, a rede falhou ou alguma conferência reprovou. Sem o `PROJECTS_READ_TOKEN`, o passo nem roda e a classe fica `NOT-VERIFIED` (restrição aceita).
+- **Falha:** como no passo 12b, este passo não derruba o job: o pacote Git é enviado e o `build-evidence` marca a classe.
+- **Reaproveitamento:** o mesmo leitor atende o `backup_projects` (backup só de Projects) nos escopos `PROJECT` e `OWNER_PROJECT_SET`; essa capability ainda não tem Mnemonic nem workflow (próximo PR).
+- **Limites:** o texto das issues e dos pull requests vem das suas classes, não daqui (o item guarda só a referência); listas dentro de um valor de campo vão até 20 entradas; a recriação do quadro pela API não existe ainda.
 
 #### Passo 13: pacote e envio ao OneDrive
 - **Quem:** GitHub Actions (passos "Build restorable package" e "Upload package to OneDrive").
@@ -391,6 +403,8 @@ Estados: **EXISTE**, **TEMPORÁRIO**, **A REMOVER**, **PLANEJADO**.
 | `backup/scripts/onedrive.py` | Access token, rotação do secret, validação do destino, envio (simples ou em blocos) e conferência de hash. Provado em run real, inclusive envio em blocos e hash por `quickXorHash`. | EXISTE |
 | `backup/scripts/onedrive_authorize.py` | Login local único (device code) que entrega o refresh token. Roda no computador do HITL. | EXISTE |
 | `backup/scripts/github_api_read.py` | Leitor das classes `labels`, `milestones` e `issues` pela API REST (só GET, com paginação, repetição e conferências). Grava `package/api-*.json` e `evidence/api-status.json`. Testado só contra servidor simulado. | EXISTE |
+| `backup/scripts/github_projects_read.py` | Leitor da classe `projects` (GitHub Projects v2) pela API GraphQL: só consultas, três escopos, conferências (total de itens, conexões cortadas, opções de seleção) e itens ocultos como `PARTIAL`. Grava `package/api-projects*.json` e `evidence/api-projects-status.json`. Testado só contra servidor simulado. | EXISTE |
+| `backup/tests/test_github_projects_read.py` | Teste local do leitor de Projects, com API GraphQL simulada (`python3 backup/tests/test_github_projects_read.py`). Não roda no Actions. | EXISTE |
 | `backup/tests/test_github_api_read.py` | Teste local do leitor de API, com servidor simulado (`python3 backup/tests/test_github_api_read.py`). Não roda no Actions. | EXISTE |
 | `backup/scripts/montar_repo_teste.sh` | Roda no computador do HITL: monta e envia um repositório de teste (arquivo grande, LFS, submódulo, branches e tags). Provado em run real. | TEMPORÁRIO |
 | `backup/scripts/montar_repo_teste_issues.sh` | Roda no computador do HITL com o `gh`: cria um repositório de teste com issues, comentários, etiquetas, marco e um quadro (Project). Só o fluxo foi testado, com `gh` simulado. | TEMPORÁRIO |
@@ -408,6 +422,7 @@ Ficam em Settings → Environments → `onedrive-backup` (os marcados abaixo) ou
 | `ONEDRIVE_CLIENT_ID` | variável (environment `onedrive-backup`) | HITL | `onedrive.py` | EXISTE |
 | `ONEDRIVE_REFRESH_TOKEN` | secret (environment `onedrive-backup`) | HITL (valor inicial) e App Writer (rotação, opcional) | `onedrive.py` | EXISTE |
 | `SOURCE_READ_TOKEN` | secret (environment `onedrive-backup`) | HITL | Leitura da origem (`backup-repository.yml`) | EXISTE |
+| `PROJECTS_READ_TOKEN` | secret (environment `onedrive-backup`) | HITL | Leitura de Projects v2 (`github_projects_read.py`); token clássico com `read:project` | **A CRIAR** |
 | `REPOSITORY_PRESERVATION_SECRETS_APP_ID` | variável | HITL | Rotação do secret pelo App Writer | OPCIONAL |
 | `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY` | secret | HITL | Idem | OPCIONAL |
 
@@ -464,7 +479,7 @@ Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `
 
 - **`diagnostic-git-read.yml`** foi removido: era o diagnóstico temporário da leitura Git, e o fluxo completo agora funciona.
 - **`onedrive-appfolder-oidc-read-test.yml`** foi removido no SA-08.
-- **`backup_projects`** aparece no menu, mas não tem Mnemonic nem executor: hoje não gera comando.
+- **`backup_projects`** aparece no menu, mas não tem Mnemonic nem executor: hoje não gera comando. O leitor dele (`github_projects_read.py`) já existe e é usado pelo `BKP_REPO` (passo 12c); o Mnemonic e o workflow próprio vêm no PR B.
 - **Registro de artefatos:** depois de alterar qualquer arquivo registrado, rode `python3 backup/scripts/validate_traceability.py --update` e confira com `--check`. O `traceability.yml` roda o `--check` em todo pull request. Um artefato só fica `VALIDATED` com evidência registrada (URL do run e commit) e a nota do que foi e do que não foi provado.
 - **Manutenção deste documento:** ao criar, mover ou remover um arquivo, um segredo ou um código de saída, atualize as seções I.9, I.10 e I.12 no mesmo PR. Itens *planejados* viram *existentes* no PR que os implementa.
 
@@ -490,6 +505,8 @@ Outras linhas úteis: `DISPATCH_ACCEPTED {json}` (job `guard` do Dispatcher) e `
 O modo de restauração de cada classe é **previsto** e será confirmado no teste de restauração.
 
 **Etapa 2A: `labels`, `milestones` e `issues` (02/10/2026).** Implementada, registrada em `implemented_classes` e **provada em run real**: o backup `req-20261002-001` de `Moriblo/backup_teste_issues` leu 4 etiquetas, 1 marco, 6 issues e 5 comentários, preservou as três classes como representação equivalente (restrições de 17 para 14) e enviou os `api-*.json` ao OneDrive; o HITL conferiu o `api-issues.json` contra o repositório. O leitor está `VALIDATED` no registro, com o run e o commit. **Não provado:** repositórios grandes (paginação real e limite de taxa), reações e relações entre issues (o repositório de teste não tem), pull requests e a restauração pela API. Os arquivos são **registro**: a restauração pela API é a capability `restore_repository`, ainda planejada.
+
+**Etapa 2B: `projects` (PR A, 03/10/2026).** Implementada, registrada em `implemented_classes` e com credencial própria (`class_credentials`: `PROJECTS_READ_TOKEN`). **Testada só localmente** contra uma API GraphQL simulada (17 testes) e na evidência. **Não provada em run real**: os nomes de campo do schema GraphQL foram escritos de memória, e a premissa de que o token clássico com `read:project` alcança o quadro (e não alcança repositórios privados) vem de fontes secundárias. O primeiro run real é o teste. O backup só de Projects (`backup_projects`, três escopos) é o PR B. Os arquivos são **registro**.
 
 **Limites aceitos: o que não volta idêntico**
 - As refs `refs/pull/*`: o GitHub as gerencia e não aceita enviá-las de volta.
