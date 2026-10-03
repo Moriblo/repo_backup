@@ -33,6 +33,28 @@ TOKEN = "ghp_SEGREDO_DE_TESTE_123"
 REPO = "dono/teste"
 
 
+def ref(n, repo=REPO, state="open"):
+    return {"number": n, "id": 5000 + n, "state": state, "title": "NAO_COPIAR",
+            "repository_url": f"https://api.github.com/repos/{repo}"}
+
+
+def with_relations(d):
+    """Pai 1 com filhas 2 (e 6, fechada) e outra de fora; 3 é bloqueada por 4 (simétrico)."""
+    issues = {i["number"]: i for i in d["issues"]}
+    api = f"https://api.github.com/repos/{REPO}/issues"
+    issues[1]["sub_issues_summary"] = {"total": 3, "completed": 1, "percent_completed": 33}
+    issues[2]["parent_issue_url"] = f"{api}/1"
+    issues[6]["parent_issue_url"] = f"{api}/1"
+    issues[3]["issue_dependencies_summary"] = {"total_blocked_by": 1, "total_blocking": 0}
+    issues[4]["issue_dependencies_summary"] = {"total_blocked_by": 0, "total_blocking": 1}
+    for n in (2, 5, 6):
+        issues[n].setdefault("sub_issues_summary", {"total": 0})
+    d["sub"] = {1: [ref(2), ref(6, state="closed"), ref(9, "outro/repo")]}
+    d["blocked_by"] = {3: [ref(4)]}
+    d["blocking"] = {4: [ref(3)]}
+    return d
+
+
 def make_data():
     """Dados que espelham o repositório de teste: 6 issues, 5 comentários, 1 marco, 1 PR."""
     ms = {"number": 1, "title": "Marco de teste", "state": "open"}
@@ -113,6 +135,14 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
                  f"/repos/{REPO}/issues/events": d["events"]}
         if route in lists:
             return self._paged(lists[route], q, route)
+        rel = route.split("/")
+        if len(rel) >= 6 and rel[1] == "repos" and rel[4] == "issues" and rel[5].isdigit():
+            n = int(rel[5])
+            tail = "/".join(rel[6:])
+            table = {"sub_issues": d.get("sub", {}), "dependencies/blocked_by": d.get("blocked_by", {}),
+                     "dependencies/blocking": d.get("blocking", {})}
+            if tail in table:
+                return self._paged(table[tail].get(n, []), q, route)
         if route.endswith("/reactions"):
             return self._send(200, [{"id": 1, "content": "+1"}])
         self._send(404, {"message": "Not Found"})
@@ -265,6 +295,122 @@ class ReadTest(unittest.TestCase):
             with self.assertRaises(SystemExit) as cm, contextlib.redirect_stdout(io.StringIO()):
                 g.cmd_read()
         self.assertEqual(cm.exception.code, 64)
+
+    # ------------------------------------------------------------------ sub-issues e dependências
+    def relations(self):
+        FakeGitHub.data = with_relations(make_data())
+
+    def test_relacoes_lidas_e_guardadas_como_referencia(self):
+        self.relations()
+        st = self.run_read()["classes"]["issues"]
+        self.assertEqual(st["status"], "OK", st.get("checks"))
+        subs = self.load("api-issue-sub-issues.json")
+        self.assertEqual([(e["parent"], [c["number"] for c in e["children"]]) for e in subs], [(1, [2, 6, 9])])
+        self.assertEqual(subs[0]["children"][2]["repository"], "outro/repo")        # filha de outro repositório: só a referência
+        self.assertEqual(subs[0]["children"][1]["state"], "closed")
+        self.assertNotIn("NAO_COPIAR", (self.root / "package" / "api-issue-sub-issues.json").read_text())
+        deps = {e["issue"]: e for e in self.load("api-issue-dependencies.json")}
+        self.assertEqual([r["number"] for r in deps[3]["blocked_by"]], [4])
+        self.assertEqual([r["number"] for r in deps[4]["blocking"]], [3])
+        self.assertEqual(st["extra"]["sub_issue_parents"], 1)
+        self.assertEqual({c["check"] for c in st["checks"]} & {"sub_issues_count", "dependencies_count",
+                                                               "sub_issues_links", "dependencies_symmetric"},
+                         {"sub_issues_count", "dependencies_count", "sub_issues_links", "dependencies_symmetric"})
+
+    def test_so_chama_as_rotas_onde_o_resumo_indica(self):
+        self.relations()
+        seen = []
+        original = FakeGitHub.do_GET
+
+        def spy(handler):
+            seen.append(handler.path.split("?")[0])
+            return original(handler)
+        with unittest.mock.patch.object(FakeGitHub, "do_GET", spy):
+            self.run_read()
+        rel = sorted(set(r for r in seen if "sub_issues" in r or "dependencies" in r))   # a lista de filhas tem 2 páginas
+        self.assertEqual(rel, [f"/repos/{REPO}/issues/1/sub_issues", f"/repos/{REPO}/issues/3/dependencies/blocked_by",
+                               f"/repos/{REPO}/issues/4/dependencies/blocking"])
+
+    def test_sem_resumo_nao_chama_nada_e_nao_falha(self):
+        st = self.run_read()["classes"]["issues"]
+        self.assertEqual(st["status"], "OK")
+        self.assertEqual(self.load("api-issue-sub-issues.json"), [])
+        self.assertEqual(self.load("api-issue-dependencies.json"), [])
+        self.assertEqual(st["extra"]["relations_summary_missing"], [1, 2, 3, 4, 5, 6])
+
+    def issue_check(self, name):
+        st = self.run_read()["classes"]["issues"]
+        return st, next(c for c in st["checks"] if c["check"] == name)
+
+    def test_resumo_maior_que_o_lido_vira_failed(self):
+        self.relations()
+        FakeGitHub.data["sub"][1].pop()
+        st, c = self.issue_check("sub_issues_count")
+        self.assertEqual((st["status"], c["ok"], c["mismatched_issues"]), ("FAILED", False, [1]))
+
+    def test_bloqueios_lidos_diferentes_do_resumo_viram_failed(self):
+        self.relations()
+        FakeGitHub.data["blocked_by"][3].append(ref(5))
+        st, c = self.issue_check("dependencies_count")
+        self.assertEqual((st["status"], c["ok"], c["mismatched_issues"]), ("FAILED", False, [3]))
+
+    def test_bloqueio_assimetrico_vira_failed(self):
+        self.relations()
+        FakeGitHub.data["blocking"][4] = [ref(3)]
+        FakeGitHub.data["blocked_by"][3] = [ref(5)]          # 3 diz ser bloqueada por 5, mas 4 diz bloquear 3
+        issues = {i["number"]: i for i in FakeGitHub.data["issues"]}
+        issues[5]["issue_dependencies_summary"] = {"total_blocked_by": 0, "total_blocking": 0}
+        st, c = self.issue_check("dependencies_symmetric")
+        self.assertEqual((st["status"], c["ok"]), ("FAILED", False))
+        self.assertEqual(sorted((a["blocker"], a["blocked"]) for a in c["asymmetric"]), [(4, 3), (5, 3)])
+
+    def test_filha_com_outro_pai_ou_sem_pai_vira_failed(self):
+        self.relations()
+        issues = {i["number"]: i for i in FakeGitHub.data["issues"]}
+        issues[2]["parent_issue_url"] = f"https://api.github.com/repos/{REPO}/issues/5"
+        st, c = self.issue_check("sub_issues_links")
+        self.assertEqual((st["status"], c["ok"], c["children_with_other_parent"]), ("FAILED", False, [2]))
+
+    def test_filha_que_declara_pai_mas_o_pai_nao_lista_vira_failed(self):
+        self.relations()
+        issues = {i["number"]: i for i in FakeGitHub.data["issues"]}
+        issues[4]["parent_issue_url"] = f"https://api.github.com/repos/{REPO}/issues/1"
+        st, c = self.issue_check("sub_issues_links")
+        self.assertEqual((st["status"], c["ok"], c["not_listed_by_parent"]), ("FAILED", False, [4]))
+
+    def test_filha_inexistente_no_mesmo_repositorio_vira_failed(self):
+        self.relations()
+        FakeGitHub.data["sub"][1][0] = ref(42)
+        st, c = self.issue_check("sub_issues_links")
+        self.assertEqual((st["status"], c["ok"], c["missing_children"]), ("FAILED", False, [42]))
+
+    def test_erro_nas_rotas_dedicadas_vira_failed_com_a_rota(self):
+        self.relations()
+        for route in (f"/repos/{REPO}/issues/1/sub_issues", f"/repos/{REPO}/issues/3/dependencies/blocked_by"):
+            FakeGitHub.fail = {route: 404}
+            st = self.run_read()["classes"]["issues"]
+            self.assertEqual(st["status"], "FAILED")
+            self.assertIn(route, st["detail"])
+            self.assertIn("404", st["detail"])
+        self.assertFalse((self.root / "package" / "api-issue-sub-issues.json").exists())
+
+    def test_relacoes_paginadas(self):
+        self.relations()
+        FakeGitHub.data["sub"][1] = [ref(2), ref(6, state="closed"), ref(9, "outro/repo")]   # PER_PAGE=2 => 2 páginas
+        st = self.run_read()["classes"]["issues"]
+        self.assertEqual(st["status"], "OK")
+        self.assertEqual(len(self.load("api-issue-sub-issues.json")[0]["children"]), 3)
+
+    def test_bloqueio_de_outro_repositorio_nao_entra_na_simetria(self):
+        self.relations()
+        # Issue 5 de OUTRO repositório bloqueia a 3: mesma numeração de uma issue local, mas não é ela.
+        FakeGitHub.data["blocked_by"][3].append(ref(5, "outro/repo"))
+        issues = {i["number"]: i for i in FakeGitHub.data["issues"]}
+        issues[3]["issue_dependencies_summary"]["total_blocked_by"] = 2
+        st, c = self.issue_check("dependencies_symmetric")
+        self.assertEqual((st["status"], c["ok"]), ("OK", True))
+        deps = {e["issue"]: e for e in self.load("api-issue-dependencies.json")}
+        self.assertEqual([(r["number"], r["repository"]) for r in deps[3]["blocked_by"]], [(4, REPO), (5, "outro/repo")])
 
 
 if __name__ == "__main__":
