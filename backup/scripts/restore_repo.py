@@ -110,6 +110,10 @@ DATA_READY = ("PRESERVED", "PRESERVED-AS-EQUIVALENT-REPRESENTATION")
 # O GitHub limita escritas em sequência (limite secundário): pausa entre escritas e espera quando ele pede.
 WRITE_DELAY = float(os.environ.get("RESTORE_WRITE_DELAY", "0.8"))
 RATE_WAIT = float(os.environ.get("RESTORE_RATE_WAIT", "60"))
+# Conferência das issues: o GitHub pode demorar alguns segundos para mostrar o que acabou de criar, por isso
+# cada issue é lida de volta pelo número (leitura direta) e, se algo ainda não bate, a conferência se repete.
+VERIFY_TRIES = int(os.environ.get("RESTORE_VERIFY_TRIES", "4"))
+VERIFY_DELAY = float(os.environ.get("RESTORE_VERIFY_DELAY", "3"))
 # Nome do alvo: letras, números, ponto, hífen e sublinhado (regra do GitHub e do schema da linha).
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 SOURCE_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -603,36 +607,49 @@ def restore_issues(repo, plan):
         # Interrompe na primeira falha: continuar deslocaria a numeração das próximas. Nada é apagado.
         out.update(status="FAILED", errors=errors[:10], reason=f"{len(errors)} erro(s) de escrita; a restauração das issues foi interrompida")
         return out, mapping
-    # Conferência: lê de volta issues e comentários e compara com o que foi enviado.
-    status, after = gh_list(f"/repos/{repo}/issues?state=all")
-    if status != 200:
-        return dict(out, status="FAILED", reason="não foi possível conferir as issues do alvo: " + short(status, after)), mapping
-    status, after_comments = gh_list(f"/repos/{repo}/issues/comments")
-    if status != 200:
-        return dict(out, status="FAILED", reason="não foi possível conferir os comentários do alvo: " + short(status, after_comments)), mapping
-    got = {i["number"]: i for i in after}
-    got_comments = {}
-    for c in sorted(after_comments, key=lambda c: c.get("id", 0)):
-        got_comments.setdefault(issue_number_of(c.get("issue_url")), []).append(c.get("body"))
-    mismatches = []
+    # Conferência: lê de volta cada issue pelo número (não por listagem, que pode atrasar) e compara com o que foi enviado.
+    attempts = 0
+    for attempts in range(1, VERIFY_TRIES + 1):
+        mismatches = issue_mismatches(repo, plan, mapping)
+        if not mismatches:
+            break
+        if attempts < VERIFY_TRIES:
+            time.sleep(VERIFY_DELAY)
+    out["verify_attempts"] = attempts
+    if mismatches:
+        out.update(status="FAILED", mismatches=mismatches[:10], reason=f"{len(mismatches)} divergência(s) na leitura de volta")
+    return out, mapping
+
+
+def issue_mismatches(repo, plan, mapping):
+    """Lê de volta cada issue (GET direto) e seus comentários. Devolve a lista de divergências (números antigos ou textos)."""
+    bad = []
     for p in plan:
-        item = got.get(mapping[p["old"]])
-        if item is None:
-            mismatches.append(p["old"])
+        new = mapping[p["old"]]
+        status, item = gh("GET", f"/repos/{repo}/issues/{new}")
+        if status != 200:
+            bad.append(p["old"])
             continue
+        status, comments = gh_list(f"/repos/{repo}/issues/{new}/comments")
+        if status != 200:
+            bad.append(p["old"])
+            continue
+        bodies = [c.get("body") for c in sorted(comments, key=lambda c: c.get("id", 0))]
         same = (item.get("title") == p["title"] and item.get("body") == p["body"]
                 and item.get("state") == ("closed" if p["closed"] else "open")
+                and (not p["closed"] or item.get("state_reason") in (None, p["reason"]))
                 and sorted(l["name"] for l in item.get("labels") or []) == sorted(p["labels"])
                 and ((item.get("milestone") or {}).get("number") == p["milestone"])
                 and not (item.get("assignees") or [])
-                and got_comments.get(item["number"], []) == p["comments"])
+                and bodies == p["comments"])
         if not same:
-            mismatches.append(p["old"])
-    if len(got) != len(plan):
-        mismatches.append(f"o alvo tem {len(got)} issues, esperado {len(plan)}")
-    if mismatches:
-        out.update(status="FAILED", mismatches=[m for m in mismatches][:10], reason=f"{len(mismatches)} divergência(s) na leitura de volta")
-    return out, mapping
+            bad.append(p["old"])
+    # Não pode haver nenhuma issue além da última restaurada (o alvo é novo).
+    if mapping:
+        status, _ = gh("GET", f"/repos/{repo}/issues/{max(mapping.values()) + 1}")
+        if status != 404:
+            bad.append(f"existe uma issue além da última restaurada ({max(mapping.values()) + 1}); resposta HTTP {status}")
+    return bad
 
 
 def restore_data_classes(plan, repo):
