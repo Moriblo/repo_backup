@@ -582,7 +582,8 @@ capabilities:
 
   # Restauração de um backup do BKP_REPO (OneDrive) para um repositório NOVO do GitHub. Primeira capability que ESCREVE no
   # GitHub, por isso é a mais restritiva: o alvo é criado pelo workflow, sempre privado, nunca pode existir antes nem ser a
-  # origem, e só recebe branches e tags (sem --force). Nesta etapa restaura SÓ a classe git; labels, milestones, issues e
+  # origem, e só recebe branches e tags (sem --force). Restaura a classe git (etapa 1) e as classes labels e milestones
+  # (etapa 2, a partir dos arquivos api-labels.json e api-milestones.json do mesmo backup, sem DELETE); issues e
   # Projects vêm em etapas seguintes. O RESTAURAR.txt de cada backup continua valendo como caminho manual.
   - id: restore_repository
     name: Restore Repository
@@ -608,8 +609,8 @@ capabilities:
       required_for_capability_definition: false
     # Classe coberta e implementada nesta etapa. O preflight (bkp_repo.py, CAPABILITY_ID=restore_repository) calcula as
     # restrições como `includes` menos `implemented_classes`.
-    includes: [git]
-    implemented_classes: [git]
+    includes: [git, labels, milestones]
+    implemented_classes: [git, labels, milestones]
     # A restauração lê o backup do OneDrive: não usa o SOURCE_READ_TOKEN.
     source_read_token_required: false
     # Credencial de ESCRITA no GitHub, amplo (fine-grained "todos os repositórios" com Administration, Contents e Workflows
@@ -617,6 +618,8 @@ capabilities:
     # primeiro run real). Guardado no environment onedrive-backup, restrito à branch main. Sem ele: ACCESS_PERMISSION_GAP.
     class_credentials:
       git: {secret: RESTORE_WRITE_TOKEN, outcome_env: RESTORE_TOKEN_OUTCOME}
+      labels: {secret: RESTORE_WRITE_TOKEN, outcome_env: RESTORE_TOKEN_OUTCOME}
+      milestones: {secret: RESTORE_WRITE_TOKEN, outcome_env: RESTORE_TOKEN_OUTCOME}
     # Regras do alvo (aplicadas pelo restore_repo.py; qualquer violação recusa a restauração, fail-closed).
     target_policy:
       name_default: "<nome da origem>-restaurado"
@@ -748,7 +751,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 52b2b28106432c57e17a20f1853462981ebb226f
+      current_sha: a2abccdbb38824e5d040435698344a82ff6f4bbf
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -1369,10 +1372,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: b2888ee8ac4ab41f0746c0ff420c0ead4da6b82d
+      current_sha: ec99f43dd05e2b7ed1c02723a39858f32557ae0a
     validation:
       status: VALIDATED
-      scope: "Run real completo pelo dispatcher (req-20261003-009, run 37137225805): restauração do backup req-20261003-007 de Moriblo/backup_teste_issues para o repositório novo Moriblo/backup_teste_issues-restaurado, criado PRIVADO pelo workflow com o RESTORE_WRITE_TOKEN (token clássico, escopos repo e workflow). Preflight PASS de uma classe, destino validado, backup baixado e conferido, 1 branch (main) enviada e conferida contra o refs.tsv (0 tags, 0 refs puladas), branch padrão main, evidência e manifest 2.0 enviados com hash conferido (6 de 6 arquivos), COMPLETE_WITH_EXCEPTIONS (classe git PRESERVED; labels, milestones, issues e Projects NÃO restaurados, declarado na limitação LIM-restore-scope). Não provado - tags, refs/pull/*, Git LFS ao GitHub, branches com .github/workflows (permissão workflow), repo-metadata.json (descrição, tópicos e branch padrão a partir dele; este backup é anterior ao arquivo), target_name, alvo já existente, preflight BLOCKED sem o token, falha no meio e repositório grande. Não foi aberto o conteúdo do repositório restaurado nem o evidence.json nesta checagem."
+      scope: "Run real completo pelo dispatcher (req-20261003-009, run 37137225805): restauração do backup req-20261003-007 de Moriblo/backup_teste_issues para o repositório novo Moriblo/backup_teste_issues-restaurado, criado PRIVADO pelo workflow com o RESTORE_WRITE_TOKEN (token clássico, escopos repo e workflow). Preflight PASS de uma classe, destino validado, backup baixado e conferido, 1 branch (main) enviada e conferida contra o refs.tsv (0 tags, 0 refs puladas), branch padrão main, evidência e manifest 2.0 enviados com hash conferido (6 de 6 arquivos), COMPLETE_WITH_EXCEPTIONS (classe git PRESERVED; labels, milestones, issues e Projects NÃO restaurados, declarado na limitação LIM-restore-scope). Não provado - tags, refs/pull/*, Git LFS ao GitHub, branches com .github/workflows (permissão workflow), repo-metadata.json (descrição, tópicos e branch padrão a partir dele; este backup é anterior ao arquivo), target_name, alvo já existente, preflight BLOCKED sem o token, falha no meio e repositório grande. Não foi aberto o conteúdo do repositório restaurado nem o evidence.json nesta checagem. Posterior a este run - a etapa 2 (labels e milestones; preflight de três classes) está provada só em teste local; não é coberta por este run."
       evidence:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37137225805", commit: 08339506b9d4a7da87366116654f2e121b295af5}
     relationships:
@@ -1392,10 +1395,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: cd755c4851b04028514e56900772bee1e3a85cd9
+      current_sha: 02f19f931ac59c3f93679748cde74a5c5f023075
     validation:
       status: VALIDATED
-      scope: "Rodou no run real req-20261003-009 (run 37137225805) nos três subcomandos - fetch (backup baixado e conferido), restore (repositório privado criado, 1 branch enviada, refs conferidas, branch padrão definida) e build-evidence (evidence.json e manifest.json válidos nos schemas 2.0). Não provado em run real - tags, Git LFS, refs/pull/*, branches com workflows, metadados do repo-metadata.json, as recusas (alvo existente ou igual à origem, token inválido), falhas no meio e repositório grande; essas só têm teste local."
+      scope: "Rodou no run real req-20261003-009 (run 37137225805) nos três subcomandos - fetch (backup baixado e conferido), restore (repositório privado criado, 1 branch enviada, refs conferidas, branch padrão definida) e build-evidence (evidence.json e manifest.json válidos nos schemas 2.0). Não provado em run real - tags, Git LFS, refs/pull/*, branches com workflows, metadados do repo-metadata.json, as recusas (alvo existente ou igual à origem, token inválido), falhas no meio e repositório grande; essas só têm teste local. Posterior a este run - a etapa 2 (restauração de labels e milestones, saída 48, restore-map.json, NOT-VERIFIED quando o backup não preservou a classe) foi acrescentada depois e está provada só em teste local; não é coberta por este run."
       evidence:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37137225805", commit: 08339506b9d4a7da87366116654f2e121b295af5}
     relationships:
@@ -1415,10 +1418,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 09a7d741ddff8eabc7ee4ca76189c6f41fedcf54
+      current_sha: c0d30204d25eef8ad3053febf0a747e14d53680d
     validation:
       status: NOT_VALIDATED
-      scope: "Executado localmente e no CI dos pull requests (35 testes, mais verificação de mutação dos pontos de segurança). Não roda contra o GitHub nem contra o OneDrive reais."
+      scope: "Executado localmente e no CI dos pull requests (58 testes, mais verificação de mutação dos pontos de segurança e das conferências de labels e milestones). Não roda contra o GitHub nem contra o OneDrive reais."
     relationships:
       - {capability_id: restore_repository, relationship: VALIDATES}
 
