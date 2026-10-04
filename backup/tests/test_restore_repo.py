@@ -36,11 +36,14 @@ import tempfile
 import threading
 import unittest
 import urllib.parse
+import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "backup" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import onedrive  # noqa: E402
+import test_restore_projects as tp  # noqa: E402
 
 TOKEN = "ghp_SEGREDO_RESTAURACAO_789"
 LOGIN = "dono"
@@ -157,6 +160,7 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
     rel_phantom = False          # a issue 3 diz ter uma sub-issue que ninguém pediu
     relation_bodies = []         # corpos enviados nas escritas de relação
     rel_list_lag = 0             # as próximas N listagens de relações voltam vazias (atraso de índice)
+    graphql_url = None           # servidor GraphQL simulado (test_restore_projects.FakeAPI) para onde o /graphql é encaminhado
 
     def log_message(self, *args):
         pass
@@ -255,7 +259,7 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
                 return self._send(cls.issue_fail[body["title"]], {"message": "boom"})
             ms = next((m for m in cls.milestones.get(repo, []) if m["number"] == body.get("milestone")), None)
             item = {"number": len(issues) + 1, "id": 5000 + len(issues) + 1, "title": body["title"], "body": ("ALTERADO" if cls.alter_body else body.get("body")),
-                    "state": "open", "state_reason": None, "labels": [] if cls.drop_labels else [{"name": n} for n in body.get("labels", [])],
+                    "node_id": f"NODE_{len(issues) + 1}", "state": "open", "state_reason": None, "labels": [] if cls.drop_labels else [{"name": n} for n in body.get("labels", [])],
                     "milestone": {"number": ms["number"]} if ms and not cls.ignore_milestone else None,
                     "assignees": [{"login": a} for a in body.get("assignees", [])] + ([{"login": "intruso"}] if cls.force_assignee else [])}
             issues.append(item)
@@ -347,7 +351,7 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
             items = cls.labels.get(repo, []) if kind == "labels" else cls.milestones.get(repo, [])
             return self._paged(items)
         if self.path == "/user":
-            raw = json.dumps({"login": LOGIN} if not cls.user_status else {"message": "x"}).encode()
+            raw = json.dumps({"login": LOGIN, "node_id": "U_dono"} if not cls.user_status else {"message": "x"}).encode()
             self.send_response(cls.user_status or 200)
             if cls.token_scopes is not None:
                 self.send_header("X-OAuth-Scopes", cls.token_scopes)
@@ -368,6 +372,11 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
             return
         body = self._body()
         cls = FakeGitHub
+        if self.path == "/graphql":              # Projects v2: encaminhado ao GraphQL simulado (o mesmo dos testes do módulo)
+            request = urllib.request.Request(cls.graphql_url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json",
+                                             "Authorization": self.headers.get("Authorization", "")})
+            with urllib.request.urlopen(request) as response:
+                return self._send(200, json.loads(response.read()))
         route = self._data_route()
         if route:
             return self._data_write(route[0], route[1], route[2], body)
@@ -387,7 +396,7 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
         cls.milestones[full] = []
         cls.issues[full], cls.issue_comments[full] = [], []
         cls.rel_sub[full], cls.rel_dep[full] = {}, set()
-        self._send(201, {"full_name": full, "private": cls.create_private, "html_url": f"https://example.invalid/{full}"})
+        self._send(201, {"full_name": full, "private": cls.create_private, "node_id": "R_new", "html_url": f"https://example.invalid/{full}"})
 
     def do_PATCH(self):  # noqa: N802
         if not self._auth():
@@ -503,7 +512,7 @@ class Base(unittest.TestCase):
     def make_backup(self, *, metadata=True, lfs_tar=None, bundle=None, refs_tsv=None, status="COMPLETE_WITH_EXCEPTIONS",
                     capability="backup_repository", git_disposition="PRESERVED", drop=(), bad_manifest_hash=None,
                     data=True, labels=None, milestones=None, label_disposition=None, milestone_disposition=None, raw=None,
-                    issues=True, issue_items=None, issue_comments=None, issue_disposition=None, sub_items=None, dep_items=None):
+                    issues=True, issue_items=None, issue_comments=None, issue_disposition=None, sub_items=None, dep_items=None, projects=None):
         package = {"source.bundle": bundle or self.bundle, "refs.tsv": (refs_tsv or self.refs_tsv).encode()}
         if data:
             package["api-labels.json"] = json.dumps(self.LABELS if labels is None else labels).encode()
@@ -513,6 +522,9 @@ class Base(unittest.TestCase):
             package["api-issue-comments.json"] = json.dumps(self.COMMENTS if issue_comments is None else issue_comments).encode()
             package["api-issue-sub-issues.json"] = json.dumps(self.SUBS if sub_items is None else sub_items).encode()
             package["api-issue-dependencies.json"] = json.dumps(self.DEPS if dep_items is None else dep_items).encode()
+        if data and issues and projects:
+            package["api-projects.json"] = json.dumps(projects[0]).encode()
+            package["api-project-items.json"] = json.dumps(projects[1]).encode()
         for name, content in (raw or {}).items():
             package[name] = content
         if metadata:
@@ -534,7 +546,9 @@ class Base(unittest.TestCase):
                            {"object_class": "milestones", "object_id": f"{SOURCE}#milestones", "disposition": milestone_disposition or self.EQUIV,
                             "evidence": ["api-milestones.json"]}] if data else [])
                        + ([{"object_class": "issues", "object_id": f"{SOURCE}#issues", "disposition": issue_disposition or self.EQUIV,
-                            "evidence": ["api-issues.json", "api-issue-comments.json"]}] if data and issues else []),
+                            "evidence": ["api-issues.json", "api-issue-comments.json"]}] if data and issues else [])
+                       + ([{"object_class": "projects", "object_id": f"{SOURCE}#projects", "disposition": "PARTIALLY-PRESERVED",
+                            "evidence": ["api-projects.json", "api-project-items.json"]}] if data and issues and projects else []),
             "execution": {"source_repository_mode": "READ_ONLY", "destination_validated": True, "authorization_request_id": "req-20260101-001",
                           "restrictions_reconciled": True}}
         ev_bytes = (json.dumps(evidence, indent=2, sort_keys=True) + "\n").encode()
@@ -635,7 +649,8 @@ class FetchTest(Base):
         self.assertEqual(plan["classes"], {"labels": {"status": "READY", "file": "api-labels.json", "count": 3},
                                            "milestones": {"status": "READY", "file": "api-milestones.json", "count": 2},
                                            "issues": {"status": "READY", "file": "api-issues.json", "count": 3},
-                                           "relations": {"status": "READY", "file": "api-issue-sub-issues.json", "count": 1}})
+                                           "relations": {"status": "READY", "file": "api-issue-sub-issues.json", "count": 1},
+                                           "projects": {"status": "NOT_VERIFIED", "reason": "a evidência do backup não traz a classe projects"}})
         self.assertEqual((self.root / "work" / "package" / "source.bundle").read_bytes(), self.bundle)
         self.assertEqual(plan["metadata"]["default_branch"], "feature")
         # O download pré-autenticado (blob) é feito sem Authorization, uma vez por arquivo baixado.
@@ -876,7 +891,7 @@ class DataClassesTest(Base):
         self.assertIn("documentation, enhancement", lims["LIM-labels-restore"])           # padrão do GitHub listadas
         self.assertIn("internal label id is not preserved", lims["LIM-labels-restore"])
         self.assertIn("3", lims["LIM-milestones-restore"])                                # número que mudou
-        self.assertIn("Projects and every other class", lims["LIM-restore-scope"])
+        self.assertIn("recreates the projects", lims["LIM-restore-scope"])
         self.assertIn("numbers that changed (source: 4)", lims["LIM-issues-restore"])
         self.assertEqual((man["status"], man["reconciliation"]["equivalent"], man["reconciliation"]["preserved"]), ("COMPLETE_WITH_EXCEPTIONS", 4, 0))
 
@@ -899,15 +914,15 @@ class DataClassesTest(Base):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         res = self.evidence("restore-result.json")
         self.assertEqual({c: v["status"] for c, v in res["classes"].items()},
-                         {"labels": "NOT_VERIFIED", "milestones": "NOT_VERIFIED", "issues": "NOT_VERIFIED", "relations": "NOT_VERIFIED"})
+                         {"labels": "NOT_VERIFIED", "milestones": "NOT_VERIFIED", "issues": "NOT_VERIFIED", "relations": "NOT_VERIFIED", "projects": "NOT_VERIFIED"})
         self.assertFalse([c for c in FakeGitHub.calls if "/labels" in c[1] or "/milestones" in c[1] or "/issues" in c[1]])
         self.assertEqual(FakeGitHub.labels["dono/teste-restaurado"], [{"name": n, "color": "ededed", "description": None} for n in FakeGitHub.default_labels])
         self.assertEqual(self.bkp("preflight", RESTORE_TOKEN_OUTCOME="success").returncode, 0)
         self.assertEqual(self.restore("build-evidence").returncode, 0)
         ev, man = self.evidence("evidence.json"), self.evidence("manifest.json")
-        self.assertEqual([o["disposition"] for o in ev["objects"][1:]], ["NOT-VERIFIED"] * 4)
+        self.assertEqual([o["disposition"] for o in ev["objects"][1:]], ["NOT-VERIFIED"] * 5)
         self.assertEqual((man["status"], man["reconciliation"]["not_verified"], man["reconciliation"]["unreconciled_object_classes"]),
-                         ("COMPLETE_WITH_EXCEPTIONS", 4, ["labels", "milestones", "issues", "relations"]))
+                         ("COMPLETE_WITH_EXCEPTIONS", 5, ["labels", "milestones", "issues", "relations", "projects"]))
         self.assertIn("LIM-labels-not-restored", [l["limitation_id"] for l in man["limitations"]])
 
     def test_classe_que_o_backup_nao_preservou_nao_e_restaurada(self):
@@ -915,7 +930,7 @@ class DataClassesTest(Base):
         self.assertEqual(self.go().returncode, 0)
         classes = self.evidence("restore-result.json")["classes"]
         self.assertEqual({c: v["status"] for c, v in classes.items()},
-                         {"labels": "NOT_VERIFIED", "milestones": "NOT_VERIFIED", "issues": "NOT_VERIFIED", "relations": "NOT_VERIFIED"})
+                         {"labels": "NOT_VERIFIED", "milestones": "NOT_VERIFIED", "issues": "NOT_VERIFIED", "relations": "NOT_VERIFIED", "projects": "NOT_VERIFIED"})
         self.assertIn("FAILED", classes["labels"]["reason"])
         self.assertIn("dependem", classes["issues"]["reason"])
         self.assertFalse([c for c in FakeGitHub.calls if "/labels" in c[1] or "/milestones" in c[1] or "/issues" in c[1]])
@@ -959,7 +974,7 @@ class DataClassesTest(Base):
         proc = self.restore("build-evidence")
         self.assertEqual(proc.returncode, 1)
         ev, man = self.evidence("evidence.json"), self.evidence("manifest.json")
-        self.assertEqual([o["disposition"] for o in ev["objects"]], ["PARTIALLY-PRESERVED", "FAILED", Base.EQUIV, "NOT-VERIFIED", "NOT-VERIFIED"])
+        self.assertEqual([o["disposition"] for o in ev["objects"]], ["PARTIALLY-PRESERVED", "FAILED", Base.EQUIV, "NOT-VERIFIED", "NOT-VERIFIED", "NOT-VERIFIED"])
         self.assertEqual(res["classes"]["issues"]["status"], "NOT_VERIFIED")        # as issues dependem das labels
         self.assertEqual((man["status"], man["reconciliation"]["failed"]), ("FAILED", 1))
 
@@ -1657,12 +1672,12 @@ class EvidenceAndPreflightTest(Base):
         self.assertEqual(ev["source_scope"], {"backup_path": BASE, "source_repository": SOURCE, "target_repository": "dono/teste-restaurado",
                                               "destination": f"{BASE}/restores"})
         self.assertEqual([(o["object_class"], o["disposition"]) for o in ev["objects"]],
-                         [("git", "PARTIALLY-PRESERVED"), ("labels", Base.EQUIV), ("milestones", Base.EQUIV), ("issues", Base.EQUIV), ("relations", Base.EQUIV)])
+                         [("git", "PARTIALLY-PRESERVED"), ("labels", Base.EQUIV), ("milestones", Base.EQUIV), ("issues", Base.EQUIV), ("relations", Base.EQUIV), ("projects", "NOT-VERIFIED")])
         self.assertEqual(man["status"], "COMPLETE_WITH_EXCEPTIONS")
         ids = [l["limitation_id"] for l in man["limitations"]]
         self.assertTrue({"LIM-restore-scope", "LIM-git-refs", "LIM-labels-restore", "LIM-milestones-restore", "LIM-issues-restore"} <= set(ids), ids)
         rec = man["reconciliation"]
-        self.assertEqual((rec["partial"], rec["equivalent"], rec["failed"], rec["not_verified"], rec["unreconciled_object_classes"]), (1, 4, 0, 0, []))
+        self.assertEqual((rec["partial"], rec["equivalent"], rec["failed"], rec["not_verified"], rec["unreconciled_object_classes"]), (1, 4, 0, 1, ["projects"]))
         self.assertIn("restore-map.json", [a["path"] for a in man["artifacts"]])
         self.assertIn("refs-restored.tsv", [a["path"] for a in man["artifacts"]])
         self.assert_no_leak()
@@ -1677,8 +1692,8 @@ class EvidenceAndPreflightTest(Base):
         self.assertEqual(man["reconciliation"]["preserved"], 1)
         # Resultado sem a seção de classes: labels e milestones ficam NOT-VERIFIED, nunca sucesso presumido.
         self.assertEqual([(o["object_class"], o["disposition"]) for o in ev["objects"][1:]],
-                         [("labels", "NOT-VERIFIED"), ("milestones", "NOT-VERIFIED"), ("issues", "NOT-VERIFIED"), ("relations", "NOT-VERIFIED")])
-        self.assertEqual(man["reconciliation"]["unreconciled_object_classes"], ["labels", "milestones", "issues", "relations"])
+                         [("labels", "NOT-VERIFIED"), ("milestones", "NOT-VERIFIED"), ("issues", "NOT-VERIFIED"), ("relations", "NOT-VERIFIED"), ("projects", "NOT-VERIFIED")])
+        self.assertEqual(man["reconciliation"]["unreconciled_object_classes"], ["labels", "milestones", "issues", "relations", "projects"])
 
     def test_falha_vira_failed_com_saida_1(self):
         self.fetched()
@@ -1687,7 +1702,7 @@ class EvidenceAndPreflightTest(Base):
         proc, ev, man = self.finish()
         self.assertEqual(proc.returncode, 1)
         self.assertEqual((ev["objects"][0]["disposition"], man["status"], man["reconciliation"]["failed"]), ("FAILED", "FAILED", 1))
-        self.assertEqual([o["disposition"] for o in ev["objects"][1:]], ["NOT-VERIFIED"] * 4)    # o git não chegou a ser restaurado
+        self.assertEqual([o["disposition"] for o in ev["objects"][1:]], ["NOT-VERIFIED"] * 5)    # o git não chegou a ser restaurado
         self.assertIn("TARGET_EXISTS", ev["objects"][0]["limitation"])
 
     def test_sem_resultado_da_restauracao_e_failed(self):
@@ -1701,6 +1716,121 @@ class EvidenceAndPreflightTest(Base):
         self.assertEqual(subprocess.run([sys.executable, str(SCRIPTS / "restore_repo.py"), "nada"], env=self.env, capture_output=True).returncode, 64)
         env = {k: v for k, v in self.env.items() if k != "BACKUP_PATH"}
         self.assertEqual(subprocess.run([sys.executable, str(SCRIPTS / "restore_repo.py"), "fetch"], env=env, capture_output=True).returncode, 64)
+
+
+class ProjectsTest(Base):
+    """Etapa 4: Projects recriados como Projects novos, privados e ligados ao repositório restaurado (GraphQL simulado e com estado)."""
+    T = "dono/teste-restaurado"
+
+    class LiveIssues(dict):
+        """Id de nó -> issue do repositório restaurado do simulado do GitHub (as issues são criadas durante o teste)."""
+        def __getitem__(self, node):
+            return FakeGitHub.issues["dono/teste-restaurado"][int(node.split("_")[1]) - 1]
+
+    class LiveStates(dict):
+        def __getitem__(self, number):
+            return next(i["state"] for i in FakeGitHub.issues["dono/teste-restaurado"] if i["number"] == number)
+
+    def setUp(self):
+        super().setUp()
+        titles = [i["title"] for i in self.ISSUES]
+        details, items = tp.source_project(hidden=True, issue_titles=titles)
+        self.make_backup(projects=([details], items))
+        self.world = tp.FakeAPI.world = tp.World()
+        self.world.issues, self.world.issue_state = self.LiveIssues(), self.LiveStates()
+        self.world.default_workflows = [("Item added to project", True)]
+        self.gql = start(tp.FakeAPI)
+        self.addCleanup(self.gql.server_close)
+        self.addCleanup(self.gql.shutdown)
+        FakeGitHub.graphql_url = f"http://127.0.0.1:{self.gql.server_address[1]}/graphql"
+
+    def go(self, **env):
+        self.fetched()
+        return self.restore("restore", **env, RESTORE_PROJECT_SETTLE="0")
+
+    def cls(self):
+        return self.evidence("restore-result.json")["classes"]["projects"]
+
+    def test_restaura_o_project_ligado_as_issues_novas(self):
+        proc = self.go()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        res = self.cls()
+        self.assertEqual(res["status"], "OK", res)
+        p = self.world.projects["PVT_new1"]
+        self.assertEqual((p["title"], p["public"], p["repo_id"], p["owner_id"]), ("Quadro de teste (backup_teste_issues) (restaurado)", False, "R_new", "U_dono"))
+        # A issue antiga 4 virou a 3 (buraco na numeração): o item aponta para a issue NOVA, achada pelo título.
+        self.assertEqual([i["node"] for i in p["items"] if i.get("node")], ["NODE_1", "NODE_2", "NODE_3"])
+        self.assertEqual(self.evidence("restore-map.json")["projects"], {"13": {"number": 1, "url": "https://github.com/users/dono/projects/1"}})
+        self.assertTrue((self.root / "evidence" / "RESTAURAR-PROJETO.txt").exists())
+        self.assertEqual(self.world.seen_auth, {f"Bearer {TOKEN}"})
+        self.assert_no_leak()
+
+    def test_evidencia_do_project_e_sempre_parcial_e_lista_a_limitacao(self):
+        self.assertEqual(self.go().returncode, 0)
+        self.assertEqual(self.bkp("preflight", RESTORE_TOKEN_OUTCOME="success").returncode, 0)
+        self.assertEqual(self.restore("build-evidence").returncode, 0)
+        ev = self.evidence("evidence.json")
+        obj = next(o for o in ev["objects"] if o["object_class"] == "projects")
+        self.assertEqual(obj["disposition"], "PARTIALLY-PRESERVED")
+        self.assertIn("RESTAURAR-PROJETO.txt", json.dumps(ev))
+        lim = {l["limitation_id"]: l["description"] for l in self.evidence("manifest.json")["limitations"]}
+        self.assertIn("workflow rules", lim["LIM-projects-restore"])
+
+    def test_token_sem_escopo_project_nao_escreve_no_graphql(self):
+        FakeGitHub.token_scopes = "repo, workflow"
+        proc = self.go()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        res = self.cls()
+        self.assertEqual(res["status"], "NOT_VERIFIED")
+        self.assertIn("escopo project", res["reason"])
+        self.assertEqual(self.world.ops, [])
+
+    def test_issues_com_falha_deixam_o_project_sem_escrever(self):
+        FakeGitHub.issue_fail = {"Ideia descartada": 500}
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
+        self.assertEqual(self.cls()["status"], "NOT_VERIFIED")
+        self.assertEqual(self.world.ops, [])
+
+    def test_falha_de_escrita_do_project_sai_com_48_e_mantem_o_alvo(self):
+        self.world.fail["RstCreateField"] = [{"type": "UNPROCESSABLE", "message": "nome inválido"}]
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
+        res = self.cls()
+        self.assertEqual(res["status"], "FAILED")
+        self.assertIn("RstCreateField", res["reason"])
+        self.assertIn(self.T, [c.lower() for c in FakeGitHub.created])
+        evidence_file = self.evidence("restore-result.json")["classes"]
+        self.assertEqual(evidence_file["issues"]["status"], "OK")                 # as issues continuam restauradas
+
+    def test_teto_de_escritas_e_compartilhado_com_issues_e_relacoes(self):
+        proc = self.go(RESTORE_MAX_WRITES="20")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        res = self.cls()
+        self.assertEqual(res["status"], "NOT_VERIFIED")
+        self.assertIn("nada foi escrito", res["reason"])
+        self.assertEqual(self.world.ops, [])
+
+    def test_item_sem_issue_no_backup_vira_parcial_e_o_exit_continua_zero(self):
+        titles = [i["title"] for i in self.ISSUES][:2] + ["Sem issue correspondente"]
+        details, items = tp.source_project(hidden=True, issue_titles=titles)
+        self.make_backup(projects=([details], items))
+        proc = self.go()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        res = self.cls()
+        self.assertEqual(res["status"], "PARTIAL")
+        self.assertEqual(self.bkp("preflight", RESTORE_TOKEN_OUTCOME="success").returncode, 0)
+        self.assertEqual(self.restore("build-evidence").returncode, 0)
+        text = json.dumps(self.evidence("evidence.json"))
+        self.assertIn("Items not linked", text)
+        self.assertIn("Sem issue correspondente", text)
+
+    def test_backup_sem_projects_deixa_a_classe_not_verified(self):
+        self.make_backup()
+        proc = self.go()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.cls()["status"], "NOT_VERIFIED")
+        self.assertEqual(self.world.ops, [])
 
 
 if __name__ == "__main__":

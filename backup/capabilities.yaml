@@ -753,7 +753,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 808a6538c4bfbb11ac65988b0963ced38215a6f3
+      current_sha: dab5e625cb6b6d1dd725ac1767655cd62b40e3ad
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -1400,7 +1400,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 8b95fffdd2fbf0dcd7e1cec8b5e6598704ae6ad9
+      current_sha: c76243fa1441b4fe9b1c9d858acc015ac2c640a1
     validation:
       status: VALIDATED
       scope: "Rodou no run real req-20261003-009 (run 37137225805) nos três subcomandos - fetch (backup baixado e conferido), restore (repositório privado criado, 1 branch enviada, refs conferidas, branch padrão definida) e build-evidence (evidence.json e manifest.json válidos nos schemas 2.0). Não provado em run real - tags, Git LFS, refs/pull/*, branches com workflows, metadados do repo-metadata.json, as recusas (alvo existente ou igual à origem, token inválido), falhas no meio e repositório grande; essas só têm teste local. Etapa 2 (labels e milestones) provada no run real req-20261003-014 (run 37154176501, Moriblo/backup_teste_issues-restaurado-2): preflight de três classes PASS, git PRESERVED (1 branch, commit 4f61034 idêntico ao da origem, conferido pelo HITL), labels e milestones PRESERVED-AS-EQUIVALENT-REPRESENTATION (4 labels do backup, uma delas a padrão bug atualizada com a descrição do backup, mais 9 padrão do GitHub listadas; 1 milestone, mapa 1->1), COMPLETE_WITH_EXCEPTIONS, evidence.json, manifest.json e restore-map.json lidos e conferidos com os prints do HITL (labels, milestones, descrição). Não provado nesta etapa - prazo de milestone (a origem não tem), milestone fechado, buraco na numeração, tópicos (a origem não tem), escolha da branch padrão (só existe a main), mais de 100 labels, limite de taxa, saída 48 e classe NOT-VERIFIED. Etapa 3 (issues e comentários) exercitada no run real req-20261003-017 (run 37161077470, Moriblo/backup_teste_issues-restaurado-3), que terminou FAILED por defeito da conferência e não por falha de escrita: o workflow criou as 6 issues e os comentários (restore-map 1..6, 13 escritas) e o HITL conferiu na interface o cabeçalho, as labels, o milestone, a ausência de assignees, os comentários e a neutralização (@menção, dono/repo#N e URL entre crases, bloco de código e e-mail intactos), e a issue original ficou sem nenhum evento novo; a conferência de volta por listagem viu só 3 das 6 issues (atraso da listagem do GitHub) e foi trocada por leitura direta de cada issue com repetição limitada. A versão corrigida passou no run real req-20261003-018 (run 37162323557, Moriblo/backup_teste_issues-restaurado-4): preflight de quatro classes PASS, git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION (6 issues, 6 comentários, 1 fechamento, 13 escritas, numeração sem mudança, verify_attempts 1), COMPLETE_WITH_EXCEPTIONS, com evidence.json, manifest.json, restore-map.json e restore-result.json lidos e a aba Issues e a issue 3 conferidas pelo HITL na interface (cabeçalho, labels, milestone, sem assignees, comentário com cabeçalho). Não provado em run real - repositório grande e o teto de 450 escritas, limite de taxa, numeração com buracos (a origem não tem), origem com assignees ou reações, a repetição da conferência (verify_attempts maior que 1), a saída 48 por falha de escrita, e a linha do tempo da issue original neste run (conferida só no run req-20261003-017). Escopos do token (nomes do cabeçalho X-OAuth-Scopes de GET /user; null para token sem o cabeçalho) passam a ser registrados em restore-result.json (`token_scopes`) e numa linha RESTORE_TOKEN do log, para a restauração de Projects poder exigir o escopo project; só teste local, ainda não rodou em run real."
@@ -1425,10 +1425,49 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 916037703344955433811e7bc9e78def79eee7b7
+      current_sha: 4576f43f0108fcb27a4d2e4c7a692d941b4de310
     validation:
       status: NOT_VALIDATED
-      scope: "Executado localmente e no CI dos pull requests (110 testes, mais verificação de mutação dos pontos de segurança e das conferências de labels, milestones, issues, relações e escopos do token). Não roda contra o GitHub nem contra o OneDrive reais."
+      scope: "Executado localmente e no CI dos pull requests (118 testes, mais verificação de mutação dos pontos de segurança e das conferências de labels, milestones, issues, relações, escopos do token e da integração dos Projects). Não roda contra o GitHub nem contra o OneDrive reais."
+    relationships:
+      - {capability_id: restore_repository, relationship: VALIDATES}
+
+  # ---------------------------------------------------------------------------
+  # Restauração de Projects (etapa 4 do RST_REPO). Módulo chamado pelo restore_repo.py; não é executor próprio.
+  # ---------------------------------------------------------------------------
+  - artifact_id: restore_projects_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/restore_projects.py
+    purpose: Recreates the Projects (v2) of a backup as NEW private projects linked to the restored repository (fields, views, items, values, status updates), reads them back to verify, and reports what the API cannot restore (workflow rules, view grouping and sorting).
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 2318c4435ba4a6bc173d66f7069b363d5a1d597c
+    validation:
+      status: NOT_VALIDATED
+      scope: "Só teste local contra uma API GraphQL simulada com estado; ainda não rodou em run real. Não provado - nenhum dos nomes de payload, a criação de views com campos visíveis, os workflows padrão do GitHub reagindo à inclusão de itens, a conferência de volta, o limite de taxa."
+    relationships:
+      - {capability_id: restore_repository, relationship: EXECUTES}
+
+  - artifact_id: restore_projects_test
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/tests/test_restore_projects.py
+    purpose: Local test of the Projects restoration against a stateful simulated GraphQL API (planning, matching of items to issues by title, full restoration, read-back verification, workflow races, write failures, refusals).
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 73dfb8956ce878244ed5bd1d6174cee12770a779
+    validation:
+      status: NOT_VALIDATED
+      scope: "Executado localmente e no CI dos pull requests (53 testes, mais verificação de mutação do planejamento, da escrita e da conferência). Não roda contra o GitHub real."
     relationships:
       - {capability_id: restore_repository, relationship: VALIDATES}
 
