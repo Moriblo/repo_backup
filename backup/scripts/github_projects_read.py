@@ -240,6 +240,10 @@ def _view_part(name, selection):
 # Partes das views, uma consulta cada, para uma falha do GitHub num atributo não perder os outros.
 VIEW_PARTS = {
     "visibleFields": _view_part("VisibleFields", f"configuration {{ visibleFields(first: 100) {{ {_FIELD_CONN} }} }}"),
+    # `visibleFields(first: 100)` falhou no GitHub real de forma persistente (erro interno, run req-20261004-004). Duas alternativas, cada
+    # uma por conta própria: a mesma consulta com página menor (grava no mesmo `configuration`) e a lista `fields` da própria view.
+    "visibleFieldsSmall": _view_part("VisibleFieldsSmall", f"configuration {{ visibleFields(first: 20) {{ {_FIELD_CONN} }} }}"),
+    "fields": _view_part("Fields", f"fields(first: 100) {{ {_FIELD_CONN} }}"),
     "groupByFields": _view_part("GroupBy", f"groupByFields(first: 20) {{ {_FIELD_CONN} }}"),
     "verticalGroupByFields": _view_part("VerticalGroupBy", f"verticalGroupByFields(first: 20) {{ {_FIELD_CONN} }}"),
     "sortByFields": _view_part("SortBy", f"sortByFields(first: 20) {{ totalCount {_PAGEINFO} nodes {{ direction {_FIELD_REF} }} }}"),
@@ -492,7 +496,7 @@ def check_project(details, items, total, archived_total=None):
                  if (details.get(n) or {}).get("pageInfo", {}).get("hasNextPage")]
     truncated += ["item.fieldValues" for i in items if i["fieldValues"]["pageInfo"]["hasNextPage"]][:1]
     for view in (details.get("views") or {}).get("nodes", []):
-        conns = {"visibleFields": (view.get("configuration") or {}).get("visibleFields"), "groupByFields": view.get("groupByFields"),
+        conns = {"visibleFields": (view.get("configuration") or {}).get("visibleFields"), "fields": view.get("fields"), "groupByFields": view.get("groupByFields"),
                  "verticalGroupByFields": view.get("verticalGroupByFields"), "sortByFields": view.get("sortByFields")}
         truncated += [f"views[{view['number']}].{n}" for n, c in conns.items() if c and c.get("pageInfo", {}).get("hasNextPage")]
     checks.append({"check": "connections_complete", "ok": not truncated, "truncated": truncated})
