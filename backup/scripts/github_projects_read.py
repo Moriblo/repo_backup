@@ -218,9 +218,10 @@ Q_PROBE_MUTATIONS = "query ProbeMutations { __schema { mutationType { fields { n
 Q_PROBE_TYPE = f"""query ProbeType($name: String!) {{
   __type(name: $name) {{
     name kind
-    fields {{ name type {{ {_TYPE_REF} }} }}
+    fields {{ name type {{ {_TYPE_REF} }} args {{ name type {{ {_TYPE_REF} }} }} }}
     inputFields {{ name type {{ {_TYPE_REF} }} }}
     enumValues {{ name }}
+    possibleTypes {{ name }}
   }}
 }}"""
 # Tipos que importam para a restauração de Projects (entradas de criação) e para a cobertura do backup (views, workflows...).
@@ -228,6 +229,9 @@ PROBE_TYPES = ("ProjectV2", "ProjectV2View", "ProjectV2Workflow", "ProjectV2Stat
                "CreateProjectV2Input", "CopyProjectV2Input", "CreateProjectV2FieldInput", "UpdateProjectV2FieldInput",
                "UpdateProjectV2Input", "AddProjectV2DraftIssueInput", "UpdateProjectV2ItemPositionInput",
                "CreateProjectV2StatusUpdateInput", "ProjectV2CustomFieldType")
+# A sonda também segue: a entrada de cada mutation de ProjectV2 (`<Mutation>Input`) e todo tipo citado, pelos campos, argumentos,
+# entradas ou tipos possíveis, cujo nome contém "ProjectV2" (a vizinhança do schema). Teto de tipos para a sonda não crescer sem fim.
+PROBE_MAX_TYPES = 150
 
 
 class GraphqlError(Exception):
@@ -470,13 +474,41 @@ def type_name(ref):
     return inner
 
 
+def base_name(ref):
+    """Nome do tipo nomeado por baixo de NON_NULL e LIST."""
+    while ref is not None and not ref.get("name"):
+        ref = ref.get("ofType")
+    return ref.get("name") if ref else None
+
+
+def related_types(node):
+    """Tipos de Projects citados por um tipo da introspecção (campos, argumentos, entradas e tipos possíveis)."""
+    names = set()
+    for f in node.get("fields") or []:
+        names.add(base_name(f["type"]))
+        names.update(base_name(a["type"]) for a in f.get("args") or [])
+    for f in node.get("inputFields") or []:
+        names.add(base_name(f["type"]))
+    names.update(p["name"] for p in node.get("possibleTypes") or [])
+    return {n for n in names if n and "ProjectV2" in n}
+
+
 def probe_schema(graph):
     """Introspecção do schema (só consulta). Nunca levanta: qualquer falha vira {"status": "UNAVAILABLE", ...}."""
     try:
         fields = graph.run_query(Q_PROBE_MUTATIONS)["__schema"]["mutationType"]["fields"]
         mutations = sorted(f["name"] for f in fields)
-        types = {}
-        for name in PROBE_TYPES:
+        project_mutations = [m for m in mutations if "projectv2" in m.lower()]
+        queue = list(PROBE_TYPES) + [m[0].upper() + m[1:] + "Input" for m in project_mutations]
+        types, seen, truncated = {}, set(), []
+        while queue:
+            name = queue.pop(0)
+            if name in seen:
+                continue
+            if len(seen) >= PROBE_MAX_TYPES:
+                truncated.append(name)
+                continue
+            seen.add(name)
             node = graph.run_query(Q_PROBE_TYPE, {"name": name})["__type"]
             if node is None:
                 types[name] = None
@@ -484,13 +516,19 @@ def probe_schema(graph):
             entry = {"kind": node["kind"]}
             if node.get("fields") is not None:
                 entry["fields"] = {f["name"]: type_name(f["type"]) for f in node["fields"]}
+                args = {f["name"]: {a["name"]: type_name(a["type"]) for a in f["args"]} for f in node["fields"] if f.get("args")}
+                if args:
+                    entry["field_args"] = args
             if node.get("inputFields") is not None:
                 entry["input_fields"] = {f["name"]: type_name(f["type"]) for f in node["inputFields"]}
             if node.get("enumValues") is not None:
                 entry["enum_values"] = [v["name"] for v in node["enumValues"]]
+            if node.get("possibleTypes"):
+                entry["possible_types"] = sorted(p["name"] for p in node["possibleTypes"])
             types[name] = entry
-        return {"status": "OK", "captured_at": now(), "mutations_total": len(mutations),
-                "project_v2_mutations": [m for m in mutations if "projectv2" in m.lower()], "types": types}
+            queue.extend(sorted(related_types(node) - seen))
+        return {"status": "OK", "captured_at": now(), "mutations_total": len(mutations), "project_v2_mutations": project_mutations,
+                "types": types, "types_not_followed": sorted(set(truncated))}
     except GraphqlError as exc:
         return {"status": "UNAVAILABLE", "detail": str(exc)}
     except Exception as exc:  # noqa: BLE001

@@ -753,7 +753,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: dbc3ab87a86822d1afa57498a2dc7f43c7261568
+      current_sha: 89d630ed8543d15e3ff9bac6360e68b4953afba4
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -1277,10 +1277,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 1730bfd5d262c9b04c1967575c740504a57519d0
+      current_sha: 9ee1aa0162b858dfc50ea270045815bae9a4e836
     validation:
       status: VALIDATED
-      scope: "Run real completo (req-20261003-003, run 37089900544, Moriblo/backup_teste_issues, repositório privado): o token clássico read:project não enxerga o repositório; a descoberta alternativa lista os Projects do dono e a regra E confirma o vínculo pelos títulos: o quadro nº 13 ficou com TITLE_MATCH 6/6 (7 itens, 14 campos, 1 view, 6 workflows, Status e Prioridade conferidos contra a tela) e os nº 12 e nº 5 foram excluídos (TITLES_DO_NOT_MATCH, 0/101 e 0/1) e NÃO entraram no pacote (api-project-items.json de 177 KB para 12 KB). Classe PARTIALLY-PRESERVED: 6 itens com a referência da issue oculta (o estado do quadro sobrevive). Escopos PROJECT (quadro nº 13, 7 itens) e OWNER_PROJECT_SET (8 Projects, 201 itens, TODOS os do dono, sem filtro) provados em runs reais pelo BKP_PROJ (37091894311 e 37092140044). Escopo SOURCE_REPOSITORY pelo BKP_PROJ (req-20261003-008, run 37093767488): as issues da origem lidas numa pasta de trabalho fora do pacote (SOURCE_TITLES_DIR) e 1 Project com 7 itens no pacote, o arquivo de itens com os mesmos 12481 bytes do run req-20261003-003, ou seja, só o quadro nº 13 (o conteúdo do inventário com os candidatos excluídos não foi aberto nesta checagem). Paginação real exercitada no run anterior (101 itens em 2 páginas, run 37087638922). Não provado - falso positivo por título repetido entre repositórios, origem sem issues, Project só com rascunhos, Projects de organização, valores de campo de iteração, data e número, itens arquivados e status updates. Sonda do schema (introspecção, só consulta; grava `schema_probe` em api-projects-inventory.json e api-projects-status.json: mutations de ProjectV2 e campos de views, workflows e das entradas de criação) acrescentada depois destes runs, com o bloqueio de mutations refeito (operação `mutation` ou `subscription`, e o documento tem de começar por `query`): só teste local com servidor simulado; ainda não rodou em run real."
+      scope: "Run real completo (req-20261003-003, run 37089900544, Moriblo/backup_teste_issues, repositório privado): o token clássico read:project não enxerga o repositório; a descoberta alternativa lista os Projects do dono e a regra E confirma o vínculo pelos títulos: o quadro nº 13 ficou com TITLE_MATCH 6/6 (7 itens, 14 campos, 1 view, 6 workflows, Status e Prioridade conferidos contra a tela) e os nº 12 e nº 5 foram excluídos (TITLES_DO_NOT_MATCH, 0/101 e 0/1) e NÃO entraram no pacote (api-project-items.json de 177 KB para 12 KB). Classe PARTIALLY-PRESERVED: 6 itens com a referência da issue oculta (o estado do quadro sobrevive). Escopos PROJECT (quadro nº 13, 7 itens) e OWNER_PROJECT_SET (8 Projects, 201 itens, TODOS os do dono, sem filtro) provados em runs reais pelo BKP_PROJ (37091894311 e 37092140044). Escopo SOURCE_REPOSITORY pelo BKP_PROJ (req-20261003-008, run 37093767488): as issues da origem lidas numa pasta de trabalho fora do pacote (SOURCE_TITLES_DIR) e 1 Project com 7 itens no pacote, o arquivo de itens com os mesmos 12481 bytes do run req-20261003-003, ou seja, só o quadro nº 13 (o conteúdo do inventário com os candidatos excluídos não foi aberto nesta checagem). Paginação real exercitada no run anterior (101 itens em 2 páginas, run 37087638922). Não provado - falso positivo por título repetido entre repositórios, origem sem issues, Project só com rascunhos, Projects de organização, valores de campo de iteração, data e número, itens arquivados e status updates. Sonda do schema (introspecção, só consulta; grava `schema_probe` em api-projects-inventory.json e api-projects-status.json: mutations de ProjectV2 e campos de views, workflows e das entradas de criação) acrescentada depois destes runs, com o bloqueio de mutations refeito (operação `mutation` ou `subscription`, e o documento tem de começar por `query`): só teste local com servidor simulado; ainda não rodou em run real. A sonda rodou em run real (req-20261004-001, run 37176285236, Moriblo/backup_teste_issues, Project 14): API_PROBE OK, 262 mutations no schema, 32 de ProjectV2 (entre elas createProjectV2View, updateProjectV2View, copyProjectV2 e, de workflow, só deleteProjectV2Workflow); os workflows expõem só nome, número, estado ligado e datas. A segunda versão da sonda registra também os argumentos dos campos, os tipos possíveis das uniões e a entrada de cada mutation de ProjectV2 (`<Mutation>Input`), e segue os tipos de Projects citados (teto de 150): só teste local; ainda não rodou em run real."
       evidence:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37093767488", commit: 96962d6f20f55df3c11f99c834a565407d1ceca6}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/37092140044", commit: f325f834243d444e69e09518771671921bd25588}
@@ -1304,10 +1304,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: aed784d81400240dae0e54a029f3ea6c068fc11b
+      current_sha: 16e9b4620bbc2b28505de004ffa1e71e1d0a46e8
     validation:
       status: NOT_VALIDATED
-      scope: Executado localmente e no CI dos pull requests (32 testes, mais verificação de mutação, incluindo o bloqueio de mutations e a sonda do schema).
+      scope: Executado localmente e no CI dos pull requests (34 testes, mais verificação de mutação, incluindo o bloqueio de mutations e a sonda do schema com argumentos e vizinhança de tipos).
     relationships:
       - {capability_id: backup_repository, relationship: VALIDATES}
       - {capability_id: backup_projects, relationship: VALIDATES}
