@@ -83,23 +83,26 @@ def make_project(number=13, title="Quadro de teste (backup_teste_issues)", repos
     for a in range(archived):
         k = len(plan) + drafts + a + 1
         items.append({"id": f"PVTI_{k}", "type": "ISSUE", "isArchived": True, "createdAt": "2026-10-02T19:26:30Z", "updatedAt": "2026-10-02T19:26:40Z",
-                      "creator": {"login": "Moriblo"}, "content": None,
+                      "creator": {"login": "Moriblo"},
+                      "content": None if hidden else {"__typename": "Issue", "id": f"I_{k}", "number": 90 + a, "title": "Item arquivado", "url": f"https://github.com/{SOURCE}/issues/{90 + a}",
+                                                      "state": "CLOSED", "repository": {"nameWithOwner": SOURCE}},
                       "fieldValues": {"pageInfo": {"hasNextPage": False}, "nodes": [text_value("Item arquivado"), value(status, "S2", "Done")]}})
     details = {"id": f"PVT_{number}", "number": number, "title": title, "shortDescription": None, "readme": None, "public": False, "closed": False,
                "closedAt": None, "createdAt": "2026-10-02T19:26:15Z", "updatedAt": "2026-10-02T19:26:30Z", "url": f"https://github.com/users/dono/projects/{number}",
                "owner": {"__typename": "User", "login": "dono"}, "creator": {"login": "Moriblo"},
                "repositories": page([{"nameWithOwner": r} if r else None for r in repos]),
                "fields": page([title_field, status, prio]),
-               "views": page([{"id": "V1", "name": "View 1", "number": 1, "layout": "TABLE_LAYOUT", "filter": None, "createdAt": "x", "updatedAt": "x",
-                               "configuration": {"visibleFields": page([{"id": "F_title", "name": "Title"}, {"id": "F_status", "name": "Status"}])},
-                               "groupByFields": page([]), "verticalGroupByFields": page([]),
-                               "sortByFields": page([{"direction": "ASC", "field": {"id": "F_prio", "name": "Prioridade"}}])},
-                              {"id": "V2", "name": "View 2", "number": 2, "layout": "BOARD_LAYOUT", "filter": "status:Todo", "createdAt": "x", "updatedAt": "x",
-                               "configuration": {"visibleFields": page([{"id": "F_title", "name": "Title"}])},
-                               "groupByFields": page([{"id": "F_status", "name": "Status"}]), "verticalGroupByFields": page([]), "sortByFields": page([])}]),
+               "views": page([{"id": "V1", "name": "View 1", "number": 1, "layout": "TABLE_LAYOUT", "filter": None, "createdAt": "x", "updatedAt": "x"},
+                              {"id": "V2", "name": "View 2", "number": 2, "layout": "BOARD_LAYOUT", "filter": "status:Todo", "createdAt": "x", "updatedAt": "x"}]),
                "workflows": page([{"id": f"W{i}", "name": f"wf{i}", "number": i, "enabled": True, "createdAt": "x", "updatedAt": "x"} for i in range(1, 7)]),
                "statusUpdates": page([])}
-    return {"details": details, "items": items, "total": len(items)}
+    # As partes das views vêm por consultas próprias (como no leitor): `view_parts` guarda o que cada uma devolve, por número da view.
+    view_parts = {1: {"configuration": {"visibleFields": page([{"id": "F_title", "name": "Title"}, {"id": "F_status", "name": "Status"}])},
+                      "groupByFields": page([]), "verticalGroupByFields": page([]),
+                      "sortByFields": page([{"direction": "ASC", "field": {"id": "F_prio", "name": "Prioridade"}}])},
+                  2: {"configuration": {"visibleFields": page([{"id": "F_title", "name": "Title"}])},
+                      "groupByFields": page([{"id": "F_status", "name": "Status"}]), "verticalGroupByFields": page([]), "sortByFields": page([])}}
+    return {"details": details, "items": items, "total": sum(1 for i in items if not i["isArchived"]), "view_parts": view_parts}
 
 
 class FakeGraph(http.server.BaseHTTPRequestHandler):
@@ -109,9 +112,12 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
     owner_exists = True
     http_fail = {}         # operationName -> código HTTP fixo
     gql_errors = {}        # operationName -> lista `errors`
+    malformed = set()      # operationName -> responde `node: null` (resposta fora do formato esperado)
+    gql_flaky = {}         # operationName -> quantas respostas com o erro interno do GitHub antes de responder certo
     flaky = {}             # operationName -> quantas respostas 500 antes de responder certo
     ratelimit = {}         # operationName -> quantas respostas 403 com Retry-After
     seen = []              # (operationName, método, Authorization)
+    archived_total = {}       # número do Project -> totalCount informado dos arquivados (para simular divergência)
     queries = {}              # operationName -> texto da última consulta enviada
     probe_requests = []       # nomes de tipo pedidos à sonda, na ordem
     probe_nodes = {}          # nome do tipo -> nó cru da introspecção (quando preenchido, tem prioridade sobre probe_types)
@@ -155,6 +161,11 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
         if cls.ratelimit.get(op, 0) > 0:
             cls.ratelimit[op] -= 1
             return self._send(403, {"message": "rate"}, {"Retry-After": "1", "X-RateLimit-Remaining": "0"})
+        if op in cls.malformed:
+            return self._send(200, {"data": {"node": None}})
+        if cls.gql_flaky.get(op, 0) > 0:
+            cls.gql_flaky[op] -= 1
+            return self._send(200, {"data": None, "errors": [{"type": "INTERNAL", "message": "Something went wrong while executing your query on 2026-10-04T05:14:27Z. Please include `ABC` when reporting this issue."}]})
         if op in cls.gql_errors:
             return self._send(200, {"data": None, "errors": cls.gql_errors[op]})
         size = g.PAGE
@@ -192,10 +203,24 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
         project = next((p for p in cls.projects if p["details"]["id"] == variables.get("id")), None)
         if op == "ProjectDetails":
             return self._send(200, {"data": {"node": project["details"]}})
+        live = [i for i in project["items"] if not i["isArchived"]] if project else []
         if op == "ProjectItems":
-            conn = self._page(project["items"], variables, size)
+            conn = self._page(live, variables, size)
             conn["totalCount"] = project["total"]
             return self._send(200, {"data": {"node": {"items": conn}}})
+        if op == "ProjectItemsArchived":
+            archived = [i for i in project["items"] if i["isArchived"]]
+            conn = self._page(archived, variables, size)
+            conn["totalCount"] = cls.archived_total.get(project["details"]["number"], len(archived))
+            return self._send(200, {"data": {"node": {"items": conn}}})
+        if op == "ProjectItemsOrder":
+            conn = self._page([{"id": i["id"]} for i in project["items"]], variables, size)
+            return self._send(200, {"data": {"node": {"items": conn}}})
+        view_keys = {"ProjectViewVisibleFields": "configuration", "ProjectViewGroupBy": "groupByFields",
+                     "ProjectViewVerticalGroupBy": "verticalGroupByFields", "ProjectViewSortBy": "sortByFields"}
+        if op in view_keys:
+            nodes = [dict(number=n, **{view_keys[op]: parts[view_keys[op]]}) for n, parts in sorted(project["view_parts"].items())]
+            return self._send(200, {"data": {"node": {"views": {"nodes": nodes}}}})
         self._send(400, {"message": "operação desconhecida"})
 
 
@@ -215,10 +240,13 @@ class ReadTest(unittest.TestCase):
         FakeGraph.projects = [make_project()]
         FakeGraph.repo_visible, FakeGraph.owner_exists = True, True
         FakeGraph.http_fail, FakeGraph.gql_errors, FakeGraph.flaky, FakeGraph.ratelimit = {}, {}, {}, {}
+        FakeGraph.gql_flaky = {}
+        FakeGraph.malformed = set()
         FakeGraph.seen = []
         FakeGraph.probe_malformed = False
         FakeGraph.probe_nodes = {}
         FakeGraph.queries = {}
+        FakeGraph.archived_total = {}
         FakeGraph.probe_requests = []
         FakeGraph.probe_mutations = ["createProjectV2", "copyProjectV2", "addProjectV2ItemById", "deleteIssue"]
         self.tmp = tempfile.TemporaryDirectory()
@@ -479,25 +507,39 @@ class ReadTest(unittest.TestCase):
         self.assertEqual(cm.exception.kind, "REFUSED")
         self.assertEqual(FakeGraph.seen, [])
 
-    def test_itens_arquivados_e_ordem_por_posicao_sao_pedidos(self):
+    def test_itens_arquivados_e_ordem_por_posicao_vem_em_consultas_proprias(self):
         FakeGraph.projects = [make_project(archived=2)]
         st = self.run_read()
-        query = FakeGraph.queries["ProjectItems"]
-        self.assertIn("archivedStates: [ARCHIVED, NOT_ARCHIVED]", query)               # sem isto o GitHub só entrega os não arquivados
-        self.assertIn("orderBy: {field: POSITION, direction: ASC}", query)
+        self.assertEqual(st["status"], "OK")
+        # A consulta principal é a que já rodou em run real, sem argumentos novos; os arquivados e a ordem são consultas à parte.
+        self.assertNotIn("archivedStates", FakeGraph.queries["ProjectItems"])
+        self.assertNotIn("orderBy", FakeGraph.queries["ProjectItems"])
+        self.assertIn("archivedStates: [ARCHIVED])", FakeGraph.queries["ProjectItemsArchived"])
+        self.assertIn("archivedStates: [ARCHIVED, NOT_ARCHIVED], orderBy: {field: POSITION, direction: ASC}", FakeGraph.queries["ProjectItemsOrder"])
         items = self.load("api-project-items.json")
         self.assertEqual([i["isArchived"] for i in items], [False] * 7 + [True] * 2)  # 6 issues + 1 rascunho + 2 arquivados
         self.assertEqual([i["position_order"] for i in items], list(range(9)))        # a posição fica registrada no próprio item
         checks = {c["check"]: c for c in st["checks"]}
-        self.assertEqual((checks["items_total"]["ok"], checks["items_total"]["read"]), (True, 9))
-        self.assertEqual(checks["archived_items"]["archived"], 2)
+        self.assertEqual((checks["items_total"]["ok"], checks["items_total"]["expected"], checks["items_total"]["read"]), (True, 7, 7))
+        self.assertEqual((checks["archived_items"]["ok"], checks["archived_items"]["expected"], checks["archived_items"]["read"]), (True, 2, 2))
+        project = self.load("api-projects.json")[0]
+        self.assertEqual(project["items_summary"]["archived"], 2)
+        self.assertTrue(all(v["status"] == "OK" for v in project["optional_reads"].values()))
 
-    def test_views_completas_sao_pedidas_e_guardadas(self):
+    def test_total_de_arquivados_divergente_reprova(self):
+        FakeGraph.projects = [make_project(archived=2)]
+        FakeGraph.archived_total = {13: 3}                                              # o GitHub diz 3 e entrega 2
+        st = self.run_read()
+        check = next(c for c in st["checks"] if c["check"] == "archived_items")
+        self.assertEqual((check["ok"], check["expected"], check["read"]), (False, 3, 2))
+        self.assertEqual(st["status"], "FAILED")
+
+    def test_partes_das_views_vem_em_consultas_proprias_e_sao_mescladas(self):
         self.run_read()
-        query = FakeGraph.queries["ProjectDetails"]
-        for piece in ("visibleFields(first: 100)", "groupByFields(first: 20)", "verticalGroupByFields(first: 20)", "sortByFields(first: 20)",
-                      "template", "multiSelectOptions"):
-            self.assertIn(piece, query)
+        self.assertNotIn("visibleFields", FakeGraph.queries["ProjectDetails"])           # a consulta principal não mudou
+        for op, piece in (("ProjectViewVisibleFields", "visibleFields(first: 100)"), ("ProjectViewGroupBy", "groupByFields(first: 20)"),
+                          ("ProjectViewVerticalGroupBy", "verticalGroupByFields(first: 20)"), ("ProjectViewSortBy", "sortByFields(first: 20)")):
+            self.assertIn(piece, FakeGraph.queries[op])
         views = self.load("api-projects.json")[0]["views"]["nodes"]
         self.assertEqual([(v["name"], v["layout"], v["filter"]) for v in views], [("View 1", "TABLE_LAYOUT", None), ("View 2", "BOARD_LAYOUT", "status:Todo")])
         self.assertEqual([f["name"] for f in views[0]["configuration"]["visibleFields"]["nodes"]], ["Title", "Status"])
@@ -506,14 +548,68 @@ class ReadTest(unittest.TestCase):
 
     def test_conexao_de_view_cortada_falha_a_conferencia(self):
         project = make_project()
-        project["details"]["views"]["nodes"][1]["sortByFields"]["pageInfo"]["hasNextPage"] = True
-        project["details"]["views"]["nodes"][0]["configuration"]["visibleFields"]["pageInfo"]["hasNextPage"] = True
+        project["view_parts"][2]["sortByFields"]["pageInfo"]["hasNextPage"] = True
+        project["view_parts"][1]["configuration"]["visibleFields"]["pageInfo"]["hasNextPage"] = True
         FakeGraph.projects = [project]
         st = self.run_read()
         check = next(c for c in st["checks"] if c["check"] == "connections_complete")
         self.assertFalse(check["ok"])
         self.assertEqual(sorted(check["truncated"]), ["views[1].visibleFields", "views[2].sortByFields"])
         self.assertEqual(st["status"], "FAILED")
+
+    def test_falha_de_leitura_opcional_vira_partial_e_o_resto_e_guardado(self):
+        FakeGraph.projects = [make_project(archived=1)]
+        FakeGraph.gql_errors = {"ProjectItemsArchived": [{"type": "INTERNAL", "message": "Something went wrong while executing your query"}],
+                                "ProjectItemsOrder": [{"type": "INTERNAL", "message": "boom"}],
+                                "ProjectViewGroupBy": [{"type": "INTERNAL", "message": "boom"}]}
+        st = self.run_read()
+        self.assertEqual((st["status"], st["count"]), ("PARTIAL", 1))
+        project = self.load("api-projects.json")[0]
+        reads = project["optional_reads"]
+        self.assertEqual({k: v["status"] for k, v in reads.items()},
+                         {"views.visibleFields": "OK", "views.groupByFields": "UNAVAILABLE", "views.verticalGroupByFields": "OK", "views.sortByFields": "OK",
+                          "items.archived": "UNAVAILABLE", "items.position": "UNAVAILABLE"})
+        self.assertIn("[ProjectItemsArchived]", reads["items.archived"]["detail"])        # o nome da operação diz qual consulta o GitHub recusou
+        self.assertNotIn("Unexpected", reads["items.archived"]["detail"])                 # erro da API é tratado como tal, não como falha inesperada
+        items = self.load("api-project-items.json")
+        self.assertEqual(len(items), 7)                                                   # o principal foi guardado; o arquivado não veio
+        self.assertTrue(all("position_order" not in i for i in items))
+        views = project["views"]["nodes"]
+        self.assertNotIn("groupByFields", views[0])
+        self.assertIn("sortByFields", views[0])                                           # as outras partes da view vieram
+        detail = " ".join(st["extra"]["discovery_notes"])
+        for label in ("items.archived", "items.position", "views.groupByFields"):
+            self.assertIn(label, detail)
+        self.assertIn("archived_items", {c["check"] for c in st["checks"]})
+        self.assertTrue(next(c for c in st["checks"] if c["check"] == "archived_items")["unavailable"])
+
+    def test_resposta_fora_do_formato_numa_leitura_opcional_nao_derruba(self):
+        FakeGraph.projects = [make_project(archived=1)]
+        FakeGraph.malformed = {"ProjectItemsOrder", "ProjectViewSortBy"}
+        st = self.run_read()
+        self.assertEqual((st["status"], st["count"]), ("PARTIAL", 1))
+        reads = self.load("api-projects.json")[0]["optional_reads"]
+        self.assertEqual((reads["items.position"]["status"], reads["views.sortByFields"]["status"]), ("UNAVAILABLE", "UNAVAILABLE"))
+        self.assertIn("Unexpected TypeError", reads["items.position"]["detail"])
+        self.assertEqual(reads["items.archived"]["status"], "OK")
+        self.assertEqual(len(self.load("api-project-items.json")), 8)                     # 7 principais + 1 arquivado
+
+    def test_erro_interno_do_github_e_repetido(self):
+        FakeGraph.gql_flaky = {"ProjectItems": 2}                                         # duas respostas com o erro interno, depois responde
+        st = self.run_read()
+        self.assertEqual(st["status"], "OK")
+        FakeGraph.gql_flaky = {"ProjectItems": 99}                                        # erro que nunca passa: FAILED com o nome da operação
+        st = self.run_read()
+        self.assertEqual(st["status"], "FAILED")
+        self.assertIn("[ProjectItems] Something went wrong", st["detail"])
+
+    def test_campo_de_selecao_multipla_deixa_a_classe_partial(self):
+        project = make_project()
+        project["details"]["fields"]["nodes"].append({"id": "F_multi", "name": "Tags", "dataType": "MULTI_SELECT", "__typename": "ProjectV2MultiSelectField"})
+        FakeGraph.projects = [project]
+        st = self.run_read()
+        self.assertEqual(st["status"], "PARTIAL")
+        self.assertIn("multi-select", " ".join(st["extra"]["discovery_notes"]))
 
     def test_so_consultas_de_verdade_passam_pelo_bloqueio(self):
         graph = g.Graph("http://127.0.0.1:1", TOKEN)

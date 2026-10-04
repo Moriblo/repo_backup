@@ -94,6 +94,8 @@ PAGE = 100
 MAX_PAGES = 500
 # Tentativas por requisição em falha transitória (rede, 5xx, limite de taxa).
 MAX_TRIES = 5
+# Início da mensagem do erro interno do GitHub (costuma ser transitório).
+INTERNAL_ERROR = "Something went wrong while executing your query"
 # Espera máxima, em segundos, por um limite de taxa. Acima disso a leitura falha.
 MAX_RATE_WAIT = 120
 
@@ -152,7 +154,7 @@ Q_BY_NUMBER = f"""query ProjectByNumber($owner: String!, $number: Int!) {{
 Q_DETAILS = f"""query ProjectDetails($id: ID!) {{
   node(id: $id) {{
     ... on ProjectV2 {{
-      id number title shortDescription readme public closed closedAt createdAt updatedAt url template
+      id number title shortDescription readme public closed closedAt createdAt updatedAt url
       owner {{ __typename ... on User {{ login }} ... on Organization {{ login }} }}
       creator {{ login }}
       repositories(first: {PAGE}) {{ totalCount {_PAGEINFO} nodes {{ nameWithOwner }} }}
@@ -162,7 +164,6 @@ Q_DETAILS = f"""query ProjectDetails($id: ID!) {{
           __typename
           ... on ProjectV2FieldCommon {{ id name dataType createdAt updatedAt }}
           ... on ProjectV2SingleSelectField {{ options {{ id name color description }} }}
-          ... on ProjectV2MultiSelectField {{ multiSelectOptions {{ id name color description }} }}
           ... on ProjectV2IterationField {{
             configuration {{
               duration startDay
@@ -172,29 +173,14 @@ Q_DETAILS = f"""query ProjectDetails($id: ID!) {{
           }}
         }}
       }}
-      views(first: 50) {{
-        totalCount {_PAGEINFO}
-        nodes {{
-          id name number layout filter createdAt updatedAt
-          configuration {{ visibleFields(first: 100) {{ {_FIELD_CONN} }} }}
-          groupByFields(first: 20) {{ {_FIELD_CONN} }}
-          verticalGroupByFields(first: 20) {{ {_FIELD_CONN} }}
-          sortByFields(first: 20) {{ totalCount {_PAGEINFO} nodes {{ direction {_FIELD_REF} }} }}
-        }}
-      }}
+      views(first: 50) {{ totalCount {_PAGEINFO} nodes {{ id name number layout filter createdAt updatedAt }} }}
       workflows(first: 50) {{ totalCount {_PAGEINFO} nodes {{ id name number enabled createdAt updatedAt }} }}
       statusUpdates(first: 50) {{ totalCount {_PAGEINFO} nodes {{ id body status startDate targetDate createdAt creator {{ login }} }} }}
     }}
   }}
 }}"""
 
-Q_ITEMS = f"""query ProjectItems($id: ID!, $after: String) {{
-  node(id: $id) {{
-    ... on ProjectV2 {{
-      items(first: {PAGE}, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED], orderBy: {{field: POSITION, direction: ASC}}) {{
-        totalCount {_PAGEINFO}
-        nodes {{
-          id type isArchived createdAt updatedAt
+_ITEM_NODE = f"""id type isArchived createdAt updatedAt
           creator {{ login }}
           content {{
             __typename
@@ -211,19 +197,53 @@ Q_ITEMS = f"""query ProjectItems($id: ID!, $after: String) {{
               ... on ProjectV2ItemFieldDateValue {{ date {_FIELD_REF} }}
               ... on ProjectV2ItemFieldSingleSelectValue {{ name optionId color description {_FIELD_REF} }}
               ... on ProjectV2ItemFieldIterationValue {{ title iterationId startDate duration {_FIELD_REF} }}
-              ... on ProjectV2ItemFieldMultiSelectValue {{ options {{ id name }} {_FIELD_REF} }}
               ... on ProjectV2ItemFieldLabelValue {{ labels(first: 20) {{ nodes {{ name }} }} {_FIELD_REF} }}
               ... on ProjectV2ItemFieldUserValue {{ users(first: 20) {{ nodes {{ login }} }} {_FIELD_REF} }}
               ... on ProjectV2ItemFieldMilestoneValue {{ milestone {{ number title }} {_FIELD_REF} }}
               ... on ProjectV2ItemFieldRepositoryValue {{ repository {{ nameWithOwner }} {_FIELD_REF} }}
               ... on ProjectV2ItemFieldPullRequestValue {{ pullRequests(first: 20) {{ nodes {{ number url }} }} {_FIELD_REF} }}
             }}
-          }}
+          }}"""
+
+
+def _items_query(name, args, node):
+    """Consulta dos itens de um Project; `args` são os argumentos extras de `items` (estados de arquivamento, ordem)."""
+    return f"""query {name}($id: ID!, $after: String) {{
+  node(id: $id) {{
+    ... on ProjectV2 {{
+      items(first: {PAGE}, after: $after{args}) {{
+        totalCount {_PAGEINFO}
+        nodes {{
+          {node}
         }}
       }}
     }}
   }}
 }}"""
+
+
+# Principal: a forma que já rodou em run real (os itens não arquivados). As leituras opcionais abaixo são separadas: se uma falhar,
+# a classe fica PARTIAL com a causa e o resto do backup é guardado.
+Q_ITEMS = _items_query("ProjectItems", "", _ITEM_NODE)
+Q_ITEMS_ARCHIVED = _items_query("ProjectItemsArchived", ", archivedStates: [ARCHIVED]", _ITEM_NODE)
+Q_ITEMS_ORDER = _items_query("ProjectItemsOrder", ", archivedStates: [ARCHIVED, NOT_ARCHIVED], orderBy: {field: POSITION, direction: ASC}", "id")
+
+
+def _view_part(name, selection):
+    return f"""query ProjectView{name}($id: ID!) {{
+  node(id: $id) {{
+    ... on ProjectV2 {{ views(first: 50) {{ nodes {{ number {selection} }} }} }}
+  }}
+}}"""
+
+
+# Partes das views, uma consulta cada, para uma falha do GitHub num atributo não perder os outros.
+VIEW_PARTS = {
+    "visibleFields": _view_part("VisibleFields", f"configuration {{ visibleFields(first: 100) {{ {_FIELD_CONN} }} }}"),
+    "groupByFields": _view_part("GroupBy", f"groupByFields(first: 20) {{ {_FIELD_CONN} }}"),
+    "verticalGroupByFields": _view_part("VerticalGroupBy", f"verticalGroupByFields(first: 20) {{ {_FIELD_CONN} }}"),
+    "sortByFields": _view_part("SortBy", f"sortByFields(first: 20) {{ totalCount {_PAGEINFO} nodes {{ direction {_FIELD_REF} }} }}"),
+}
 
 
 # Sonda do schema: só introspecção (consulta). Registra no inventário o que a API oferecia no momento do backup,
@@ -286,6 +306,11 @@ class Graph:
             try:
                 with urllib.request.urlopen(request, timeout=60) as response:
                     payload = json.loads(response.read().decode("utf-8"))
+                # Erro interno do GitHub ("Something went wrong while executing your query"): tenta de novo.
+                first_error = (payload.get("errors") or [{}])[0]
+                if payload.get("errors") and str(first_error.get("message", "")).startswith(INTERNAL_ERROR) and attempt < MAX_TRIES:
+                    sleep(2 * attempt)
+                    continue
                 break
             except urllib.error.HTTPError as exc:
                 if exc.code in (403, 429) and (exc.headers.get("Retry-After") or exc.headers.get("X-RateLimit-Remaining") == "0"):
@@ -306,7 +331,8 @@ class Graph:
         errors = payload.get("errors")
         if errors:
             first = errors[0]
-            raise GraphqlError(first.get("type") or "GRAPHQL_ERROR", first.get("message", ""))
+            # O nome da operação vai junto: com várias consultas, é o que diz qual delas o GitHub recusou.
+            raise GraphqlError(first.get("type") or "GRAPHQL_ERROR", f"[{name or 'sem nome'}] {first.get('message', '')}")
         return payload["data"]
 
 
@@ -440,11 +466,11 @@ def confirm_candidate(details, items, source, titles):
     return {"linked": linked, "matched": matched, "issue_items": len(issue_items), "reason": reason}
 
 
-def read_items(graph, project_id):
+def read_items(graph, project_id, query=None):
     """Todos os itens de um Project, paginados. Devolve (itens, totalCount informado)."""
     items, after, total = [], None, None
     for _ in range(MAX_PAGES):
-        data = graph.run_query(Q_ITEMS, {"id": project_id, "after": after})
+        data = graph.run_query(query or Q_ITEMS, {"id": project_id, "after": after})
         conn = data["node"]["items"]
         total = conn["totalCount"]
         items += conn["nodes"]
@@ -454,11 +480,13 @@ def read_items(graph, project_id):
     raise GraphqlError("LIMIT", f"mais de {MAX_PAGES} páginas")
 
 
-def check_project(details, items, total):
-    """Conferências de UM Project. Devolve (checks, quantidade de itens ocultos)."""
+def check_project(details, items, total, archived_total=None):
+    """Conferências de UM Project. Devolve (checks, quantidade de itens ocultos).
+    `total` é o totalCount dos itens não arquivados; `archived_total`, o dos arquivados (None = leitura opcional indisponível)."""
     checks = []
-    # 1. Total de itens lido contra o totalCount que a API informa.
-    checks.append({"check": "items_total", "expected": total, "read": len(items), "ok": total == len(items)})
+    # 1. Total de itens lido contra o totalCount que a API informa (não arquivados e, à parte, arquivados).
+    live = sum(1 for i in items if not i.get("isArchived"))
+    checks.append({"check": "items_total", "expected": total, "read": live, "ok": total == live})
     # 2. Nenhuma conexão cortada: o que a API ainda tinha para entregar e não foi lido.
     truncated = [n for n in ("repositories", "fields", "views", "workflows", "statusUpdates")
                  if (details.get(n) or {}).get("pageInfo", {}).get("hasNextPage")]
@@ -478,8 +506,13 @@ def check_project(details, items, total):
     #    leitura, mas é lacuna de preservação: torna a classe PARTIAL (informativo, `ok` = True).
     redacted = sum(1 for i in items if i["type"] == "REDACTED" or (i["type"] in ("ISSUE", "PULL_REQUEST") and not i.get("content")))
     checks.append({"check": "redacted_items", "ok": True, "redacted": redacted})
-    # 5. Itens arquivados: a leitura pede os dois estados (sem isso o GitHub só entrega os não arquivados). Informativo.
-    checks.append({"check": "archived_items", "ok": True, "archived": sum(1 for i in items if i.get("isArchived"))})
+    # 5. Itens arquivados: o GitHub só os entrega se pedidos (`archivedStates`), numa leitura opcional à parte. Disponível: o total
+    #    lido tem de bater com o informado. Indisponível: não é falha de leitura, mas a classe fica PARTIAL (ver cmd_read).
+    archived = sum(1 for i in items if i.get("isArchived"))
+    if archived_total is None:
+        checks.append({"check": "archived_items", "ok": True, "unavailable": True})
+    else:
+        checks.append({"check": "archived_items", "ok": archived_total == archived, "expected": archived_total, "read": archived})
     return checks, redacted
 
 
@@ -585,6 +618,40 @@ def parse_env():
     return token, scope, ids
 
 
+def optional_read(graph_call, label, extras):
+    """Executa uma leitura opcional. Falha vira `extras[label] = UNAVAILABLE` com a causa (e devolve None): nunca derruba o resto."""
+    try:
+        result = graph_call()
+        extras[label] = {"status": "OK"}
+        return result
+    except GraphqlError as exc:
+        extras[label] = {"status": "UNAVAILABLE", "detail": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        extras[label] = {"status": "UNAVAILABLE", "detail": f"Unexpected {type(exc).__name__}: {exc}"}
+    return None
+
+
+def read_optional_parts(graph, ref, details, items):
+    """Leituras opcionais de UM Project, cada uma numa consulta própria: partes das views, itens arquivados e ordem por posição.
+    Mescla o que veio em `details` e em `items`. Devolve (extras por rótulo, total informado de arquivados ou None, itens arquivados lidos)."""
+    extras = {}
+    for part, query in VIEW_PARTS.items():
+        nodes = optional_read(lambda q=query: graph.run_query(q, {"id": ref["id"]})["node"]["views"]["nodes"], f"views.{part}", extras)
+        by_number = {v["number"]: v for v in nodes or []}
+        for view in details["views"]["nodes"]:
+            for key, value in (by_number.get(view["number"]) or {}).items():
+                if key != "number":
+                    view[key] = value
+    archived = optional_read(lambda: read_items(graph, ref["id"], Q_ITEMS_ARCHIVED), "items.archived", extras)
+    order = optional_read(lambda: read_items(graph, ref["id"], Q_ITEMS_ORDER)[0], "items.position", extras)
+    archived_items, archived_total = archived if archived else ([], None)
+    if order is not None:
+        position = {i["id"]: n for n, i in enumerate(order)}
+        for item in items + archived_items:
+            item["position_order"] = position.get(item["id"])
+    return extras, archived_total, archived_items
+
+
 def cmd_read():
     """Lê os Projects do escopo e grava os arquivos do pacote e o api-projects-status.json."""
     token, scope, ids = parse_env()
@@ -605,8 +672,6 @@ def cmd_read():
         for ref in found:
             details = graph.run_query(Q_DETAILS, {"id": ref["id"]})["node"]
             items, total = read_items(graph, ref["id"])
-            for position, item in enumerate(items):
-                item["position_order"] = position                 # a leitura vem por POSITION: a posição fica registrada no próprio item
             if ref.get("_candidate"):
                 verdict = confirm_candidate(details, items, ids["source_repository"], titles)
                 if not verdict["linked"]:
@@ -618,10 +683,21 @@ def cmd_read():
                 details["linkage"] = {"method": "TITLE_MATCH", "matched": verdict["matched"], "issue_items": verdict["issue_items"]}
             else:
                 details["linkage"] = {"method": "VISIBLE_LINK"} if scope == "SOURCE_REPOSITORY" else {"method": "REQUESTED_SCOPE"}
-            checks, redacted = check_project(details, items, total)
-            details["items_summary"] = {"total": total, "read": len(items), "redacted": redacted,
+            # Leituras opcionais (views por parte, itens arquivados, ordem): falha de uma vira nota e PARTIAL, o resto é guardado.
+            extras, archived_total, archived_items = read_optional_parts(graph, ref, details, items)
+            items = items + archived_items
+            checks, redacted = check_project(details, items, total, archived_total)
+            details["items_summary"] = {"total": total, "read": len(items) - len(archived_items), "archived": len(archived_items), "redacted": redacted,
                                         "by_type": {t: sum(1 for i in items if i["type"] == t) for t in sorted({i["type"] for i in items})}}
             details["checks"] = checks
+            details["optional_reads"] = extras
+            for label, state in sorted(extras.items()):
+                if state["status"] != "OK":
+                    notes.append(f"Project #{details['number']}: optional read {label} unavailable ({state['detail']}).")
+                    partial = True
+            if any(f.get("dataType") == "MULTI_SELECT" for f in details["fields"]["nodes"]):
+                notes.append(f"Project #{details['number']} has multi-select fields: their options and item values are not read by this reader version.")
+                partial = True
             projects.append(details)
             all_items += [dict(i, project_number=details["number"], project_id=details["id"]) for i in items]
             partial = partial or redacted > 0
