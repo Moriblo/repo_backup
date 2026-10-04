@@ -101,6 +101,8 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
     flaky = {}             # operationName -> quantas respostas 500 antes de responder certo
     ratelimit = {}         # operationName -> quantas respostas 403 com Retry-After
     seen = []              # (operationName, método, Authorization)
+    probe_requests = []       # nomes de tipo pedidos à sonda, na ordem
+    probe_nodes = {}          # nome do tipo -> nó cru da introspecção (quando preenchido, tem prioridade sobre probe_types)
     probe_malformed = False   # a sonda recebe uma resposta fora do formato (o schema real pode diferir do esperado)
     probe_mutations = ["createProjectV2", "copyProjectV2", "addProjectV2ItemById", "deleteIssue"]
     probe_types = {"ProjectV2View": {"kind": "OBJECT", "fields": ["id", "name", "layout", "filter", "groupByFields"]},
@@ -162,6 +164,10 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
         if op == "ProbeMutations":
             return self._send(200, {"data": {"__schema": {"mutationType": {"fields": [{"name": n} for n in cls.probe_mutations]}}}})
         if op == "ProbeType":
+            cls.probe_requests.append(variables["name"])
+        if op == "ProbeType" and variables["name"] in cls.probe_nodes:
+            return self._send(200, {"data": {"__type": cls.probe_nodes[variables["name"]]}})
+        if op == "ProbeType":
             spec = cls.probe_types.get(variables["name"])
             if spec is None:
                 return self._send(200, {"data": {"__type": None}})
@@ -198,6 +204,8 @@ class ReadTest(unittest.TestCase):
         FakeGraph.http_fail, FakeGraph.gql_errors, FakeGraph.flaky, FakeGraph.ratelimit = {}, {}, {}, {}
         FakeGraph.seen = []
         FakeGraph.probe_malformed = False
+        FakeGraph.probe_nodes = {}
+        FakeGraph.probe_requests = []
         FakeGraph.probe_mutations = ["createProjectV2", "copyProjectV2", "addProjectV2ItemById", "deleteIssue"]
         self.tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.tmp.name)
@@ -490,6 +498,75 @@ class ReadTest(unittest.TestCase):
         self.assertEqual({s[3] for s in FakeGraph.seen}, {"query"})
         for p in self.root.rglob("*.json"):
             self.assertNotIn(TOKEN, p.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def sref(name, kind="SCALAR"):
+        return {"kind": kind, "name": name, "ofType": None}
+
+    @classmethod
+    def non_null(cls, ref):
+        return {"kind": "NON_NULL", "name": None, "ofType": ref}
+
+    def node(self, name, kind, **parts):
+        base = {"name": name, "kind": kind, "fields": None, "inputFields": None, "enumValues": None, "possibleTypes": None}
+        base.update(parts)
+        return base
+
+    def test_sonda_registra_argumentos_e_segue_os_tipos_de_projects(self):
+        S, N = self.sref, self.non_null
+        arg = lambda n, t: {"name": n, "type": t}
+        FakeGraph.probe_nodes = {
+            # ProjectV2.items tem argumentos; um deles é de um tipo de Projects (seguido) e outro não (não seguido).
+            "ProjectV2": self.node("ProjectV2", "OBJECT", fields=[
+                {"name": "items", "type": N(S("ProjectV2ItemConnection", "OBJECT")),
+                 "args": [arg("first", S("Int")), arg("orderBy", S("ProjectV2ItemOrder", "INPUT_OBJECT")), arg("query", S("String"))]},
+                {"name": "title", "type": N(S("String")), "args": []},
+                {"name": "views", "type": N(S("ProjectV2ViewConnection", "OBJECT")), "args": [arg("orderBy", S("ProjectV2ViewOrder", "INPUT_OBJECT"))]}]),
+            "ProjectV2ItemOrder": self.node("ProjectV2ItemOrder", "INPUT_OBJECT", inputFields=[
+                {"name": "field", "type": N(S("ProjectV2ItemOrderField", "ENUM"))}, {"name": "direction", "type": N(S("OrderDirection", "ENUM"))}]),
+            "ProjectV2ItemOrderField": self.node("ProjectV2ItemOrderField", "ENUM", enumValues=[{"name": "POSITION"}]),
+            "OrderDirection": self.node("OrderDirection", "ENUM", enumValues=[{"name": "ASC"}]),
+            # citado por dois tipos (ProjectV2ItemOrder e esta entrada): tem de ser pedido uma vez só
+            "ProjectV2ViewOrder": self.node("ProjectV2ViewOrder", "INPUT_OBJECT", inputFields=[
+                {"name": "field", "type": N(S("ProjectV2ItemOrderField", "ENUM"))}]),
+            "ProjectV2ItemConnection": self.node("ProjectV2ItemConnection", "OBJECT", fields=[
+                {"name": "content", "type": S("ProjectV2ItemContent", "UNION"), "args": []}]),
+            "ProjectV2ItemContent": self.node("ProjectV2ItemContent", "UNION", possibleTypes=[{"name": "Issue"}, {"name": "DraftIssue"}]),
+            # A entrada de cada mutation de ProjectV2 é sondada pelo nome (<Mutation>Input), mesmo sem ninguém citá-la.
+            "CopyProjectV2Input": self.node("CopyProjectV2Input", "INPUT_OBJECT", inputFields=[
+                {"name": "projectId", "type": N(S("ID"))}, {"name": "template", "type": S("ProjectV2TemplateOption", "INPUT_OBJECT")}]),
+            "ProjectV2TemplateOption": self.node("ProjectV2TemplateOption", "INPUT_OBJECT", inputFields=[]),
+        }
+        self.run_read()
+        probe = json.loads((self.root / "package" / "api-projects-inventory.json").read_text())["schema_probe"]
+        types = probe["types"]
+        self.assertEqual(types["ProjectV2"]["field_args"], {"items": {"first": "Int", "orderBy": "ProjectV2ItemOrder", "query": "String"},
+                                                           "views": {"orderBy": "ProjectV2ViewOrder"}})
+        self.assertNotIn("title", types["ProjectV2"]["field_args"])                       # campo sem argumentos não entra
+        self.assertEqual(types["ProjectV2ItemOrder"]["input_fields"], {"direction": "OrderDirection!", "field": "ProjectV2ItemOrderField!"})
+        self.assertEqual(types["ProjectV2ItemOrderField"]["enum_values"], ["POSITION"])   # seguido: o nome tem ProjectV2
+        self.assertNotIn("OrderDirection", types)                                         # não seguido: o nome não tem ProjectV2
+        self.assertEqual(types["ProjectV2ItemContent"]["possible_types"], ["DraftIssue", "Issue"])
+        self.assertEqual(types["CopyProjectV2Input"]["input_fields"], {"projectId": "ID!", "template": "ProjectV2TemplateOption"})
+        self.assertIn("ProjectV2TemplateOption", types)                                   # seguido a partir da entrada da mutation
+        for mutation in ("createProjectV2", "addProjectV2ItemById"):
+            self.assertIn(mutation[0].upper() + mutation[1:] + "Input", types)            # sondada pelo nome, mesmo ausente do schema (null)
+        self.assertNotIn("DeleteIssueInput", types)                                       # mutation que não é de ProjectV2 não entra
+        self.assertEqual(len(FakeGraph.probe_requests), len(set(FakeGraph.probe_requests)))   # nenhum tipo é pedido duas vezes
+        self.assertIn("ProjectV2ItemOrderField", FakeGraph.probe_requests)
+
+    def test_sonda_tem_teto_de_tipos(self):
+        S, N = self.sref, self.non_null
+        many = [{"name": f"f{n}", "type": N(S(f"ProjectV2Extra{n}", "OBJECT")), "args": []} for n in range(40)]
+        FakeGraph.probe_nodes = {"ProjectV2": self.node("ProjectV2", "OBJECT", fields=many)}
+        for n in range(40):
+            FakeGraph.probe_nodes[f"ProjectV2Extra{n}"] = self.node(f"ProjectV2Extra{n}", "OBJECT", fields=[])
+        with unittest.mock.patch.object(g, "PROBE_MAX_TYPES", 12):
+            self.run_read()
+        probe = json.loads((self.root / "package" / "api-projects-inventory.json").read_text())["schema_probe"]
+        self.assertEqual(probe["status"], "OK")
+        self.assertEqual(len(probe["types"]), 12)                                         # parou no teto
+        self.assertGreater(len(probe["types_not_followed"]), 0)                           # e diz o que deixou de seguir
 
     def test_falha_na_sonda_nunca_derruba_a_leitura(self):
         FakeGraph.gql_errors = {"ProbeMutations": [{"type": "FORBIDDEN", "message": "introspection disabled"}]}
