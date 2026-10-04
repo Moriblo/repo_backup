@@ -96,10 +96,14 @@ GIT_BASE = os.environ.get("GITHUB_GIT_BASE", "https://github.com").rstrip("/")
 
 # Arquivos do pacote: os dois primeiros são obrigatórios; os outros, só se existirem no backup.
 REQUIRED = ("source.bundle", "refs.tsv")
-OPTIONAL = ("lfs-objects.tar", "repo-metadata.json", "api-labels.json", "api-milestones.json", "api-issues.json", "api-issue-comments.json")
+OPTIONAL = ("lfs-objects.tar", "repo-metadata.json", "api-labels.json", "api-milestones.json", "api-issues.json", "api-issue-comments.json",
+            "api-issue-sub-issues.json", "api-issue-dependencies.json")
 # Classes de API restauradas e o arquivo principal do pacote de cada uma (as issues também usam os comentários).
-DATA_CLASSES = {"labels": "api-labels.json", "milestones": "api-milestones.json", "issues": "api-issues.json"}
-EXTRA_FILES = {"issues": ("api-issue-comments.json",)}
+DATA_CLASSES = {"labels": "api-labels.json", "milestones": "api-milestones.json", "issues": "api-issues.json",
+                "relations": "api-issue-sub-issues.json"}
+EXTRA_FILES = {"issues": ("api-issue-comments.json",), "relations": ("api-issue-dependencies.json",)}
+# Sub-issues e dependências vêm no pacote da classe issues do backup: a disposição que conta é a dela.
+EVIDENCE_CLASS = {"relations": "issues"}
 # Teto de escritas de conteúdo (issues, fechamentos e comentários) por execução: o GitHub limita cerca de 500 por hora.
 # Acima do teto a restauração de issues RECUSA antes de escrever qualquer coisa (não restaura pela metade).
 MAX_WRITES = int(os.environ.get("RESTORE_MAX_WRITES", "450"))
@@ -124,8 +128,10 @@ RESTORE_LIMITATIONS = {
                   "creator cannot be set, and milestone numbers may change when the source had gaps.",
     "issues": "Restored through the API as an equivalent copy (issues and comments): the original number, author and dates are kept only in a "
               "header at the top of each body; @mentions, cross-repository references and issue URLs are wrapped in backticks so nobody is notified "
-              "and the source is never touched; no assignees are set; reactions, events, edit history, lock state, issue types, sub-issues and "
-              "dependencies are not restored; issue numbers may change when the source had gaps or pull requests.",
+              "and the source is never touched; no assignees are set; reactions, events, edit history, lock state and issue types are not "
+              "restored; issue numbers may change when the source had gaps or pull requests.",
+    "relations": "Restored through the API between the restored issues of this repository (sub-issues and blocked-by/blocking dependencies); "
+                 "relations whose other end is in another repository, or is not a restored issue, are reported and not restored.",
 }
 # Só estas refs voltam ao GitHub; refs/pull/* e outras são gerenciadas por ele e não aceitam envio.
 PUSHABLE = ("refs/heads/", "refs/tags/")
@@ -260,11 +266,12 @@ def data_classes_plan(ev, files):
     """O que fazer com labels e milestones: READY (restaurar) ou NOT_VERIFIED (com o motivo), nunca "vazio" por engano."""
     out = {}
     for cls, fname in DATA_CLASSES.items():
-        obj = next((o for o in ev["objects"] if o["object_class"] == cls), None)
+        ev_cls = EVIDENCE_CLASS.get(cls, cls)
+        obj = next((o for o in ev["objects"] if o["object_class"] == ev_cls), None)
         if obj is None:
-            out[cls] = {"status": "NOT_VERIFIED", "reason": f"a evidência do backup não traz a classe {cls}"}
+            out[cls] = {"status": "NOT_VERIFIED", "reason": f"a evidência do backup não traz a classe {ev_cls}"}
         elif obj["disposition"] not in DATA_READY:
-            out[cls] = {"status": "NOT_VERIFIED", "reason": f"a classe {cls} ficou {obj['disposition']} no backup"}
+            out[cls] = {"status": "NOT_VERIFIED", "reason": f"a classe {ev_cls} ficou {obj['disposition']} no backup"}
         elif any(n not in files for n in (fname,) + EXTRA_FILES.get(cls, ())):
             missing = [n for n in (fname,) + EXTRA_FILES.get(cls, ()) if n not in files]
             out[cls] = {"status": "NOT_VERIFIED", "reason": f"{', '.join(missing)} não está no pacote do backup"}
@@ -569,8 +576,9 @@ def plan_issue_writes(source, issues, comments, label_names, milestone_map):
 
 
 def restore_issues(repo, plan):
-    """Cria as issues e os comentários do plano, em ordem, e confere lendo de volta. Devolve (resultado, mapa antigo -> novo)."""
-    mapping, errors, writes = {}, [], 0
+    """Cria as issues e os comentários do plano, em ordem, e confere lendo de volta.
+    Devolve (resultado, mapa antigo -> novo número, mapa antigo -> id novo; o id é o que as relações usam)."""
+    mapping, ids, errors, writes = {}, {}, [], 0
     closed = 0
     for p in plan:
         body = {"title": p["title"], "body": p["body"]}
@@ -585,6 +593,7 @@ def restore_issues(repo, plan):
             break
         new = created["number"]
         mapping[p["old"]] = new
+        ids[p["old"]] = created.get("id")
         if p["closed"]:
             status, payload = gh_write("PATCH", f"/repos/{repo}/issues/{new}", {"state": "closed", "state_reason": p["reason"]})
             writes += 1
@@ -606,7 +615,7 @@ def restore_issues(repo, plan):
     if errors:
         # Interrompe na primeira falha: continuar deslocaria a numeração das próximas. Nada é apagado.
         out.update(status="FAILED", errors=errors[:10], reason=f"{len(errors)} erro(s) de escrita; a restauração das issues foi interrompida")
-        return out, mapping
+        return out, mapping, ids
     # Conferência: lê de volta cada issue pelo número (não por listagem, que pode atrasar) e compara com o que foi enviado.
     attempts = 0
     for attempts in range(1, VERIFY_TRIES + 1):
@@ -618,7 +627,7 @@ def restore_issues(repo, plan):
     out["verify_attempts"] = attempts
     if mismatches:
         out.update(status="FAILED", mismatches=mismatches[:10], reason=f"{len(mismatches)} divergência(s) na leitura de volta")
-    return out, mapping
+    return out, mapping, ids
 
 
 def issue_mismatches(repo, plan, mapping):
@@ -652,11 +661,149 @@ def issue_mismatches(repo, plan, mapping):
     return bad
 
 
+def plan_relation_writes(source, sub_issues, dependencies, issue_map, ids, budget):
+    """Monta, SEM escrever nada, as relações a gravar entre issues restauradas deste repositório.
+    Devolve (subs, deps, pulados, motivo): subs = [(pai, filha)], deps = [(bloqueada, bloqueadora)] em números ANTIGOS.
+    Relação com ponta em outro repositório ou fora do mapa é só reportada (pulados). motivo != None recusa a classe."""
+    lower = source.lower()
+
+    def usable(ref, kind, label):
+        if (ref.get("repository") or "").lower() != lower:
+            return f"{kind} {label}: a outra ponta está em {ref.get('repository')}, outro repositório"
+        if ref.get("number") not in issue_map or ids.get(ref.get("number")) is None:
+            return f"{kind} {label}: a issue {ref.get('number')} não foi restaurada"
+        return None
+
+    subs, deps, skipped = set(), set(), []
+    for e in sub_issues:
+        parent = e.get("parent")
+        for c in e.get("children") or []:
+            label = f"{parent} -> {c.get('number')}"
+            why = None if parent in issue_map and ids.get(parent) is not None else f"sub-issue {label}: a issue pai {parent} não foi restaurada"
+            why = why or usable(c, "sub-issue", label)
+            if why:
+                skipped.append(why)
+            else:
+                subs.add((parent, c["number"]))
+    # A dependência é simétrica: "A bloqueada por B" é o mesmo que "B bloqueia A". A união dos dois lados cobre um lado ausente.
+    for e in dependencies:
+        issue = e.get("issue")
+        for r in e.get("blocked_by") or []:
+            label = f"{issue} bloqueada por {r.get('number')}"
+            why = None if issue in issue_map and ids.get(issue) is not None else f"dependência {label}: a issue {issue} não foi restaurada"
+            why = why or usable(r, "dependência", label)
+            if why:
+                skipped.append(why)
+            else:
+                deps.add((issue, r["number"]))
+        for r in e.get("blocking") or []:
+            label = f"{issue} bloqueia {r.get('number')}"
+            why = None if issue in issue_map and ids.get(issue) is not None else f"dependência {label}: a issue {issue} não foi restaurada"
+            why = why or usable(r, "dependência", label)
+            if why:
+                skipped.append(why)
+            else:
+                deps.add((r["number"], issue))
+    subs, deps = sorted(subs), sorted(deps)
+    if len(subs) + len(deps) > budget:
+        return None, None, skipped, (f"as relações exigiriam {len(subs) + len(deps)} escritas, acima do que resta do teto de {MAX_WRITES} por "
+                                     f"execução ({max(budget, 0)}); nenhuma relação foi escrita")
+    return subs, deps, sorted(set(skipped)), None
+
+
+def restore_relations(repo, subs, deps, issue_map, ids, skipped):
+    """Grava sub-issues e dependências (pelo id novo de cada issue) e confere lendo de volta. Para na primeira falha."""
+    errors, writes = [], 0
+    for parent, child in subs:
+        status, payload = gh_write("POST", f"/repos/{repo}/issues/{issue_map[parent]}/sub_issues", {"sub_issue_id": ids[child]})
+        writes += 1
+        if status != 201:
+            errors.append(f"sub-issue {parent} -> {child}: " + short(status, payload))
+            break
+    if not errors:
+        for blocked, blocker in deps:
+            status, payload = gh_write("POST", f"/repos/{repo}/issues/{issue_map[blocked]}/dependencies/blocked_by", {"issue_id": ids[blocker]})
+            writes += 1
+            if status != 201:
+                errors.append(f"dependência {blocked} bloqueada por {blocker}: " + short(status, payload))
+                break
+    out = {"status": "OK", "sub_issues": len(subs), "dependencies": len(deps), "writes": writes, "skipped": len(skipped)}
+    if skipped:
+        out.update(status="PARTIAL", skipped_examples=skipped[:10])
+    if errors:
+        out.update(status="FAILED", errors=errors[:10], reason=f"{len(errors)} erro(s) de escrita; a restauração das relações foi interrompida")
+        return out
+    attempts = 0
+    for attempts in range(1, VERIFY_TRIES + 1):
+        mismatches = relation_mismatches(repo, subs, deps, issue_map)
+        if not mismatches:
+            break
+        if attempts < VERIFY_TRIES:
+            time.sleep(VERIFY_DELAY)
+    out["verify_attempts"] = attempts
+    if mismatches:
+        out.update(status="FAILED", mismatches=mismatches[:10], reason=f"{len(mismatches)} divergência(s) na leitura de volta das relações")
+    return out
+
+
+def relation_mismatches(repo, subs, deps, issue_map):
+    """Lê de volta TODAS as issues restauradas (GET direto) e compara relações esperadas com as do alvo, nos dois sentidos:
+    nada a menos e nada a mais. Devolve a lista de divergências (textos)."""
+    new_of = issue_map
+    exp_children, exp_parent, exp_blocked_by, exp_blocking = {}, {}, {}, {}
+    for parent, child in subs:
+        exp_children.setdefault(new_of[parent], set()).add(new_of[child])
+        exp_parent[new_of[child]] = new_of[parent]
+    for blocked, blocker in deps:
+        exp_blocked_by.setdefault(new_of[blocked], set()).add(new_of[blocker])
+        exp_blocking.setdefault(new_of[blocker], set()).add(new_of[blocked])
+    bad = []
+    for old, new in sorted(issue_map.items()):
+        status, item = gh("GET", f"/repos/{repo}/issues/{new}")
+        if status != 200:
+            bad.append(f"issue {old}: leitura HTTP {status}")
+            continue
+        sub_total = (item.get("sub_issues_summary") or {}).get("total", 0)
+        dep = item.get("issue_dependencies_summary") or {}
+        want_children = exp_children.get(new, set())
+        want_by, want_ing = exp_blocked_by.get(new, set()), exp_blocking.get(new, set())
+        if sub_total != len(want_children):
+            bad.append(f"issue {old}: {sub_total} sub-issue(s), esperava {len(want_children)}")
+        if dep.get("total_blocked_by", 0) != len(want_by) or dep.get("total_blocking", 0) != len(want_ing):
+            bad.append(f"issue {old}: dependências {dep.get('total_blocked_by', 0)}/{dep.get('total_blocking', 0)}, esperava {len(want_by)}/{len(want_ing)}")
+        if issue_number_of(item.get("parent_issue_url")) != exp_parent.get(new):
+            bad.append(f"issue {old}: o pai no alvo é {issue_number_of(item.get('parent_issue_url'))}, esperava {exp_parent.get(new)}")
+        for route, want in (("sub_issues", want_children), ("dependencies/blocked_by", want_by), ("dependencies/blocking", want_ing)):
+            if not want:
+                continue
+            status, listed = gh_list(f"/repos/{repo}/issues/{new}/{route}")
+            if status != 200 or {x.get("number") for x in listed} != want:
+                bad.append(f"issue {old}: a lista {route} não confere (HTTP {status})")
+    return bad
+
+
+def restore_relations_class(plan, repo, issue_result, issue_map, ids):
+    """Decide e executa a classe relations. Só roda se as issues voltaram OK (política 6A) e o plano cabe no teto."""
+    info = plan.get("classes", {}).get("relations", {"status": "NOT_VERIFIED", "reason": "o plano não traz a classe relations"})
+    if info["status"] != "READY":
+        return {"status": "NOT_VERIFIED", "reason": info["reason"]}
+    if issue_result.get("status") != "OK":
+        return {"status": "NOT_VERIFIED", "reason": "as relações dependem das issues, que não foram restauradas com sucesso"}
+    pkg = RESTORE_DIR / "package"
+    sub_issues = json.loads((pkg / "api-issue-sub-issues.json").read_text(encoding="utf-8"))
+    dependencies = json.loads((pkg / "api-issue-dependencies.json").read_text(encoding="utf-8"))
+    budget = MAX_WRITES - int(issue_result.get("writes", 0))
+    subs, deps, skipped, reason = plan_relation_writes(plan["source_repository"], sub_issues, dependencies, issue_map, ids, budget)
+    if reason:
+        return {"status": "NOT_VERIFIED", "reason": reason, "skipped": len(skipped), "skipped_examples": skipped[:10]}
+    return restore_relations(repo, subs, deps, issue_map, ids, skipped)
+
+
 def restore_data_classes(plan, repo):
-    """Restaura labels, milestones e issues do plano. Devolve ({classe: resultado}, mapa de milestones, mapa de issues)."""
-    results, mapping, issue_map = {}, {}, {}
+    """Restaura labels, milestones, issues e relações do plano. Devolve ({classe: resultado}, mapa de milestones, mapa de issues)."""
+    results, mapping, issue_map, ids = {}, {}, {}, {}
     for cls, fname in DATA_CLASSES.items():
-        if cls == "issues":
+        if cls in ("issues", "relations"):
             continue
         info = plan.get("classes", {}).get(cls, {"status": "NOT_VERIFIED", "reason": "o plano não traz a classe"})
         if info["status"] != "READY":
@@ -683,7 +830,8 @@ def restore_data_classes(plan, repo):
         if reason:
             results["issues"] = {"status": "NOT_VERIFIED", "reason": reason}
         else:
-            results["issues"], issue_map = restore_issues(repo, wplan)
+            results["issues"], issue_map, ids = restore_issues(repo, wplan)
+    results["relations"] = restore_relations_class(plan, repo, results["issues"], issue_map, ids)
     return results, mapping, issue_map
 
 
@@ -852,8 +1000,8 @@ def cmd_build_evidence():
     objects = [{"object_class": "git", "object_id": f"{target}", "disposition": disposition, "evidence": evidence_files,
                 "limitation": limitation}]
     limitations = [{"limitation_id": "LIM-restore-scope", "restriction_id": None, "object_class": None,
-                    "description": "This stage restores git (branches, tags, LFS), labels, milestones and issues (with comments). Sub-issues, dependencies, projects and every "
-                                   "other class kept in the backup package are NOT restored; see RESTAURAR.txt."}]
+                    "description": "This stage restores git (branches, tags, LFS), labels, milestones, issues (with comments) and the sub-issue and dependency relations between "
+                                   "restored issues. Projects and every other class kept in the backup package are NOT restored; see RESTAURAR.txt."}]
     # Labels e milestones: o resultado de cada classe vem do restore; sem ele (git não restaurado), NOT-VERIFIED.
     planned = plan.get("classes", {})
     results = res.get("classes", {}) if ok else {}
@@ -865,9 +1013,11 @@ def cmd_build_evidence():
             reason = (planned.get(cls) or {}).get("reason") if planned.get(cls, {}).get("status") == "NOT_VERIFIED" else None
             r = {"status": "NOT_VERIFIED", "reason": reason or "a restauração não chegou a esta classe"}
         object_id = f"{target}#{cls}"
-        if r["status"] == "OK":
-            disp = "PRESERVED-AS-EQUIVALENT-REPRESENTATION"
+        if r["status"] in ("OK", "PARTIAL"):
+            disp = "PRESERVED-AS-EQUIVALENT-REPRESENTATION" if r["status"] == "OK" else "PARTIALLY-PRESERVED"
             lim = RESTORE_LIMITATIONS[cls]
+            if r["status"] == "PARTIAL":
+                lim += f" {r.get('skipped')} relation(s) were not restored: " + "; ".join(r.get("skipped_examples", [])[:5]) + "."
             if cls == "labels" and r.get("extras"):
                 lim += f" Default GitHub labels that do not exist in the source remain in the target: {', '.join(r['extras'][:12])}."
             if cls in ("milestones", "issues") and r.get("numbers_changed"):

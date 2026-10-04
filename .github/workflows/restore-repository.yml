@@ -19,7 +19,7 @@
 #   e NUNCA pode ser a origem; envia só refs/heads/* e refs/tags/* (sem --force) e o LFS; define a branch padrão e
 #   confere as refs. Depois recria as labels e os milestones do mesmo backup (sem apagar nada; as labels padrão do
 #   GitHub que não existem na origem ficam) e as issues com comentários (cópia equivalente, com @menções e referências
-#   cruzadas neutralizadas e sem assignees) e confere o resultado. Sub-issues, dependências e Projects NÃO são restaurados nesta etapa
+#   cruzadas neutralizadas e sem assignees) e confere o resultado. Sub-issues e dependências entre as issues restauradas voltam na classe relations (etapa 3b); Projects NÃO são restaurados nesta etapa
 #   (o RESTAURAR.txt do backup explica o que fazer à mão). refs/pull/* não voltam (o GitHub não aceita).
 #
 # SEQUÊNCIA DOS PASSOS (não reordenar; ver BACKUP_REPOSITORY.md)
