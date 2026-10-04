@@ -110,6 +110,9 @@ LIMITATIONS = [
     "needs the `repo` scope. Items whose content is hidden are counted as redacted and make the "
     "class PARTIAL. Issue and pull request text is preserved by their own object classes.",
     "Nested lists inside a single value (labels, users, pull requests of one field value) are read up to 20 entries.",
+    "Views are read with layout, filter, visible fields, grouping, vertical grouping and sorting. Workflows are read only as name, "
+    "number and enabled state: the GitHub API does not expose their rules (trigger, filter, action). Project collaborators are not read.",
+    "Items are read in POSITION order, archived items included (`position_order` is the index in that order).",
 ]
 
 # Uma operação `mutation` (ou `subscription`) no documento: a palavra sozinha, seguida do nome opcional e de `{` ou `(`.
@@ -120,6 +123,7 @@ MUTATION_OP = re.compile(r"(?<![\w\"])(mutation|subscription)(?![\w\"])\s*(\w+\s
 _PROJECT_REF = "id number title"
 _PAGEINFO = "pageInfo { hasNextPage endCursor }"
 _FIELD_REF = "field { ... on ProjectV2FieldCommon { id name } }"
+_FIELD_CONN = "totalCount " + _PAGEINFO + " nodes { ... on ProjectV2FieldCommon { id name } }"
 
 Q_OF_REPOSITORY = f"""query ProjectsOfRepository($owner: String!, $name: String!, $after: String) {{
   repository(owner: $owner, name: $name) {{
@@ -148,7 +152,7 @@ Q_BY_NUMBER = f"""query ProjectByNumber($owner: String!, $number: Int!) {{
 Q_DETAILS = f"""query ProjectDetails($id: ID!) {{
   node(id: $id) {{
     ... on ProjectV2 {{
-      id number title shortDescription readme public closed closedAt createdAt updatedAt url
+      id number title shortDescription readme public closed closedAt createdAt updatedAt url template
       owner {{ __typename ... on User {{ login }} ... on Organization {{ login }} }}
       creator {{ login }}
       repositories(first: {PAGE}) {{ totalCount {_PAGEINFO} nodes {{ nameWithOwner }} }}
@@ -158,6 +162,7 @@ Q_DETAILS = f"""query ProjectDetails($id: ID!) {{
           __typename
           ... on ProjectV2FieldCommon {{ id name dataType createdAt updatedAt }}
           ... on ProjectV2SingleSelectField {{ options {{ id name color description }} }}
+          ... on ProjectV2MultiSelectField {{ multiSelectOptions {{ id name color description }} }}
           ... on ProjectV2IterationField {{
             configuration {{
               duration startDay
@@ -167,7 +172,16 @@ Q_DETAILS = f"""query ProjectDetails($id: ID!) {{
           }}
         }}
       }}
-      views(first: 50) {{ totalCount {_PAGEINFO} nodes {{ id name number layout filter createdAt updatedAt }} }}
+      views(first: 50) {{
+        totalCount {_PAGEINFO}
+        nodes {{
+          id name number layout filter createdAt updatedAt
+          configuration {{ visibleFields(first: 100) {{ {_FIELD_CONN} }} }}
+          groupByFields(first: 20) {{ {_FIELD_CONN} }}
+          verticalGroupByFields(first: 20) {{ {_FIELD_CONN} }}
+          sortByFields(first: 20) {{ totalCount {_PAGEINFO} nodes {{ direction {_FIELD_REF} }} }}
+        }}
+      }}
       workflows(first: 50) {{ totalCount {_PAGEINFO} nodes {{ id name number enabled createdAt updatedAt }} }}
       statusUpdates(first: 50) {{ totalCount {_PAGEINFO} nodes {{ id body status startDate targetDate createdAt creator {{ login }} }} }}
     }}
@@ -177,7 +191,7 @@ Q_DETAILS = f"""query ProjectDetails($id: ID!) {{
 Q_ITEMS = f"""query ProjectItems($id: ID!, $after: String) {{
   node(id: $id) {{
     ... on ProjectV2 {{
-      items(first: {PAGE}, after: $after) {{
+      items(first: {PAGE}, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED], orderBy: {{field: POSITION, direction: ASC}}) {{
         totalCount {_PAGEINFO}
         nodes {{
           id type isArchived createdAt updatedAt
@@ -197,6 +211,7 @@ Q_ITEMS = f"""query ProjectItems($id: ID!, $after: String) {{
               ... on ProjectV2ItemFieldDateValue {{ date {_FIELD_REF} }}
               ... on ProjectV2ItemFieldSingleSelectValue {{ name optionId color description {_FIELD_REF} }}
               ... on ProjectV2ItemFieldIterationValue {{ title iterationId startDate duration {_FIELD_REF} }}
+              ... on ProjectV2ItemFieldMultiSelectValue {{ options {{ id name }} {_FIELD_REF} }}
               ... on ProjectV2ItemFieldLabelValue {{ labels(first: 20) {{ nodes {{ name }} }} {_FIELD_REF} }}
               ... on ProjectV2ItemFieldUserValue {{ users(first: 20) {{ nodes {{ login }} }} {_FIELD_REF} }}
               ... on ProjectV2ItemFieldMilestoneValue {{ milestone {{ number title }} {_FIELD_REF} }}
@@ -448,6 +463,10 @@ def check_project(details, items, total):
     truncated = [n for n in ("repositories", "fields", "views", "workflows", "statusUpdates")
                  if (details.get(n) or {}).get("pageInfo", {}).get("hasNextPage")]
     truncated += ["item.fieldValues" for i in items if i["fieldValues"]["pageInfo"]["hasNextPage"]][:1]
+    for view in (details.get("views") or {}).get("nodes", []):
+        conns = {"visibleFields": (view.get("configuration") or {}).get("visibleFields"), "groupByFields": view.get("groupByFields"),
+                 "verticalGroupByFields": view.get("verticalGroupByFields"), "sortByFields": view.get("sortByFields")}
+        truncated += [f"views[{view['number']}].{n}" for n, c in conns.items() if c and c.get("pageInfo", {}).get("hasNextPage")]
     checks.append({"check": "connections_complete", "ok": not truncated, "truncated": truncated})
     # 3. Todo valor de campo de seleção cita uma opção que existe no campo.
     options = {f["id"]: {o["id"] for o in f.get("options", [])} for f in details["fields"]["nodes"] if "options" in f}
@@ -459,6 +478,8 @@ def check_project(details, items, total):
     #    leitura, mas é lacuna de preservação: torna a classe PARTIAL (informativo, `ok` = True).
     redacted = sum(1 for i in items if i["type"] == "REDACTED" or (i["type"] in ("ISSUE", "PULL_REQUEST") and not i.get("content")))
     checks.append({"check": "redacted_items", "ok": True, "redacted": redacted})
+    # 5. Itens arquivados: a leitura pede os dois estados (sem isso o GitHub só entrega os não arquivados). Informativo.
+    checks.append({"check": "archived_items", "ok": True, "archived": sum(1 for i in items if i.get("isArchived"))})
     return checks, redacted
 
 
@@ -584,6 +605,8 @@ def cmd_read():
         for ref in found:
             details = graph.run_query(Q_DETAILS, {"id": ref["id"]})["node"]
             items, total = read_items(graph, ref["id"])
+            for position, item in enumerate(items):
+                item["position_order"] = position                 # a leitura vem por POSITION: a posição fica registrada no próprio item
             if ref.get("_candidate"):
                 verdict = confirm_candidate(details, items, ids["source_repository"], titles)
                 if not verdict["linked"]:

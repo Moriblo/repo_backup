@@ -42,7 +42,7 @@ DEFAULT_TITLES = ["Erro ao salvar a configuração", "Melhorar a documentação 
                   "Ideia: exportar relatório", "Revisar a política de senhas", "Tarefa já concluída"]
 
 
-def make_project(number=13, title="Quadro de teste (backup_teste_issues)", repos=(SOURCE,), issue_titles=None, hidden=False, drafts=1):
+def make_project(number=13, title="Quadro de teste (backup_teste_issues)", repos=(SOURCE,), issue_titles=None, hidden=False, drafts=1, archived=0):
     """Um Project como o GraphQL o devolve: 6 issues (ou `issue_titles`) e `drafts` rascunhos.
 
     hidden=True imita o token sem acesso ao repositório privado (run real req-20261003-002): o item de
@@ -80,12 +80,23 @@ def make_project(number=13, title="Quadro de teste (backup_teste_issues)", repos
                                   "createdAt": "2026-10-02T19:26:20Z", "updatedAt": "2026-10-02T19:26:20Z", "creator": {"login": "Moriblo"},
                                   "assignees": {"nodes": []}},
                       "fieldValues": {"pageInfo": {"hasNextPage": False}, "nodes": [text_value("Rascunho sem issue"), value(status, "S0", "Todo")]}})
+    for a in range(archived):
+        k = len(plan) + drafts + a + 1
+        items.append({"id": f"PVTI_{k}", "type": "ISSUE", "isArchived": True, "createdAt": "2026-10-02T19:26:30Z", "updatedAt": "2026-10-02T19:26:40Z",
+                      "creator": {"login": "Moriblo"}, "content": None,
+                      "fieldValues": {"pageInfo": {"hasNextPage": False}, "nodes": [text_value("Item arquivado"), value(status, "S2", "Done")]}})
     details = {"id": f"PVT_{number}", "number": number, "title": title, "shortDescription": None, "readme": None, "public": False, "closed": False,
                "closedAt": None, "createdAt": "2026-10-02T19:26:15Z", "updatedAt": "2026-10-02T19:26:30Z", "url": f"https://github.com/users/dono/projects/{number}",
                "owner": {"__typename": "User", "login": "dono"}, "creator": {"login": "Moriblo"},
                "repositories": page([{"nameWithOwner": r} if r else None for r in repos]),
                "fields": page([title_field, status, prio]),
-               "views": page([{"id": "V1", "name": "View 1", "number": 1, "layout": "TABLE_LAYOUT", "filter": None, "createdAt": "x", "updatedAt": "x"}]),
+               "views": page([{"id": "V1", "name": "View 1", "number": 1, "layout": "TABLE_LAYOUT", "filter": None, "createdAt": "x", "updatedAt": "x",
+                               "configuration": {"visibleFields": page([{"id": "F_title", "name": "Title"}, {"id": "F_status", "name": "Status"}])},
+                               "groupByFields": page([]), "verticalGroupByFields": page([]),
+                               "sortByFields": page([{"direction": "ASC", "field": {"id": "F_prio", "name": "Prioridade"}}])},
+                              {"id": "V2", "name": "View 2", "number": 2, "layout": "BOARD_LAYOUT", "filter": "status:Todo", "createdAt": "x", "updatedAt": "x",
+                               "configuration": {"visibleFields": page([{"id": "F_title", "name": "Title"}])},
+                               "groupByFields": page([{"id": "F_status", "name": "Status"}]), "verticalGroupByFields": page([]), "sortByFields": page([])}]),
                "workflows": page([{"id": f"W{i}", "name": f"wf{i}", "number": i, "enabled": True, "createdAt": "x", "updatedAt": "x"} for i in range(1, 7)]),
                "statusUpdates": page([])}
     return {"details": details, "items": items, "total": len(items)}
@@ -101,6 +112,7 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
     flaky = {}             # operationName -> quantas respostas 500 antes de responder certo
     ratelimit = {}         # operationName -> quantas respostas 403 com Retry-After
     seen = []              # (operationName, método, Authorization)
+    queries = {}              # operationName -> texto da última consulta enviada
     probe_requests = []       # nomes de tipo pedidos à sonda, na ordem
     probe_nodes = {}          # nome do tipo -> nó cru da introspecção (quando preenchido, tem prioridade sobre probe_types)
     probe_malformed = False   # a sonda recebe uma resposta fora do formato (o schema real pode diferir do esperado)
@@ -133,6 +145,7 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
         cls = FakeGraph
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         op, variables = body.get("operationName"), body.get("variables") or {}
+        cls.queries[op] = body["query"]
         cls.seen.append((op, self.command, self.headers.get("Authorization"), body["query"].lstrip()[:5]))
         if op in cls.http_fail:
             return self._send(cls.http_fail[op], {"message": "x"})
@@ -205,6 +218,7 @@ class ReadTest(unittest.TestCase):
         FakeGraph.seen = []
         FakeGraph.probe_malformed = False
         FakeGraph.probe_nodes = {}
+        FakeGraph.queries = {}
         FakeGraph.probe_requests = []
         FakeGraph.probe_mutations = ["createProjectV2", "copyProjectV2", "addProjectV2ItemById", "deleteIssue"]
         self.tmp = tempfile.TemporaryDirectory()
@@ -464,6 +478,42 @@ class ReadTest(unittest.TestCase):
             graph.run_query("mutation M { deleteProjectV2(input: {projectId: \"x\"}) { clientMutationId } }")
         self.assertEqual(cm.exception.kind, "REFUSED")
         self.assertEqual(FakeGraph.seen, [])
+
+    def test_itens_arquivados_e_ordem_por_posicao_sao_pedidos(self):
+        FakeGraph.projects = [make_project(archived=2)]
+        st = self.run_read()
+        query = FakeGraph.queries["ProjectItems"]
+        self.assertIn("archivedStates: [ARCHIVED, NOT_ARCHIVED]", query)               # sem isto o GitHub só entrega os não arquivados
+        self.assertIn("orderBy: {field: POSITION, direction: ASC}", query)
+        items = self.load("api-project-items.json")
+        self.assertEqual([i["isArchived"] for i in items], [False] * 7 + [True] * 2)  # 6 issues + 1 rascunho + 2 arquivados
+        self.assertEqual([i["position_order"] for i in items], list(range(9)))        # a posição fica registrada no próprio item
+        checks = {c["check"]: c for c in st["checks"]}
+        self.assertEqual((checks["items_total"]["ok"], checks["items_total"]["read"]), (True, 9))
+        self.assertEqual(checks["archived_items"]["archived"], 2)
+
+    def test_views_completas_sao_pedidas_e_guardadas(self):
+        self.run_read()
+        query = FakeGraph.queries["ProjectDetails"]
+        for piece in ("visibleFields(first: 100)", "groupByFields(first: 20)", "verticalGroupByFields(first: 20)", "sortByFields(first: 20)",
+                      "template", "multiSelectOptions"):
+            self.assertIn(piece, query)
+        views = self.load("api-projects.json")[0]["views"]["nodes"]
+        self.assertEqual([(v["name"], v["layout"], v["filter"]) for v in views], [("View 1", "TABLE_LAYOUT", None), ("View 2", "BOARD_LAYOUT", "status:Todo")])
+        self.assertEqual([f["name"] for f in views[0]["configuration"]["visibleFields"]["nodes"]], ["Title", "Status"])
+        self.assertEqual(views[0]["sortByFields"]["nodes"], [{"direction": "ASC", "field": {"id": "F_prio", "name": "Prioridade"}}])
+        self.assertEqual([f["name"] for f in views[1]["groupByFields"]["nodes"]], ["Status"])
+
+    def test_conexao_de_view_cortada_falha_a_conferencia(self):
+        project = make_project()
+        project["details"]["views"]["nodes"][1]["sortByFields"]["pageInfo"]["hasNextPage"] = True
+        project["details"]["views"]["nodes"][0]["configuration"]["visibleFields"]["pageInfo"]["hasNextPage"] = True
+        FakeGraph.projects = [project]
+        st = self.run_read()
+        check = next(c for c in st["checks"] if c["check"] == "connections_complete")
+        self.assertFalse(check["ok"])
+        self.assertEqual(sorted(check["truncated"]), ["views[1].visibleFields", "views[2].sortByFields"])
+        self.assertEqual(st["status"], "FAILED")
 
     def test_so_consultas_de_verdade_passam_pelo_bloqueio(self):
         graph = g.Graph("http://127.0.0.1:1", TOKEN)
