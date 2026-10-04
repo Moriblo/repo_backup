@@ -82,6 +82,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 import urllib.error
@@ -110,6 +111,10 @@ LIMITATIONS = [
     "class PARTIAL. Issue and pull request text is preserved by their own object classes.",
     "Nested lists inside a single value (labels, users, pull requests of one field value) are read up to 20 entries.",
 ]
+
+# Uma operação `mutation` (ou `subscription`) no documento: a palavra sozinha, seguida do nome opcional e de `{` ou `(`.
+# Não pega `mutationType` (campo da introspecção) nem a palavra entre aspas (`__type(name: "Mutation")`).
+MUTATION_OP = re.compile(r"(?<![\w\"])(mutation|subscription)(?![\w\"])\s*(\w+\s*)?[({]", re.IGNORECASE)
 
 # Consultas. Cada uma tem nome (operationName) e só LÊ. Os trechos repetidos ficam em constantes.
 _PROJECT_REF = "id number title"
@@ -206,6 +211,25 @@ Q_ITEMS = f"""query ProjectItems($id: ID!, $after: String) {{
 }}"""
 
 
+# Sonda do schema: só introspecção (consulta). Registra no inventário o que a API oferecia no momento do backup,
+# para as decisões de restauração (o que se pode criar) e de cobertura do backup (o que se pode ler) terem evidência.
+_TYPE_REF = "kind name ofType { kind name ofType { kind name ofType { kind name } } }"
+Q_PROBE_MUTATIONS = "query ProbeMutations { __schema { mutationType { fields { name } } } }"
+Q_PROBE_TYPE = f"""query ProbeType($name: String!) {{
+  __type(name: $name) {{
+    name kind
+    fields {{ name type {{ {_TYPE_REF} }} }}
+    inputFields {{ name type {{ {_TYPE_REF} }} }}
+    enumValues {{ name }}
+  }}
+}}"""
+# Tipos que importam para a restauração de Projects (entradas de criação) e para a cobertura do backup (views, workflows...).
+PROBE_TYPES = ("ProjectV2", "ProjectV2View", "ProjectV2Workflow", "ProjectV2StatusUpdate", "ProjectV2Item", "ProjectV2FieldCommon",
+               "CreateProjectV2Input", "CopyProjectV2Input", "CreateProjectV2FieldInput", "UpdateProjectV2FieldInput",
+               "UpdateProjectV2Input", "AddProjectV2DraftIssueInput", "UpdateProjectV2ItemPositionInput",
+               "CreateProjectV2StatusUpdateInput", "ProjectV2CustomFieldType")
+
+
 class GraphqlError(Exception):
     """Falha da API (HTTP ou lista `errors` do GraphQL) que não adianta repetir."""
 
@@ -229,7 +253,7 @@ class Graph:
 
     def run_query(self, query, variables=None):
         """Envia UMA consulta e devolve `data`. Recusa qualquer coisa que não seja `query`."""
-        if "mutation" in query.lower():
+        if not query.lstrip().startswith("query") or MUTATION_OP.search(query):
             raise GraphqlError("REFUSED", "mutation não é permitida neste leitor")
         name = query.split("(", 1)[0].split()[1] if query.lstrip().startswith("query") else ""
         body = json.dumps({"query": query, "variables": variables or {}, "operationName": name}).encode()
@@ -434,6 +458,45 @@ def check_project(details, items, total):
     return checks, redacted
 
 
+def type_name(ref):
+    """Texto curto de uma referência de tipo da introspecção, como `String!` ou `[ID!]!`."""
+    if ref is None:
+        return "?"
+    inner = ref.get("name") or (type_name(ref.get("ofType")) if ref.get("ofType") else "?")
+    if ref.get("kind") == "NON_NULL":
+        return inner + "!"
+    if ref.get("kind") == "LIST":
+        return f"[{inner}]"
+    return inner
+
+
+def probe_schema(graph):
+    """Introspecção do schema (só consulta). Nunca levanta: qualquer falha vira {"status": "UNAVAILABLE", ...}."""
+    try:
+        fields = graph.run_query(Q_PROBE_MUTATIONS)["__schema"]["mutationType"]["fields"]
+        mutations = sorted(f["name"] for f in fields)
+        types = {}
+        for name in PROBE_TYPES:
+            node = graph.run_query(Q_PROBE_TYPE, {"name": name})["__type"]
+            if node is None:
+                types[name] = None
+                continue
+            entry = {"kind": node["kind"]}
+            if node.get("fields") is not None:
+                entry["fields"] = {f["name"]: type_name(f["type"]) for f in node["fields"]}
+            if node.get("inputFields") is not None:
+                entry["input_fields"] = {f["name"]: type_name(f["type"]) for f in node["inputFields"]}
+            if node.get("enumValues") is not None:
+                entry["enum_values"] = [v["name"] for v in node["enumValues"]]
+            types[name] = entry
+        return {"status": "OK", "captured_at": now(), "mutations_total": len(mutations),
+                "project_v2_mutations": [m for m in mutations if "projectv2" in m.lower()], "types": types}
+    except GraphqlError as exc:
+        return {"status": "UNAVAILABLE", "detail": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "UNAVAILABLE", "detail": f"Unexpected {type(exc).__name__}: {exc}"}
+
+
 def write_json(path, data):
     """Grava JSON legível e determinístico; devolve o conteúdo em bytes (para o SHA-256)."""
     raw = (json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
@@ -536,7 +599,9 @@ def cmd_read():
         print(f"API_READ projects: {status} count={len(projects)} items={len(all_items)}")
 
     inventory = {"schema": "api-projects-inventory/1", "scope": scope, "scope_identifiers": ids, "captured_at": now(),
-                 "api_base": graph.url, "classes": {"projects": entry}, "limitations": LIMITATIONS}
+                 "api_base": graph.url, "classes": {"projects": entry}, "limitations": LIMITATIONS,
+                 "schema_probe": probe_schema(graph)}
+    print(f"API_PROBE projects: {inventory['schema_probe']['status']}")
     write_json(package / "api-projects-inventory.json", inventory)
     write_json(evidence / "api-projects-status.json", inventory)
 
