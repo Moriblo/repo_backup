@@ -162,8 +162,9 @@ def fail(err, state):
 
 # --- GitHub (API REST e Git) --------------------------------------------------------------
 
-def gh(method, path, body=None, token=None, retries=3):
-    """Chamada à API do GitHub. Devolve (status, json). Repete em 502/503/504. Nunca imprime o token."""
+def gh(method, path, body=None, token=None, retries=3, headers_out=None):
+    """Chamada à API do GitHub. Devolve (status, json). Repete em 502/503/504. Nunca imprime o token.
+    `headers_out`, se dado, recebe os cabeçalhos da resposta (nomes em minúsculas)."""
     token = token or os.environ.get("RESTORE_TOKEN", "")
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
                "Authorization": f"Bearer {token}"}
@@ -177,6 +178,8 @@ def gh(method, path, body=None, token=None, retries=3):
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 raw = resp.read()
+                if headers_out is not None:
+                    headers_out.update({k.lower(): v for k, v in resp.headers.items()})
                 return resp.status, (json.loads(raw) if raw else {})
         except urllib.error.HTTPError as exc:
             raw = exc.read()
@@ -878,9 +881,14 @@ def cmd_restore():
             raise RestoreError(42, "TARGET_EXISTS", f"o repositório {target} já existe; a restauração só cria repositórios novos")
         if status != 404:
             raise RestoreError(43, "TARGET_CHECK_FAILED", "não foi possível confirmar que o alvo não existe: " + short(status, payload))
-        status, user = gh("GET", "/user")
+        user_headers = {}
+        status, user = gh("GET", "/user", headers_out=user_headers)
         if status != 200 or "login" not in user:
             raise RestoreError(43, "TOKEN_INVALID", "o token de escrita foi recusado: " + short(status, user))
+        # Escopos do token (só os nomes): o GitHub os devolve num cabeçalho para token clássico; token fine-grained não tem o cabeçalho.
+        raw_scopes = user_headers.get("x-oauth-scopes")
+        state["token_scopes"] = sorted(x.strip() for x in raw_scopes.split(",") if x.strip()) if raw_scopes is not None else None
+        print("RESTORE_TOKEN " + json.dumps({"scopes": state["token_scopes"]}), flush=True)
 
         # 3. Criação: sempre PRIVADO. Descrição e página vêm do metadado salvo (se houver).
         meta = plan.get("metadata") or {}

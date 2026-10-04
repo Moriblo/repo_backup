@@ -147,6 +147,7 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
     list_lag = 0                 # as listagens de issues e comentários omitem as últimas N (atraso de índice do GitHub)
     get_lag = {}                 # número da issue -> quantas leituras diretas ainda respondem 404 (atraso transitório)
     comments_status = None       # força o status da leitura dos comentários de uma issue (ex.: 500)
+    token_scopes = "repo, workflow, project"   # cabeçalho X-OAuth-Scopes de GET /user; None = sem cabeçalho (token fine-grained)
     rel_sub = {}                 # repo -> {número do pai: [números das filhas]}
     rel_dep = {}                 # repo -> conjunto de (bloqueada, bloqueadora)
     rel_fail = {}                # trecho da rota -> status de erro na escrita de relação
@@ -346,7 +347,15 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
             items = cls.labels.get(repo, []) if kind == "labels" else cls.milestones.get(repo, [])
             return self._paged(items)
         if self.path == "/user":
-            return self._send(cls.user_status or 200, {"login": LOGIN} if not cls.user_status else {"message": "x"})
+            raw = json.dumps({"login": LOGIN} if not cls.user_status else {"message": "x"}).encode()
+            self.send_response(cls.user_status or 200)
+            if cls.token_scopes is not None:
+                self.send_header("X-OAuth-Scopes", cls.token_scopes)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         name = self.path[len("/repos/"):]
         if cls.target_status and self.path != f"/repos/{SOURCE}":
             return self._send(cls.target_status, {"message": "x"})
@@ -559,6 +568,7 @@ class Base(unittest.TestCase):
         FakeGitHub.default_labels = ["bug", "documentation", "enhancement"]
         FakeGitHub.rel_fail, FakeGitHub.rel_ignore, FakeGitHub.rel_extra, FakeGitHub.rel_list_lag = {}, False, False, 0
         FakeGitHub.rel_no_parent = FakeGitHub.rel_phantom = False
+        FakeGitHub.token_scopes = "repo, workflow, project"
         FakeGitHub.relation_bodies, FakeGitHub.issue_fail = [], {}
         FakeGitHub.labels, FakeGitHub.milestones, FakeGitHub.label_fail, FakeGitHub.milestone_fail = {}, {}, {}, {}
         FakeGitHub.ignore_color = FakeGitHub.ignore_state = FakeGitHub.ignore_description = False
@@ -1370,6 +1380,30 @@ class NeutralizeTest(unittest.TestCase):
 
     def test_texto_vazio(self):
         self.assertEqual((self.n(None), self.n("")), ("", ""))
+
+
+class TokenScopesTest(Base):
+    """Os escopos do token (só os nomes) vão para o resultado, sem o token."""
+
+    def test_escopos_do_token_classico_vao_para_o_resultado(self):
+        self.fetched()
+        proc = self.restore("restore")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.evidence("restore-result.json")["token_scopes"], ["project", "repo", "workflow"])
+        self.assertIn('RESTORE_TOKEN {"scopes": ["project", "repo", "workflow"]}', proc.stdout)
+        self.assert_no_leak()
+
+    def test_token_sem_o_cabecalho_fica_null(self):
+        FakeGitHub.token_scopes = None                      # fine-grained não devolve X-OAuth-Scopes
+        self.fetched()
+        self.assertEqual(self.restore("restore").returncode, 0)
+        self.assertIsNone(self.evidence("restore-result.json")["token_scopes"])
+
+    def test_token_sem_escopo_project_aparece_sem_ele(self):
+        FakeGitHub.token_scopes = "repo, workflow"
+        self.fetched()
+        self.assertEqual(self.restore("restore").returncode, 0)
+        self.assertEqual(self.evidence("restore-result.json")["token_scopes"], ["repo", "workflow"])
 
 
 class RelationsTest(Base):

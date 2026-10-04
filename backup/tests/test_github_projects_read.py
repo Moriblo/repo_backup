@@ -101,6 +101,10 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
     flaky = {}             # operationName -> quantas respostas 500 antes de responder certo
     ratelimit = {}         # operationName -> quantas respostas 403 com Retry-After
     seen = []              # (operationName, método, Authorization)
+    probe_malformed = False   # a sonda recebe uma resposta fora do formato (o schema real pode diferir do esperado)
+    probe_mutations = ["createProjectV2", "copyProjectV2", "addProjectV2ItemById", "deleteIssue"]
+    probe_types = {"ProjectV2View": {"kind": "OBJECT", "fields": ["id", "name", "layout", "filter", "groupByFields"]},
+                   "CreateProjectV2Input": {"kind": "INPUT_OBJECT", "inputFields": ["ownerId", "title"]}}
 
     def log_message(self, *args):
         pass
@@ -153,6 +157,19 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
         if op == "ProjectByNumber":
             hit = next((p for p in cls.projects if p["details"]["number"] == variables["number"]), None)
             return self._send(200, {"data": {"repositoryOwner": {"__typename": "User", "login": "dono", "projectV2": refs(hit) if hit else None}}})
+        if op == "ProbeMutations" and cls.probe_malformed:
+            return self._send(200, {"data": {"__schema": None}})
+        if op == "ProbeMutations":
+            return self._send(200, {"data": {"__schema": {"mutationType": {"fields": [{"name": n} for n in cls.probe_mutations]}}}})
+        if op == "ProbeType":
+            spec = cls.probe_types.get(variables["name"])
+            if spec is None:
+                return self._send(200, {"data": {"__type": None}})
+            ref = {"kind": "NON_NULL", "name": None, "ofType": {"kind": "SCALAR", "name": "String", "ofType": None}}
+            lst = lambda names: [{"name": n, "type": ref} for n in names]
+            return self._send(200, {"data": {"__type": {"name": variables["name"], "kind": spec["kind"], "enumValues": None,
+                                                         "fields": lst(spec["fields"]) if "fields" in spec else None,
+                                                         "inputFields": lst(spec["inputFields"]) if "inputFields" in spec else None}}})
         project = next((p for p in cls.projects if p["details"]["id"] == variables.get("id")), None)
         if op == "ProjectDetails":
             return self._send(200, {"data": {"node": project["details"]}})
@@ -180,6 +197,8 @@ class ReadTest(unittest.TestCase):
         FakeGraph.repo_visible, FakeGraph.owner_exists = True, True
         FakeGraph.http_fail, FakeGraph.gql_errors, FakeGraph.flaky, FakeGraph.ratelimit = {}, {}, {}, {}
         FakeGraph.seen = []
+        FakeGraph.probe_malformed = False
+        FakeGraph.probe_mutations = ["createProjectV2", "copyProjectV2", "addProjectV2ItemById", "deleteIssue"]
         self.tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.tmp.name)
 
@@ -437,6 +456,60 @@ class ReadTest(unittest.TestCase):
             graph.run_query("mutation M { deleteProjectV2(input: {projectId: \"x\"}) { clientMutationId } }")
         self.assertEqual(cm.exception.kind, "REFUSED")
         self.assertEqual(FakeGraph.seen, [])
+
+    def test_so_consultas_de_verdade_passam_pelo_bloqueio(self):
+        graph = g.Graph("http://127.0.0.1:1", TOKEN)
+        for query in ("mutation { deleteProjectV2(input: {projectId: \"x\"}) { clientMutationId } }",
+                      "mutation($i: ID!) { deleteProjectV2(input: {projectId: $i}) { clientMutationId } }",
+                      "query Q { x }\nmutation\n  M { y }",
+                      "subscription S { x }",
+                      "query Q { x } subscription S { y }",         # segunda operação no mesmo documento
+                      "{ viewer { login } }",                       # não começa por `query`: recusada
+                      "  MUTATION M { x }"):
+            with self.assertRaises(g.GraphqlError, msg=query) as cm:
+                graph.run_query(query)
+            self.assertEqual(cm.exception.kind, "REFUSED", query)
+        self.assertEqual(FakeGraph.seen, [])
+        # A introspecção cita "mutation" sem ser uma operação: o bloqueio não pode pegá-la (e a sonda usa estas consultas).
+        for query in (g.Q_PROBE_MUTATIONS, g.Q_PROBE_TYPE):
+            self.assertIsNone(g.MUTATION_OP.search(query), query)
+
+    def test_sonda_do_schema_vai_no_inventario(self):
+        self.run_read()
+        probe = json.loads((self.root / "package" / "api-projects-inventory.json").read_text())["schema_probe"]
+        self.assertEqual(probe["status"], "OK")
+        self.assertEqual(probe["mutations_total"], 4)
+        self.assertEqual(probe["project_v2_mutations"], ["addProjectV2ItemById", "copyProjectV2", "createProjectV2"])   # só as de Projects
+        self.assertEqual(probe["types"]["ProjectV2View"]["fields"], {n: "String!" for n in ("id", "name", "layout", "filter", "groupByFields")})
+        self.assertEqual(probe["types"]["CreateProjectV2Input"]["input_fields"], {"ownerId": "String!", "title": "String!"})
+        self.assertIsNone(probe["types"]["ProjectV2Workflow"])           # tipo que a API não tem aparece como null, não some
+        status = json.loads((self.root / "evidence" / "api-projects-status.json").read_text())
+        self.assertEqual(status["schema_probe"]["status"], "OK")
+        self.assertIn("API_PROBE projects: OK", self.out)
+        # Só consultas, e o token não vai para os arquivos.
+        self.assertEqual({s[3] for s in FakeGraph.seen}, {"query"})
+        for p in self.root.rglob("*.json"):
+            self.assertNotIn(TOKEN, p.read_text(encoding="utf-8"))
+
+    def test_falha_na_sonda_nunca_derruba_a_leitura(self):
+        FakeGraph.gql_errors = {"ProbeMutations": [{"type": "FORBIDDEN", "message": "introspection disabled"}]}
+        st = self.run_read()
+        self.assertEqual((st["status"], st["count"]), ("OK", 1))                  # a classe projects não é afetada
+        probe = json.loads((self.root / "package" / "api-projects-inventory.json").read_text())["schema_probe"]
+        self.assertEqual(probe["status"], "UNAVAILABLE")
+        self.assertIn("introspection disabled", probe["detail"])
+        self.assertNotIn("Unexpected", probe["detail"])             # erro da API é tratado como tal, não como falha inesperada
+        FakeGraph.gql_errors = {}
+        FakeGraph.probe_malformed = True                                          # resposta fora do formato: também não derruba
+        st = self.run_read()
+        self.assertEqual(st["status"], "OK")
+        probe = json.loads((self.root / "package" / "api-projects-inventory.json").read_text())["schema_probe"]
+        self.assertEqual(probe["status"], "UNAVAILABLE")
+        self.assertIn("Unexpected", probe["detail"])
+        FakeGraph.probe_malformed = False
+        FakeGraph.http_fail = {"ProbeType": 500}
+        self.run_read()
+        self.assertEqual(json.loads((self.root / "package" / "api-projects-inventory.json").read_text())["schema_probe"]["status"], "UNAVAILABLE")
 
     def test_entrada_invalida_sai_com_64(self):
         cases = [{}, {"PROJECTS_TOKEN": "t", "PROJECTS_SCOPE": "OUTRO", "PROJECTS_SCOPE_IDS": "{}"},
