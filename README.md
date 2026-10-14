@@ -5,6 +5,7 @@ A origem é sempre somente leitura; o OneDrive usa OAuth delegado (`Files.ReadWr
 
 ## Por onde começar
 - **`BACKUP_REPOSITORY.md`**: protocolo (em inglês) e, no final, o *Guia operacional* (em português) com players, fluxo, arquivos, segredos e códigos de saída.
+- **`docs/contexto/STATUS_ATUAL.md`**: onde o projeto está, próximos passos e registro de decisões do HITL. Leia primeiro numa sessão nova. As instruções de continuidade estão em `docs/contexto/INSTRUCOES_DO_PROJETO.md`.
 - **`backup/capabilities.yaml`**: registro das capabilities, do Mnemonic (`backup_repository` → `BKP_REPO`) e dos artefatos.
 
 ## Como funciona, em uma frase
