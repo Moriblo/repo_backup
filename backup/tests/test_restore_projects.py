@@ -64,6 +64,7 @@ class World:
         self.parent_of = {}                     # número novo da filha -> número novo do pai (o que a API REST devolve em parent_issue_url)
         self.close_on_value = False             # qualquer valor gravado num item de issue fecha a issue (um workflow inesperado)
         self.fail_nth_message = "Content already exists in this project"
+        self.fail_nth_type = "UNPROCESSABLE"
         self.fail_nth = {}                      # operationName -> número da chamada que falha (as anteriores funcionam)
         self.calls = {}
         self.fail = {}                          # operationName -> lista `errors`
@@ -106,7 +107,7 @@ class FakeAPI(http.server.BaseHTTPRequestHandler):
             return self._send({"data": None, "errors": [{"type": "INTERNAL", "message": "Something went wrong while executing your query. Please include `X`."}]})
         w.calls[op] = w.calls.get(op, 0) + 1
         if op in w.fail_nth and w.calls[op] == w.fail_nth[op]:
-            return self._send({"data": None, "errors": [{"type": "UNPROCESSABLE", "message": w.fail_nth_message}]})
+            return self._send({"data": None, "errors": [{"type": w.fail_nth_type, "message": w.fail_nth_message}]})
         if op in w.fail:
             return self._send({"data": None, "errors": w.fail[op]})
         mutation = re.search(r"\{ (\w+)\(input", body["query"]) if body["query"].lstrip().startswith("mutation") else None
@@ -582,9 +583,10 @@ class RestoreTest(Base):
     def test_checklist_dos_workflows(self):
         result = self.run_restore()
         flows = {w["name"]: w for w in result["projects"][0]["workflows"]}
-        self.assertEqual(flows["wf1"]["action"], "ligar (não existe no Project restaurado)")
+        self.assertEqual(flows["wf1"]["action"], "não listado pela API; configure o filtro e ligue à mão")
         text = (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8")
-        self.assertIn("wf1: no backup LIGADO; no restaurado ausente", text)
+        self.assertIn("wf1: no backup LIGADO; no restaurado não listado pela API; ação: não listado pela API; configure o filtro e ligue à mão", text)
+        self.assertNotIn("não existe", text)
         self.assertIn("https://github.com/users/dono/projects/1", text)
         self.assertNotIn(TOKEN, text)
         details, items = source_project()
@@ -896,6 +898,106 @@ class WorkflowInterferenceTest(Base):
         result = self.run_restore()
         self.assertEqual(self.project()["items"][0]["values"]["Status"]["select"], "In Progress")
         self.assertEqual(result["status"], "OK")
+
+
+class TimingTest(Base):
+    """4c: o tempo de cada etapa e as esperas (pausa fixa, repetição, limite de taxa) ficam no resultado, para explicar um passo longo."""
+
+    def test_tempo_por_etapa_com_as_fases_do_project(self):
+        proj = self.run_restore()["projects"][0]
+        stages = proj["seconds_by_stage"]
+        for stage in ("criação do Project", "metadados", "campos", "views", "itens", "espera dos workflows", "conferência dos itens", "valores",
+                      "arquivados e status updates", "conferência", "concluído"):
+            self.assertIn(stage, stages, stages)
+        self.assertTrue(all(isinstance(v, float) and v >= 0 for v in stages.values()))
+        self.assertNotIn("_stage_started", proj)
+
+    def test_espera_dos_workflows_aparece_como_etapa_propria(self):
+        import unittest.mock
+        clock = {"now": 100.0}
+
+        def fake_sleep(seconds):
+            clock["now"] += seconds
+        with unittest.mock.patch.object(rp.time, "monotonic", side_effect=lambda: clock["now"]), unittest.mock.patch.object(rp.time, "sleep", fake_sleep):
+            proj = self.run_restore(settle=7.0)["projects"][0]
+        self.assertEqual(proj["seconds_by_stage"]["espera dos workflows"], 7.0)
+
+    def test_etapa_da_falha_tem_o_tempo_fechado(self):
+        self.world.fail["RstAddIssueItem"] = [{"type": "UNPROCESSABLE", "message": "Resource not accessible"}]
+        proj = self.run_restore()["projects"][0]
+        self.assertIn("itens", proj["seconds_by_stage"])
+        self.assertNotIn("_stage_started", proj)
+
+    def test_pausa_fixa_entre_escritas_e_somada(self):
+        import unittest.mock
+        with unittest.mock.patch.object(rp.time, "sleep"):
+            result = self.run_restore(write_delay=0.05)
+        self.assertEqual(result["waits"]["pausa entre escritas"], round(result["writes"] * 0.05, 1))
+        self.assertEqual(result["projects"][0]["waits"]["pausa entre escritas"], result["waits"]["pausa entre escritas"])
+        self.assertEqual((result["waits"]["repetição de erro"], result["waits"]["limite de taxa"]), (0.0, 0.0))
+
+    def test_repeticao_de_erro_interno_e_somada(self):
+        import unittest.mock
+        self.world.flaky["RstCreateProject"] = 2                              # espera 2 s e 4 s
+        with unittest.mock.patch.object(rp.time, "sleep"):
+            result = self.run_restore()
+        self.assertEqual(result["waits"]["repetição de erro"], 6.0)
+
+    def test_limite_de_taxa_e_somado(self):
+        import unittest.mock
+        self.world.fail_nth["RstCreateProject"] = 1
+        self.world.fail_nth_type = "RATE_LIMITED"
+        self.world.fail_nth_message = "API rate limit exceeded"
+        with unittest.mock.patch.object(rp.time, "sleep"):
+            result = self.run_restore(rate_wait=7.0)
+        self.assertEqual(result["status"], "OK", result)
+        self.assertEqual(result["waits"]["limite de taxa"], 7.0)
+        self.assertEqual(result["projects"][0]["waits"]["limite de taxa"], 7.0)
+
+    def test_esperas_sao_por_project_e_nao_acumuladas(self):
+        import unittest.mock
+        d13, i13 = source_project(13)
+        d14, i14 = source_project(14)
+        with unittest.mock.patch.object(rp.time, "sleep"):
+            result = self.run_restore(projects=[d13, d14], items=i13 + i14, write_delay=0.5)
+        first, second = (p["waits"]["pausa entre escritas"] for p in result["projects"])
+        self.assertAlmostEqual(first + second, result["waits"]["pausa entre escritas"], delta=0.2)
+        self.assertLess(second, result["waits"]["pausa entre escritas"])
+        self.assertGreater(second, 0)
+
+    def test_etapa_repetida_acumula_o_tempo(self):
+        import unittest.mock
+        clock = {"now": 0.0}
+        result = {}
+        with unittest.mock.patch.object(rp.time, "monotonic", side_effect=lambda: clock["now"]):
+            rp.set_stage(result, "a")
+            clock["now"] = 2.0
+            rp.set_stage(result, "b")
+            clock["now"] = 3.0
+            rp.set_stage(result, "a")
+            clock["now"] = 7.0
+            rp.set_stage(result, "b")
+            clock["now"] = 8.0
+            rp.close_stage(result)
+        self.assertEqual(result["seconds_by_stage"], {"a": 6.0, "b": 2.0})
+        self.assertNotIn("_stage_started", result)
+
+    def test_total_de_segundos_do_restore(self):
+        self.assertIsInstance(self.run_restore()["seconds"], float)
+
+
+class WorkflowActionTest(unittest.TestCase):
+    def test_workflow_nao_listado_pela_api_nao_e_dado_como_inexistente(self):
+        on, off = {"name": "Auto-add to project", "enabled": True}, {"name": "Auto-add to project", "enabled": False}
+        self.assertEqual(rp.workflow_action(on, {}), "não listado pela API; configure o filtro e ligue à mão")
+        self.assertEqual(rp.workflow_action(off, {}), "não listado pela API; se aparecer na aba Workflows, deixe desligado")
+        self.assertNotIn("não existe", rp.workflow_action(on, {}) + rp.workflow_action(off, {}))
+
+    def test_workflow_listado(self):
+        w = {"name": "Item closed", "enabled": True}
+        self.assertEqual(rp.workflow_action(w, {"Item closed": True}), "nada")
+        self.assertEqual(rp.workflow_action(w, {"Item closed": False}), "ligar")
+        self.assertEqual(rp.workflow_action({"name": "Item closed", "enabled": False}, {"Item closed": True}), "desligar")
 
 
 class RepositionUnitTest(unittest.TestCase):

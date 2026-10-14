@@ -863,7 +863,8 @@ class DataClassesTest(Base):
         self.assertEqual((labels["teste-backup"]["description"], labels["prioridade ✔ alta"]["color"]), (None, "B60205"))
         self.assertNotIn("bug", labels)
         res = self.evidence("restore-result.json")
-        self.assertEqual(res["classes"]["labels"], {"status": "OK", "expected": 3, "created": 2, "updated": 1, "extras": ["documentation", "enhancement"]})
+        self.assertEqual({k: v for k, v in res["classes"]["labels"].items() if k != "seconds"},      # `seconds` (tempo da classe) varia a cada run
+                         {"status": "OK", "expected": 3, "created": 2, "updated": 1, "extras": ["documentation", "enhancement"]})
         # Milestones: 1 aberto com prazo e 3 fechado (sem o 2): os números novos são 1 e 2; o mapa fica registrado.
         ms = FakeGitHub.milestones[self.target()]
         self.assertEqual([(m["number"], m["title"], m["state"], m["due_on"]) for m in ms],
@@ -1738,6 +1739,39 @@ class FailureDigestTest(unittest.TestCase):
         self.assertEqual(restore_repo.log_text("sem aspas nenhuma"), "sem aspas nenhuma")
         self.assertEqual(len(restore_repo.log_text("x" * 500)), 200)
 
+    def test_resumo_de_classe_so_leva_contagens_numeros_e_tempos(self):
+        import restore_repo
+        proj = {"source_number": 13, "target_number": 16, "status": "OK", "stage": "concluído", "items_added": 7, "verify_attempts": 1, "repair_passes": 0,
+                "title": "Título secreto", "url": "https://github.com/users/dono/projects/16", "seconds_by_stage": {"itens": 1.5}, "waits": {"limite de taxa": 0.0},
+                "items": {"expected": 7, "restored": 7, "archived": 0, "skipped_total": 0, "skipped": [{"title": "Item secreto", "reason": "x"}]},
+                "fields": {"restored": ["Status", "Campo secreto"]}, "views": {"restored": ["View secreta"]},
+                "workflows": [{"name": "Workflow secreto", "action": "nada"}, {"name": "Outro secreto", "action": "ligar"}],
+                "workflow_effects": {"added_by_workflow": [6], "auto_added_extras": [{"number": 106, "reason": "sub-issue de #105"}], "done_not_written": [],
+                                     "repositioned": 1, "reposition_error": None, "unexpected_items": 0}}
+        summary = restore_repo.class_summary("projects", {"status": "OK", "seconds": 12.5, "writes": 55, "planned_writes": 72, "projects": [proj],
+                                                          "waits": {"pausa entre escritas": 44.0}})
+        text = json.dumps(summary, ensure_ascii=False)
+        for secret in ("secreto", "secreta", "Status", "users/dono"):
+            self.assertNotIn(secret, text)
+        self.assertEqual((summary["seconds"], summary["writes"], summary["planned_writes"]), (12.5, 55, 72))
+        entry = summary["projects"][0]
+        self.assertEqual((entry["items"], entry["fields_total"], entry["views_total"], entry["workflows_to_adjust_by_hand"]),
+                         ({"expected": 7, "restored": 7, "archived": 0, "skipped_total": 0}, 2, 1, 1))
+        self.assertEqual(entry["workflow_effects"]["added_by_workflow"], [6])
+        self.assertEqual(entry["workflow_effects"]["auto_added_extras"], [{"number": 106, "reason": "sub-issue de #105"}])
+        self.assertEqual(entry["seconds_by_stage"], {"itens": 1.5})
+
+    def test_resumo_de_labels_nao_traz_nomes_nem_extras(self):
+        import restore_repo
+        summary = restore_repo.class_summary("labels", {"status": "OK", "expected": 3, "created": 2, "updated": 1, "extras": ["Segredo", "Outro"], "seconds": 0.4})
+        self.assertEqual((summary["expected"], summary["created"], summary["updated"], summary["extras_total"]), (3, 2, 1, 2))
+        self.assertNotIn("Segredo", json.dumps(summary))
+
+    def test_resumo_de_classe_com_falha_traz_o_motivo_mascarado(self):
+        import restore_repo
+        summary = restore_repo.class_summary("issues", {"status": "FAILED", "reason": "erro com 'Título secreto' no meio", "mismatches": ["x"]})
+        self.assertEqual(summary["reason"], "erro com <…>")
+
     def test_classes_de_nomes_so_dao_contagens(self):
         import restore_repo
         for cls in ("labels", "milestones"):
@@ -1869,6 +1903,50 @@ class ProjectsTest(Base):
         line = self.failure_lines(proc)[0]
         self.assertIn("[RstCreateField] UNPROCESSABLE: Could not resolve <…>", line["reason"])
         self.assertNotIn("Tarefa concluída", proc.stdout)
+
+    def summaries(self, proc):
+        return {l["class"]: l for l in (json.loads(x[len("RESTORE_SUMMARY "):]) for x in proc.stdout.splitlines() if x.startswith("RESTORE_SUMMARY "))}
+
+    def test_log_de_sucesso_traz_um_resumo_por_classe_sem_nomes(self):
+        proc = self.go()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        summaries = self.summaries(proc)
+        self.assertEqual(sorted(summaries), ["issues", "labels", "milestones", "projects", "relations"])
+        self.assertTrue(all(s["status"] == "OK" and isinstance(s["seconds"], float) for s in summaries.values()), summaries)
+        self.assertEqual((summaries["issues"]["expected"], summaries["issues"]["created"], summaries["issues"]["numbers_changed"]), (3, 3, [4]))
+        proj = summaries["projects"]["projects"][0]
+        self.assertEqual((proj["source_number"], proj["target_number"], proj["status"], proj["items_added"]), (13, 1, "OK", 4))
+        self.assertEqual(proj["workflow_effects"]["added_by_workflow"], [])
+        self.assertIn("conferência", proj["seconds_by_stage"])
+        self.assertIn("pausa entre escritas", proj["waits"])
+        self.assertIn("RESTORE_TIMINGS", proc.stdout)
+        text = proc.stdout + proc.stderr
+        for issue in self.ISSUES:
+            self.assertNotIn(issue["title"], text)
+        for label in self.LABELS:
+            self.assertNotIn(label["name"], text)
+        self.assertNotIn("Prioridade", text)
+        self.assert_no_leak()
+
+    def test_tempos_ficam_no_restore_result(self):
+        self.assertEqual(self.go().returncode, 0)
+        result = self.evidence("restore-result.json")
+        seconds = result["seconds"]
+        self.assertEqual(sorted(seconds), ["git", "issues", "labels", "milestones", "projects", "relations", "total"])
+        self.assertTrue(all(isinstance(v, float) and v >= 0 for v in seconds.values()), seconds)
+        self.assertGreaterEqual(seconds["total"], seconds["git"])
+        self.assertIn("seconds_by_stage", result["classes"]["projects"]["projects"][0])
+
+    def test_resumo_aparece_tambem_quando_uma_classe_falha(self):
+        self.world.fail_nth["RstAddIssueItem"] = 3
+        self.world.fail_nth_message = "Resource not accessible"
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
+        summaries = self.summaries(proc)
+        self.assertEqual(summaries["projects"]["status"], "FAILED")
+        self.assertEqual(summaries["issues"]["status"], "OK")
+        self.assertEqual(summaries["projects"]["projects"][0]["stage"], "itens")
+        self.assertIn("RESTORE_FAILURE", proc.stdout)
 
     def test_log_nao_traz_metadados_nem_nomes_do_project(self):
         readme = "Segredo do projeto: \"duplas\" e 'simples' e d'água"

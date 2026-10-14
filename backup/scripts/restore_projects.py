@@ -187,6 +187,12 @@ class Writer:
         self.base, self.url = base, base.rstrip("/") + "/graphql"
         self.token, self.delay, self.rate_wait, self.writes = token, delay, rate_wait, 0
         self._payload_fields = {}
+        self.waits = {"pausa entre escritas": 0.0, "repetição de erro": 0.0, "limite de taxa": 0.0}      # segundos dormidos, por motivo
+
+    def _sleep(self, kind, seconds):
+        """Dorme e soma ao motivo: o tempo do passo precisa ser explicável (pausa fixa, repetição de erro ou limite de taxa)."""
+        self.waits[kind] += seconds
+        time.sleep(seconds)
 
     def graph(self):
         """Leitor do backup (só consultas), com o mesmo token, para reler o que foi escrito."""
@@ -205,24 +211,24 @@ class Writer:
             except urllib.error.HTTPError as exc:
                 text = exc.read().decode("utf-8", "replace")[:160]
                 if exc.code in (502, 503, 504) and attempt < 5:
-                    time.sleep(2 * attempt)
+                    self._sleep("repetição de erro", 2 * attempt)
                     continue
                 if exc.code in (403, 429) and "rate limit" in text.lower() and attempt < 5:
-                    time.sleep(self.rate_wait)
+                    self._sleep("limite de taxa", self.rate_wait)
                     continue
                 raise ProjectRestoreError(f"[{operation}] HTTP {exc.code}: {text}") from None
             except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
                 last = f"falha de rede: {type(exc).__name__}"
                 if attempt < 5:
-                    time.sleep(2 * attempt)
+                    self._sleep("repetição de erro", 2 * attempt)
                     continue
                 raise ProjectRestoreError(f"[{operation}] {last}") from None
             errors = payload.get("errors")
             if errors and str(errors[0].get("message", "")).startswith(INTERNAL_ERROR) and attempt < 5:
-                time.sleep(2 * attempt)
+                self._sleep("repetição de erro", 2 * attempt)
                 continue
             if errors and errors[0].get("type") == "RATE_LIMITED" and attempt < 5:
-                time.sleep(self.rate_wait)
+                self._sleep("limite de taxa", self.rate_wait)
                 continue
             if errors:
                 raise ProjectRestoreError(f"[{operation}] {errors[0].get('type') or 'GRAPHQL_ERROR'}: {errors[0].get('message', '')}")
@@ -254,7 +260,7 @@ class Writer:
             selection = f"{field} {{ {returns[1]} }}"
         query = (f"mutation {operation}($input: {mutation[0].upper() + mutation[1:]}Input!) "
                  f"{{ {mutation}(input: $input) {{ clientMutationId {selection} }} }}")
-        time.sleep(self.delay)
+        self._sleep("pausa entre escritas", self.delay)
         out = self._post(operation, query, {"input": data})
         self.writes += 1
         return (out[mutation] or {}).get(field) if returns else out[mutation]
@@ -508,25 +514,56 @@ def verify(graph, rest_get, plan, project_id, expected_items, issue_states, proj
     return bad, repair, details, full, [{"number": (i.get("content") or {}).get("number"), "reason": why} for i, why in late]
 
 
+def workflow_action(w, restored_workflows):
+    """Ação manual para um workflow do backup. A API pode não listar um workflow desligado ou sem configuração (visto no run
+    req-20261014-002: o Auto-add to project do Project 14 existe na aba Workflows e a API não o devolveu): 'ausente' não prova que ele não existe."""
+    name = w["name"]
+    if name not in restored_workflows:
+        return ("não listado pela API; configure o filtro e ligue à mão" if w["enabled"]
+                else "não listado pela API; se aparecer na aba Workflows, deixe desligado")
+    if restored_workflows[name] == w["enabled"]:
+        return "nada"
+    return "ligar" if w["enabled"] else "desligar"
+
+
+def set_stage(result, stage):
+    """Troca a etapa do Project e soma o tempo gasto na anterior em `seconds_by_stage` (para explicar quanto cada fase levou)."""
+    now = time.monotonic()
+    started = result.pop("_stage_started", None)
+    if started is not None:
+        spent = result.setdefault("seconds_by_stage", {})
+        spent[result["stage"]] = round(spent.get(result["stage"], 0) + now - started, 1)
+    result["stage"], result["_stage_started"] = stage, now
+
+
+def close_stage(result):
+    """Fecha a contagem da última etapa (chamado ao fim, com sucesso ou não)."""
+    started = result.pop("_stage_started", None)
+    if started is not None:
+        spent = result.setdefault("seconds_by_stage", {})
+        spent[result["stage"]] = round(spent.get(result["stage"], 0) + time.monotonic() - started, 1)
+
+
 def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
     """Cria e confere UM Project. Preenche e devolve `result` (criado antes pelo chamador, para que uma falha no meio ainda diga o que já existe)."""
     source = plan["source"]
-    result["stage"] = "criação do Project"
+    set_stage(result, "criação do Project")
     created = writer.write("RstCreateProject", "createProjectV2", {"ownerId": ctx["owner_id"], "title": plan["title"], "repositoryId": ctx["repo_node_id"]},
                            (["projectV2"], "id number url"))
     project_id = created["id"]
-    result.update(target_number=created["number"], url=created.get("url"), stage="metadados")
+    result.update(target_number=created["number"], url=created.get("url"))
+    set_stage(result, "metadados")
     meta = {"title": plan["title"], "shortDescription": source.get("shortDescription"), "readme": source.get("readme"), "public": False}
     writer.write("RstUpdateProject", "updateProjectV2",
                  {"projectId": project_id, "shortDescription": source.get("shortDescription") or "", "readme": source.get("readme") or "", "public": False})
     details = pr_read_details(writer, project_id)
-    result["stage"] = "campos"
+    set_stage(result, "campos")
     index, conflicts = create_fields(writer, plan, project_id, details, notes)
-    result["stage"] = "views"
+    set_stage(result, "views")
     create_views(writer, plan, project_id, details, index)
 
     pending_steps, expected = [], []
-    result["stage"] = "itens"
+    set_stage(result, "itens")
     for step in plan["items"]:
         item_id = None
         try:
@@ -541,8 +578,9 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
             pending_steps.append(step)               # um workflow do GitHub já pôs este item no Project: o id é achado na releitura
         expected.append([step, item_id])
         result["items_added"] = sum(1 for _, i in expected if i)
-    result["stage"] = "conferência dos itens"
-    time.sleep(ctx["settle"])                       # os workflows padrão do Project novo reagem à inclusão (Status = Todo, Auto-add sub-issues...)
+    set_stage(result, "espera dos workflows")       # os workflows padrão do Project novo reagem à inclusão (Status = Todo, Auto-add sub-issues...)
+    time.sleep(ctx["settle"])
+    set_stage(result, "conferência dos itens")
     _, now_items, _ = read_project(graph, project_id)
     by_node = {(i.get("content") or {}).get("id"): i["id"] for i in now_items if (i.get("content") or {}).get("id")}
     for pair in expected:
@@ -561,9 +599,9 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
     now_ids = {i["id"] for i in now_items}
     order = [item_id for _, item_id in expected if item_id in now_ids]       # um item que o GitHub não guardou é pego pela conferência
     if [i["id"] for i in now_items if i["id"] in expected_ids] != order:
-        result["stage"] = "reposicionamento"
+        set_stage(result, "reposicionamento")
         effects["repositioned"], effects["reposition_error"] = reposition(writer, project_id, order, [i["id"] for i in now_items], notes)
-    result["stage"] = "valores"
+    set_stage(result, "valores")
     skipped_values = []
     for step, item_id in expected:
         step["applied"] = []
@@ -579,7 +617,7 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
             step["applied"].append(value)
             writer.write("RstSetValue", "updateProjectV2ItemFieldValue",
                          {"projectId": project_id, "itemId": item_id, "fieldId": index[value[0]]["id"], "value": data})
-    result["stage"] = "arquivados e status updates"
+    set_stage(result, "arquivados e status updates")
     for step, item_id in expected:
         if step["archived"]:
             writer.write("RstArchiveItem", "archiveProjectV2Item", {"projectId": project_id, "itemId": item_id})
@@ -594,7 +632,7 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
         meta["closed"] = False
 
     issue_states = {s["new"]: ctx["issue_state"][s["old"]] for s, _ in expected if s["kind"] == "issue"}
-    result["stage"] = "conferência"
+    set_stage(result, "conferência")
     attempts, repaired = 0, 0
     for attempts in range(1, ctx["tries"] + 1):
         bad, repair, restored, full, late = verify(graph, rest_get, plan, project_id, expected, issue_states, meta, conflicts,
@@ -620,10 +658,9 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
         return result
     restored_workflows = {w["name"]: w["enabled"] for w in restored["workflows"]["nodes"]}
     result["workflows"] = [{"name": w["name"], "enabled_in_backup": w["enabled"], "enabled_in_restored": restored_workflows.get(w["name"]),
-                            "action": ("nada" if restored_workflows.get(w["name"]) == w["enabled"]
-                                       else ("ligar" if w["enabled"] else "desligar") + (" (não existe no Project restaurado)" if w["name"] not in restored_workflows else ""))}
+                            "action": workflow_action(w, restored_workflows)}
                            for w in plan["workflows"]]
-    result["stage"] = "concluído"
+    set_stage(result, "concluído")
     result.update(items={"expected": len(plan["items"]), "restored": len(expected), "archived": sum(s["archived"] for s, _ in expected),
                          "skipped": plan["skipped"][:20], "skipped_total": len(plan["skipped"])},
                   fields={"restored": [f["name"] for f in plan["fields"]]}, views={"restored": [v["name"] for v in plan["views"]]},
@@ -657,7 +694,7 @@ def checklist_text(results):
         lines.append(f"Project {r['source_number']} -> {r.get('url')}")
         for w in r["workflows"]:
             lines.append(f"  - {w['name']}: no backup {'LIGADO' if w['enabled_in_backup'] else 'DESLIGADO'}; "
-                         f"no restaurado {({True: 'LIGADO', False: 'DESLIGADO', None: 'ausente'})[w['enabled_in_restored']]}; ação: {w['action']}")
+                         f"no restaurado {({True: 'LIGADO', False: 'DESLIGADO', None: 'não listado pela API'})[w['enabled_in_restored']]}; ação: {w['action']}")
         fx = r.get("workflow_effects") or {}
         if fx.get("added_by_workflow"):
             lines.append(f"  - Issues já postas no Project pelo GitHub (Auto-add sub-issues) antes da adição explícita: {', '.join('#' + str(n) for n in fx['added_by_workflow'])} (tratadas como presentes).")
@@ -686,21 +723,27 @@ def restore_projects(*, source, projects, items, issues, issue_map, node_ids, is
     graph = pr.Graph(api_base, token)
     ctx = {"owner_id": owner_id, "repo_node_id": repo_node_id, "repo_full": repo_full, "settle": settle, "tries": tries, "delay": delay, "issue_state": issue_states}
     results, notes = [], []
+    started = time.monotonic()
     for n, plan in enumerate(plans):
-        result = {"source_number": plan["source"]["number"], "title": plan["title"], "status": "FAILED", "stage": "início", "items_added": 0}
+        result = {"source_number": plan["source"]["number"], "title": plan["title"], "status": "FAILED", "items_added": 0}
+        set_stage(result, "início")
         results.append(result)
+        waits_before = dict(writer.waits)
         try:
             restore_one(writer, graph, rest_get, plan, ctx, notes, result)
         except ProjectRestoreError as exc:
             result.update(status="FAILED", error=str(exc))
         except pr.GraphqlError as exc:
             result.update(status="FAILED", error=f"leitura de conferência: {exc}")
+        close_stage(result)
+        result["waits"] = {k: round(writer.waits[k] - waits_before[k], 1) for k in writer.waits}
         if result["status"] == "FAILED":
             results += [{"source_number": p["source"]["number"], "title": p["title"], "status": "NOT_ATTEMPTED"} for p in plans[n + 1:]]
             break
     statuses = [r["status"] for r in results]
     status = "FAILED" if "FAILED" in statuses else ("PARTIAL" if "PARTIAL" in statuses or notes else "OK")
-    out = {"status": status, "projects": results, "writes": writer.writes, "planned_writes": total, "notes": notes[:10]}
+    out = {"status": status, "projects": results, "writes": writer.writes, "planned_writes": total, "notes": notes[:10],
+           "seconds": round(time.monotonic() - started, 1), "waits": {k: round(v, 1) for k, v in writer.waits.items()}}
     if status == "FAILED":
         failed = next(r for r in results if r["status"] == "FAILED")
         out["reason"] = failed.get("error") or f"{len(failed.get('mismatches', []))} divergência(s) na leitura de volta do Project {failed.get('source_number')}"
