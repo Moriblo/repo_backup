@@ -753,7 +753,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 53106905557ee49a26e21c3f7306628413207882
+      current_sha: 25f9230bf3cd700dc7fb5bc9886eba4e38921c65
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -1446,7 +1446,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 755c4742a22b4d1309862f81983529199c0d4b99
+      current_sha: 0784e1ddf7c43c518129c580d08e1cc319df3ade
     validation:
       status: NOT_VALIDATED
       scope: "Só teste local contra uma API GraphQL simulada com estado; ainda não rodou em run real. Não provado - nenhum dos nomes de payload, a criação de views com campos visíveis, os workflows padrão do GitHub reagindo à inclusão de itens, a conferência de volta, o limite de taxa."
@@ -1464,10 +1464,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 81800a482b9fd8c8c430a2f102aa8c8eb6026e92
+      current_sha: fe2e4a8f4ac249e90db36a7f91ae6c867910854c
     validation:
       status: NOT_VALIDATED
-      scope: "Executado localmente e no CI dos pull requests (83 testes, mais verificação de mutação do planejamento, da escrita e da conferência). Não roda contra o GitHub real."
+      scope: "Executado localmente e no CI dos pull requests (87 testes, mais verificação de mutação do planejamento, da escrita e da conferência). Não roda contra o GitHub real."
     relationships:
       - {capability_id: restore_repository, relationship: VALIDATES}
 

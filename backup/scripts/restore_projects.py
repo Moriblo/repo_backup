@@ -436,7 +436,7 @@ def reposition(writer, project_id, order, actual_ids, notes):
 
 
 def verify(graph, rest_get, plan, project_id, expected_items, issue_states, project_meta, conflicts, check_order=True, repo_full=None):
-    """Relê o Project e compara com o plano. Devolve (divergências, valores a regravar, Project relido, divergências completas).
+    """Relê o Project e compara com o plano. Devolve (divergências, valores a regravar, Project relido, divergências completas, extras aceitos).
 
     As divergências (`bad`) vão para o LOG do Actions e o repositório executor é público: elas nunca trazem títulos, nomes de campos
     ou de views, nem valores (usam a posição: "campo 2", "view 1", "item 3"). O texto completo, com os valores, vai em `full`
@@ -473,7 +473,7 @@ def verify(graph, rest_get, plan, project_id, expected_items, issue_states, proj
     expected_ids = {item_id for _, item_id in expected_items}
     items = all_items
     step_numbers = {s["new"] for s, _ in expected_items if s["kind"] == "issue"}
-    _, unexpected = classify_items([i for i in items if i["id"] not in expected_ids], expected_ids, step_numbers, repo_full, rest_get)
+    late, unexpected = classify_items([i for i in items if i["id"] not in expected_ids], expected_ids, step_numbers, repo_full, rest_get)
     for item, why in unexpected:
         pos = next(n for n, i in enumerate(all_items, 1) if i["id"] == item["id"])
         add(f"item inesperado na posição {pos}: {why}")
@@ -505,7 +505,7 @@ def verify(graph, rest_get, plan, project_id, expected_items, issue_states, proj
             status, data = rest_get(step["new"])
             if status != 200 or data.get("state") != want:
                 add(f"issue {step['old']} (nova {step['new']}): estado {data.get('state')!r}, esperava {want!r} (um workflow do Project pode tê-la mudado)")
-    return bad, repair, details, full
+    return bad, repair, details, full, [{"number": (i.get("content") or {}).get("number"), "reason": why} for i, why in late]
 
 
 def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
@@ -572,7 +572,8 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
             if data is None:
                 skipped_values.append(f"{step['title']}: {reason}")
                 continue
-            if (step["kind"] == "issue" and value[1] == "select" and value[2] == "Done" and ctx["issue_state"].get(step["old"]) == "open"):
+            if (step["kind"] == "issue" and value[0] == "Status" and value[1] == "select" and value[2] == "Done"      # o Auto-close vigia o campo Status
+                    and ctx["issue_state"].get(step["old"]) == "open"):
                 effects["done_not_written"].append(step["old"])      # o workflow Auto-close fecharia a issue, que no backup está aberta
                 continue
             step["applied"].append(value)
@@ -596,8 +597,12 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
     result["stage"] = "conferência"
     attempts, repaired = 0, 0
     for attempts in range(1, ctx["tries"] + 1):
-        bad, repair, restored, full = verify(graph, rest_get, plan, project_id, expected, issue_states, meta, conflicts,
+        bad, repair, restored, full, late = verify(graph, rest_get, plan, project_id, expected, issue_states, meta, conflicts,
                                              effects["reposition_error"] is None, ctx.get("repo_full"))
+        known = {e["number"] for e in effects["auto_added_extras"]}
+        for extra in late:                                  # Auto-add atrasado: o item a mais só apareceu depois da leitura dos itens
+            if extra["number"] not in known:
+                effects["auto_added_extras"].append(extra)
         if not bad:
             break
         if repair and repaired < 2:                 # um workflow pode ter sobrescrito o valor depois da escrita: regrava e confere de novo

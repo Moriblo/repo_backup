@@ -59,6 +59,7 @@ class World:
         self.vanish = set()                     # adições que devolvem um id mas o item não fica no Project
         self.ignore_field = None                # nome do campo cuja criação é ignorada
         self.children = {}                      # id de nó do pai -> ids de nó das filhas que o workflow Auto-add sub-issues põe sozinho
+        self.late_children = {}                 # Auto-add ATRASADO: as filhas só entram no Project na primeira gravação de valor (depois da releitura dos itens)
         self.children_at_end = False            # as filhas entram no fim do Project (senão, logo depois do pai)
         self.parent_of = {}                     # número novo da filha -> número novo do pai (o que a API REST devolve em parent_issue_url)
         self.close_on_value = False             # qualquer valor gravado num item de issue fecha a issue (um workflow inesperado)
@@ -202,6 +203,11 @@ class FakeAPI(http.server.BaseHTTPRequestHandler):
         elif name == "updateProjectV2ItemFieldValue":
             field, item = self.field_of(p, data["fieldId"]), self.item_of(p, data["itemId"])
             value = data["value"]
+            for parent_node, kids in list(w.late_children.items()):
+                for kid in kids:
+                    if any(i.get("node") == parent_node for i in p["items"]) and not any(i.get("node") == kid for i in p["items"]):
+                        p["items"].append({"id": w.new_id("PVTI"), "archived": False, "node": kid, "values": {}})
+                w.late_children.pop(parent_node)
             if w.close_on_value and item.get("node"):
                 w.issue_state[w.issues[item["node"]]["number"]] = "closed"
             if "singleSelectOptionId" in value:
@@ -801,6 +807,45 @@ class WorkflowInterferenceTest(Base):
         self.assertIn("Auto-add sub-issues", extras[0]["reason"])
         self.assertEqual(len(self.project()["items"]), 7)                    # 5 issues + o rascunho + a filha: nada foi apagado
         self.assertIn(f"Item a mais, deixado no Project: issue #{NEW_BASE + 6}", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+
+    def test_auto_add_atrasado_e_declarado_na_conferencia_final(self):
+        self.world.children = {}
+        self.world.late_children = {self.PARENT: [self.CHILD]}               # a filha só entra depois da leitura de reconciliação
+        details, items = self.source(drop=DEFAULT_TITLES[5])
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual(result["status"], "PARTIAL", result)
+        extras = self.effects(result)["auto_added_extras"]
+        self.assertEqual([e["number"] for e in extras], [NEW_BASE + 6])
+        self.assertIn("Auto-add sub-issues", extras[0]["reason"])
+        self.assertIn(f"Item a mais, deixado no Project: issue #{NEW_BASE + 6}", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+        self.assertEqual(len(self.project()["items"]), 7)
+
+    def test_extra_atrasado_sem_pai_restaurado_falha(self):
+        self.world.children = {}
+        self.world.late_children = {self.PARENT: [self.CHILD]}
+        self.world.parent_of = {}
+        details, items = self.source(drop=DEFAULT_TITLES[5])
+        proj = self.run_restore(projects=[details], items=items)["projects"][0]
+        self.assertEqual(proj["status"], "FAILED")
+        self.assertTrue(any(m.startswith("item inesperado") for m in proj["mismatches"]))
+
+    def test_extra_aceito_na_reconciliacao_nao_e_contado_duas_vezes(self):
+        details, items = self.source(drop=DEFAULT_TITLES[5])
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual([e["number"] for e in self.effects(result)["auto_added_extras"]], [NEW_BASE + 6])
+
+    def test_done_so_e_retido_no_campo_status(self):
+        details, items = self.source()
+        details["fields"]["nodes"].append({"id": "F_fase", "name": "Fase", "dataType": "SINGLE_SELECT", "__typename": "ProjectV2SingleSelectField",
+                                           "options": [{"id": "O1", "name": "Todo", "color": "GRAY", "description": ""},
+                                                       {"id": "O2", "name": "Done", "color": "GREEN", "description": ""}]})
+        items[0]["fieldValues"]["nodes"].append({"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Done", "optionId": "O2", "color": "GREEN",
+                                                 "description": "", "field": {"id": "F_fase", "name": "Fase"}})
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual(result["status"], "OK", result)
+        self.assertEqual(self.effects(result)["done_not_written"], [])
+        self.assertEqual(self.project()["items"][0]["values"]["Fase"]["select"], "Done")      # a issue 1 é aberta, mas "Fase" não é o campo vigiado
+        self.assertEqual(self.world.issue_state[NEW_BASE + 1], "open")
 
     def test_item_a_mais_que_nao_e_sub_issue_de_item_restaurado_falha(self):
         details, items = self.source(drop=DEFAULT_TITLES[5])
