@@ -4,6 +4,7 @@
 
 **Última atualização:** 14/10/2026, 03h30 (horário de Brasília)
 **Estado do `main` nesta data:** commit `7822242` (merge do PR #59, 14/10/2026), mais o merge deste PR de contexto. Nenhum outro PR aberto.
+**Engine ativo:** a sessão claude.ai/code/session_01YHH3f36KATMnp9YNqn5g9E (Claude Code), retomada em 14/10. A sessão ligada ao projeto não opera: mantém os documentos do projeto e revisa PRs.
 **Quem atualiza:** o engine (Claude), ao fim de cada sessão em que algo mudou. O ritual está em `claude/INSTRUCOES_DO_PROJETO.md`.
 
 > Leia este documento primeiro em qualquer sessão nova. Ele diz onde o projeto está e o que vem depois. Ele **não autoriza nada**: toda execução exige ECR e GO do HITL na própria sessão, conforme o protocolo `BACKUP_REPOSITORY.md`.
@@ -49,7 +50,7 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 | Environment dos segredos | `onedrive-backup` |
 | Destino no OneDrive | `Apps/GitHub repo_backup/<destination>/<request_id>/{package,evidence}/` |
 | Repositórios de teste | `Moriblo/backup_teste` (LFS, submódulo, tags), `Moriblo/backup_teste_issues` (privado; issues, relações, Project nº 13 e nº 14 "Teste restore") |
-| Repositórios criados pelas restaurações de teste | `Moriblo/backup_teste_issues-restaurado`, `-restaurado-2` a `-restaurado-7` (todos privados; candidatos a limpeza pelo HITL). O `-restaurado-6` é um alvo **parcial** (run `-001` falhou na etapa 4) e o `-restaurado-7` é o da prova da etapa 4 |
+| Repositórios criados pelas restaurações de teste | `Moriblo/backup_teste_issues-restaurado-2` a `-restaurado-7` (todos privados; candidatos a limpeza pelo HITL). O `-restaurado-6` é um alvo **parcial** (run `-001` falhou na etapa 4) e o `-restaurado-7` é o da prova da etapa 4 |
 | Projects criados pelas restaurações de teste | nº 15 (**incompleto**, do `-001`, ligado ao `-restaurado-6`), nº 16 e nº 17 (do `-002`, ligados ao `-restaurado-7`; cópias de #13 e #14). A decisão de apagar é do HITL |
 | Último backup completo | `req-20261004-006`, `backups/backup_teste_issues/req-20261004-006`, run `37184520042`, todos os passos com sucesso |
 | Última restauração provada | `req-20261014-002` (etapa 4), run `38515538532`, alvo `backup_teste_issues-restaurado-7`; as cinco classes `OK`, 55 escritas de 72 planejadas, Projects nº 16 e nº 17 conferidos contra os originais pelo HITL. Antes: `req-20261003-019` (etapa 3b) |
@@ -92,6 +93,7 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 | 03/10 | `data_backup_path` (restaurar dados de outro backup) foi **adiado** até haver necessidade. |
 | 04/10 | Restauração de Projects cria sempre um Project **novo**. `copyProjectV2` não é usado (hipótese não provada). |
 | 13/10 | Contexto do projeto consolidado no projeto do Claude, com instruções de continuidade (`claude/INSTRUCOES_DO_PROJETO.md`). |
+| 14/10 | Engine volta a ser a sessão 01YHH... do Claude Code; a sessão ligada ao projeto só mantém os documentos e revisa PRs. O ECR req-20261013-001 montado na sessão do projeto foi cancelado sem gravação. Contexto copiado para docs/contexto/ (PR #56). |
 | 14/10 | Etapa 4: um **item a mais** no Project restaurado só é aceito se for **sub-issue de uma issue restaurada que está no Project** (adicionado pelo Auto-add sub-issues); fica, é listado com o motivo e a classe vira `PARTIAL`. Qualquer outro item inesperado é `FAILED`. Vale também para o extra que só aparece na conferência final. |
 | 14/10 | Etapa 4: **Status Done não é gravado** numa issue aberta no backup (o Auto-close a fecharia), só no campo `Status`; `PARTIAL`. O restore nunca muda o estado de uma issue por causa de um workflow do Project. |
 | 14/10 | Etapa 4: o **reposicionamento** dos itens é tentado (`updateProjectV2ItemPosition`); se falhar, `PARTIAL` com nota. O restore não apaga os workflows padrão do Project novo (irreversível e contradiz restaurar o estado deles). |
