@@ -154,6 +154,40 @@ def write_result(data):
     (EVIDENCE / "restore-result.json").write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+NAME_CLASSES = ("labels", "milestones")      # as divergências dessas classes são nomes vindos do repositório (privado): só contagens vão ao log
+
+
+def log_text(text, limit=200):
+    """Texto de erro para o LOG: corta no PRIMEIRO caractere de aspas (simples, dupla ou crase) e põe "<…>" no lugar do resto, porque a
+    API às vezes repete o que recebeu e um par de aspas misturadas escaparia de uma máscara por pares. Tamanho limitado."""
+    text = str(text)
+    hit = re.search(r"[\"'`]", text)
+    if hit:
+        text = text[:hit.start()] + "<…>"
+    return text[:limit]
+
+
+def failure_digest(cls, res, limit=5):
+    """Resumo de uma classe FAILED para o LOG do Actions. O repositório executor é PÚBLICO e o que se restaura vem de repositório
+    privado: aqui só entram o motivo, contagens, o estágio e divergências sem títulos nem nomes. O detalhe completo fica no restore-result.json."""
+    out = {"class": cls, "reason": log_text(res.get("reason") or res.get("error") or "")}
+    for key in ("errors", "mismatches"):
+        found = res.get(key) or []
+        if found:
+            out[key + "_total"] = len(found)
+            if cls not in NAME_CLASSES:
+                out[key] = [log_text(x, 160) for x in found[:limit]]
+    for proj in res.get("projects") or []:
+        if proj.get("status") in ("FAILED", "NOT_ATTEMPTED"):
+            entry = {k: proj[k] for k in ("source_number", "target_number", "status", "stage", "items_added") if k in proj}
+            if proj.get("error"):
+                entry["error"] = log_text(proj["error"])
+            if proj.get("mismatches"):
+                entry["mismatches"] = [log_text(x, 160) for x in proj["mismatches"][:limit]]
+            out.setdefault("projects", []).append(entry)
+    return out
+
+
 def fail(err, state):
     """Registra a falha: resultado em arquivo, BKP_RESULT FAILED e saída com o código do erro."""
     print(f"::error::{err.reason}: {err.message}")
@@ -999,6 +1033,8 @@ def cmd_restore():
         print("RESTORE_OK " + json.dumps({k: data[k] for k in ("target_repository", "html_url", "default_branch", "heads", "tags", "skipped_refs", "lfs")}, sort_keys=True), flush=True)
         print("RESTORE_CLASSES " + json.dumps({c: v["status"] for c, v in classes.items()}, sort_keys=True), flush=True)
         failed = sorted(c for c, v in classes.items() if v["status"] == "FAILED")
+        for cls in failed:
+            print("RESTORE_FAILURE " + json.dumps(failure_digest(cls, classes[cls]), sort_keys=True, ensure_ascii=False), flush=True)
         if failed:
             print(f"::error::DATA_RESTORE_FAILED: {', '.join(failed)} não voltaram como no backup; o alvo foi mantido.")
             b.result("FAILED", reason="DATA_RESTORE_FAILED", target_repository=state["target_repository"], created=True, failed_classes=failed)

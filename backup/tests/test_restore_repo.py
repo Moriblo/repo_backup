@@ -1718,6 +1718,34 @@ class EvidenceAndPreflightTest(Base):
         self.assertEqual(subprocess.run([sys.executable, str(SCRIPTS / "restore_repo.py"), "fetch"], env=env, capture_output=True).returncode, 64)
 
 
+class FailureDigestTest(unittest.TestCase):
+    """Resumo de falha que vai ao log (repositório público): limitado e sem nomes."""
+
+    def test_limita_os_exemplos_e_mantem_o_total(self):
+        import restore_repo
+        digest = restore_repo.failure_digest("issues", {"reason": "8 divergência(s)", "mismatches": [f"issue {n}: leitura HTTP 404" for n in range(8)]})
+        self.assertEqual((digest["mismatches_total"], len(digest["mismatches"])), (8, 5))
+        projects = restore_repo.failure_digest("projects", {"reason": "x", "projects": [
+            {"source_number": 13, "status": "FAILED", "stage": "itens", "mismatches": [f"item {n}: arquivado" for n in range(9)]}]})
+        self.assertEqual(len(projects["projects"][0]["mismatches"]), 5)
+
+    def test_log_text_corta_na_primeira_aspa_de_qualquer_tipo(self):
+        import restore_repo
+        for text in ("erro 'Segredo\" resto", "erro \"Segredo' resto", "erro `Segredo\" resto", "erro d'água \"Segredo\" resto"):
+            masked = restore_repo.log_text(text)
+            self.assertEqual(masked, "erro <…>" if not text.startswith("erro d'") else "erro d<…>")
+            self.assertNotIn("Segredo", masked)
+        self.assertEqual(restore_repo.log_text("sem aspas nenhuma"), "sem aspas nenhuma")
+        self.assertEqual(len(restore_repo.log_text("x" * 500)), 200)
+
+    def test_classes_de_nomes_so_dao_contagens(self):
+        import restore_repo
+        for cls in ("labels", "milestones"):
+            digest = restore_repo.failure_digest(cls, {"reason": "1 erro(s)", "errors": ["label Segredo: 500"], "mismatches": ["Segredo"]})
+            self.assertEqual((digest["errors_total"], digest["mismatches_total"]), (1, 1))
+            self.assertNotIn("Segredo", json.dumps(digest))
+
+
 class ProjectsTest(Base):
     """Etapa 4: Projects recriados como Projects novos, privados e ligados ao repositório restaurado (GraphQL simulado e com estado)."""
     T = "dono/teste-restaurado"
@@ -1802,6 +1830,63 @@ class ProjectsTest(Base):
         self.assertIn(self.T, [c.lower() for c in FakeGitHub.created])
         evidence_file = self.evidence("restore-result.json")["classes"]
         self.assertEqual(evidence_file["issues"]["status"], "OK")                 # as issues continuam restauradas
+
+    def failure_lines(self, proc):
+        return [json.loads(l[len("RESTORE_FAILURE "):]) for l in proc.stdout.splitlines() if l.startswith("RESTORE_FAILURE ")]
+
+    def test_log_traz_o_motivo_da_falha_do_project_sem_titulos(self):
+        self.world.fail_nth["RstAddIssueItem"] = 3
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
+        lines = self.failure_lines(proc)
+        self.assertEqual([l["class"] for l in lines], ["projects"])
+        self.assertIn("[RstAddIssueItem] UNPROCESSABLE: Content already exists", lines[0]["reason"])
+        proj = lines[0]["projects"][0]
+        self.assertEqual((proj["status"], proj["stage"], proj["items_added"], proj["target_number"]), ("FAILED", "itens", 2, 1))
+        for issue in self.ISSUES:
+            self.assertNotIn(issue["title"], proc.stdout + proc.stderr)
+        self.assertIn("INCOMPLETO", (self.root / "evidence" / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+        self.assert_no_leak()
+
+    def test_log_mascara_o_que_a_api_repete_entre_aspas(self):
+        self.world.fail["RstCreateField"] = [{"type": "UNPROCESSABLE", "message": "Could not resolve 'Tarefa concluída' no quadro"}]
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
+        line = self.failure_lines(proc)[0]
+        self.assertIn("[RstCreateField] UNPROCESSABLE: Could not resolve <…>", line["reason"])
+        self.assertNotIn("Tarefa concluída", proc.stdout)
+
+    def test_log_nao_traz_metadados_nem_nomes_do_project(self):
+        readme = "Segredo do projeto: \"duplas\" e 'simples' e d'água"
+        details, items = tp.source_project(hidden=True, issue_titles=[i["title"] for i in self.ISSUES])
+        details["readme"] = readme
+        self.make_backup(projects=([details], items))
+        self.world.ignore = {"updateProjectV2", "createProjectV2Field"}     # a gravação dos metadados e do campo é ignorada
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
+        text = proc.stdout + proc.stderr
+        for secret in ("Segredo", "água", "duplas", "Prioridade", "View 2"):
+            self.assertNotIn(secret, text)
+        proj = self.failure_lines(proc)[0]["projects"][0]
+        self.assertIn("Project: readme difere", " | ".join(proj["mismatches"]))
+        # o completo está no restore-result.json (artefato), não no log
+        self.assertIn("Segredo do projeto", json.dumps(self.evidence("restore-result.json")["classes"]["projects"], ensure_ascii=False))
+
+    def test_log_de_classe_com_nomes_so_traz_contagens(self):
+        FakeGitHub.label_fail = {"prioridade ✔ alta": 500}
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
+        lines = self.failure_lines(proc)
+        self.assertEqual(lines[0]["class"], "labels")
+        self.assertIn("errors_total", lines[0])
+        self.assertNotIn("errors", lines[0])
+        self.assertNotIn("prioridade", json.dumps(lines))
+        self.assertNotIn("prioridade", proc.stdout)
+
+    def test_sem_falha_nao_ha_linha_de_falha(self):
+        proc = self.go()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self.failure_lines(proc), [])
 
     def test_teto_de_escritas_e_compartilhado_com_issues_e_relacoes(self):
         proc = self.go(RESTORE_MAX_WRITES="20")

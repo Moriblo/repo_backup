@@ -58,6 +58,8 @@ class World:
         self.view_layout = None                 # o GitHub cria toda view com este layout, ignorando o pedido
         self.vanish = set()                     # adições que devolvem um id mas o item não fica no Project
         self.ignore_field = None                # nome do campo cuja criação é ignorada
+        self.fail_nth = {}                      # operationName -> número da chamada que falha (as anteriores funcionam)
+        self.calls = {}
         self.fail = {}                          # operationName -> lista `errors`
         self.flaky = {}                         # operationName -> respostas com erro interno antes de funcionar
         self.introspection = {}                 # tipo de payload -> campos (vazio: a introspecção falha)
@@ -90,6 +92,9 @@ class FakeAPI(http.server.BaseHTTPRequestHandler):
         if w.flaky.get(op, 0) > 0:
             w.flaky[op] -= 1
             return self._send({"data": None, "errors": [{"type": "INTERNAL", "message": "Something went wrong while executing your query. Please include `X`."}]})
+        w.calls[op] = w.calls.get(op, 0) + 1
+        if op in w.fail_nth and w.calls[op] == w.fail_nth[op]:
+            return self._send({"data": None, "errors": [{"type": "UNPROCESSABLE", "message": "Content already exists in this project"}]})
         if op in w.fail:
             return self._send({"data": None, "errors": w.fail[op]})
         mutation = re.search(r"\{ (\w+)\(input", body["query"]) if body["query"].lstrip().startswith("mutation") else None
@@ -576,7 +581,10 @@ class VerificationTest(Base):
         self.assertEqual(result["status"], "FAILED", result)
         proj = result["projects"][0]
         self.assertEqual(proj["repair_passes"], 2)                           # no máximo 2 regravações
-        self.assertIn("Status", proj["mismatches"][0])
+        self.assertIn("o valor do campo 1 difere", proj["mismatches"][0])
+        self.assertNotIn("Status", " ".join(proj["mismatches"]))
+        self.assertNotIn("Todo", " ".join(proj["mismatches"]))                 # nem o valor
+        self.assertIn("Status", proj["mismatch_details"][0])                   # o completo fica no resultado
         self.assertIn("divergência", result["reason"])
 
     def test_workflow_que_fecha_a_issue_vira_failed(self):
@@ -645,34 +653,139 @@ class SilentFailureTest(Base):
 
     def test_filtro_da_view_ignorado(self):
         self.world.ignore = {"updateProjectV2View"}
-        self.assertIn("view View 2", self.failed())
+        text = self.failed()
+        self.assertIn("view 2 ausente", text)
+        self.assertNotIn("View 2", text)
 
     def test_layout_da_view_ignorado(self):
         self.world.view_layout = "TABLE_LAYOUT"
-        self.assertIn("view View 2", self.failed())
+        self.assertIn("view 2 ausente", self.failed())
 
     def test_campo_que_nao_foi_criado(self):
         self.world.ignore_field = "Prioridade"
-        self.assertIn("campo Prioridade ausente", self.failed())
+        text = self.failed()
+        self.assertIn("campo 2 ausente", text)
+        self.assertNotIn("Prioridade", text)                              # só a posição: o nome não vai para o log
 
     def test_opcoes_do_status_nao_atualizadas(self):
         details, items = source_project()
         next(f for f in details["fields"]["nodes"] if f["name"] == "Status")["options"].append({"id": "S9", "name": "Bloqueado", "color": "RED", "description": ""})
         self.world.ignore = {"updateProjectV2Field"}
-        self.assertIn("campo Status: opções diferentes", self.failed(projects=[details], items=items))
+        text = self.failed(projects=[details], items=items)
+        self.assertIn("campo 1: opções diferentes", text)
+        self.assertNotIn("Status", text)
 
     def test_falha_de_conferencia_no_primeiro_project_nao_tenta_o_segundo(self):
         d13, i13 = source_project(13)
         d14, i14 = source_project(14)
         self.world.drop_status = 999
         result = self.run_restore(projects=[d13, d14], items=i13 + i14)
-        self.assertEqual((result["status"], len(result["projects"]), len(self.ops("createProjectV2"))), ("FAILED", 1, 1))
+        self.assertEqual((result["status"], [r["status"] for r in result["projects"]], len(self.ops("createProjectV2"))), ("FAILED", ["FAILED", "NOT_ATTEMPTED"], 1))
 
     def test_espera_antes_de_gravar_os_valores(self):
         import unittest.mock
         with unittest.mock.patch.object(rp.time, "sleep") as sleep:
             self.run_restore(settle=7.5)
         self.assertIn(unittest.mock.call(7.5), sleep.call_args_list)
+
+
+class FailureReportTest(Base):
+    """4a: uma falha no meio diz o que já foi criado, o checklist não a esconde e nenhum título vai para um texto que chega ao log."""
+
+    def test_falha_no_meio_registra_o_que_ja_existe(self):
+        self.world.fail["RstAddIssueItem"] = [{"type": "UNPROCESSABLE", "message": "Content already exists in this project"}]
+        result = self.run_restore()
+        proj = result["projects"][0]
+        self.assertEqual((result["status"], proj["status"], proj["stage"], proj["items_added"], proj["target_number"]), ("FAILED", "FAILED", "itens", 0, 1))
+        self.assertEqual(proj["url"], "https://github.com/users/dono/projects/1")
+        self.assertIn("[RstAddIssueItem] UNPROCESSABLE: Content already exists", proj["error"])
+        self.assertEqual(len(self.world.projects), 1)                      # o Project criado continua lá: nada é apagado
+
+    def test_falha_na_sexta_adicao_como_no_run_real(self):
+        self.world.fail_nth["RstAddIssueItem"] = 6
+        proj = self.run_restore()["projects"][0]
+        self.assertEqual((proj["status"], proj["stage"], proj["items_added"]), ("FAILED", "itens", 5))
+        self.assertEqual(len(self.project()["items"]), 5)
+        self.assertIn("Content already exists", proj["error"])
+
+    def test_checklist_lista_o_project_incompleto_e_o_nao_tentado(self):
+        d13, i13 = source_project(13)
+        d14, i14 = source_project(14)
+        self.world.fail["RstAddIssueItem"] = [{"type": "UNPROCESSABLE", "message": "x"}]
+        result = self.run_restore(projects=[d13, d14], items=i13 + i14)
+        self.assertEqual([p["status"] for p in result["projects"]], ["FAILED", "NOT_ATTEMPTED"])
+        text = (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8")
+        self.assertIn("Project 13 -> INCOMPLETO: criado como #1 (https://github.com/users/dono/projects/1), falhou em: itens", text)
+        self.assertIn("complete ou apague esse Project à mão", text)
+        self.assertIn("Project 14 -> NÃO TENTADO", text)
+
+    def test_checklist_diz_quando_o_project_nem_foi_criado(self):
+        self.world.fail["RstCreateProject"] = [{"type": "FORBIDDEN", "message": "x"}]
+        self.run_restore()
+        text = (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8")
+        self.assertIn("Project 13 -> NÃO FOI CRIADO (falhou em: criação do Project)", text)
+
+    def test_etapa_da_falha_de_conferencia(self):
+        self.world.drop_status = 999
+        proj = self.run_restore(tries=1)["projects"][0]
+        self.assertEqual((proj["status"], proj["stage"], proj["items_added"]), ("FAILED", "conferência", 7))
+
+    def test_divergencias_nao_trazem_titulos_de_itens(self):
+        self.world.drop_status = 999
+        proj = self.run_restore(tries=1)["projects"][0]
+        self.assertTrue(proj["mismatches"])
+        for text in proj["mismatches"]:
+            for title in DEFAULT_TITLES + ["Rascunho sem issue"]:
+                self.assertNotIn(title, text)
+        original = FakeAPI.read
+
+        def reversed_order(handler, w, op, variables):
+            data = original(handler, w, op, variables)
+            if op == "ProjectItemsOrder":
+                data["node"]["items"]["nodes"].reverse()
+            return data
+        FakeAPI.read = reversed_order
+        self.addCleanup(setattr, FakeAPI, "read", original)
+        self.setUp()
+        proj = self.run_restore(tries=1)["projects"][0]
+        self.assertIn("o título lido na posição 1 não é o esperado", proj["mismatches"][0])
+        self.assertFalse(any(t in " ".join(proj["mismatches"]) for t in DEFAULT_TITLES))
+
+
+class LogSafetyTest(Base):
+    """Nada do que vai para o log do Actions (o repositório é público) traz nome de campo ou de view nem o valor de um metadado."""
+    READMES = ["Segredo do projeto: \"duplas\" e 'simples' e d'água", "só aspas simples d'água 'x'", 'só duplas "x" y']
+
+    def test_metadados_divergentes_dizem_so_a_chave(self):
+        for readme in self.READMES:
+            self.setUp()
+            details, items = source_project()
+            details["readme"], details["shortDescription"] = readme, "Descrição privada"
+            self.world.ignore = {"updateProjectV2"}                        # o GitHub "ignora" a gravação dos metadados
+            result = self.run_restore(projects=[details], items=items)
+            proj = result["projects"][0]
+            self.assertEqual(proj["status"], "FAILED", result)
+            safe = " | ".join(proj["mismatches"])
+            self.assertIn("Project: readme difere", safe)
+            self.assertIn("Project: shortDescription difere", safe)
+            self.assertNotIn("Segredo", safe)
+            self.assertNotIn("privada", safe)
+            self.assertNotIn("água", safe)
+            self.assertNotIn(readme, safe)
+            # o texto completo, com os valores, fica no resultado
+            full = " | ".join(proj["mismatch_details"])
+            self.assertIn(repr(readme), full)
+
+    def test_nomes_de_campos_e_views_nao_aparecem(self):
+        self.world.ignore_field = "Prioridade"
+        self.world.view_layout = "TABLE_LAYOUT"
+        self.world.drop_status = 999
+        proj = self.run_restore(tries=1)["projects"][0]
+        safe = " | ".join(proj["mismatches"])
+        for name in ("Prioridade", "Status", "View 1", "View 2", "Todo", "Alta"):
+            self.assertNotIn(name, safe)
+        self.assertIn("campo 2 ausente", safe)
+        self.assertIn("view 2 ausente", safe)
 
 
 class FailureTest(Base):
