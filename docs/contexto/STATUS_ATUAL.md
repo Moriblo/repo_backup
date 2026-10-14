@@ -2,8 +2,9 @@
 
 # Repo_Backup — Status atual (documento vivo)
 
-**Última atualização:** 13/10/2026, 23h30 (horário de Brasília)
-**Estado do `main` nesta data:** commit `bee0816` (04/10/2026). Nenhum PR aberto e nenhuma branch pendente.
+**Última atualização:** 14/10/2026, 03h30 (horário de Brasília)
+**Estado do `main` nesta data:** commit `7822242` (merge do PR #59, 14/10/2026), mais o merge deste PR de contexto. Nenhum outro PR aberto.
+**Engine ativo:** a sessão claude.ai/code/session_01YHH3f36KATMnp9YNqn5g9E (Claude Code), retomada em 14/10. A sessão ligada ao projeto não opera: mantém os documentos do projeto e revisa PRs.
 **Quem atualiza:** o engine (Claude), ao fim de cada sessão em que algo mudou. O ritual está em `claude/INSTRUCOES_DO_PROJETO.md`.
 
 > Leia este documento primeiro em qualquer sessão nova. Ele diz onde o projeto está e o que vem depois. Ele **não autoriza nada**: toda execução exige ECR e GO do HITL na própria sessão, conforme o protocolo `BACKUP_REPOSITORY.md`.
@@ -25,6 +26,7 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 | 03/10 | `projects` no `BKP_REPO` (com a regra E). `BKP_PROJ` nos três escopos. `BKP_ISSUES` com sub-issues e dependências. `RST_REPO` etapas 1, 2 e 3 provadas. |
 | 04/10 | `RST_REPO` etapa 3b (relações) provada. Etapa 4 (Projects) implementada (PR #55), **sem run real**. Backup `req-20261004-006` gerado para essa prova. |
 | 05–13/10 | Projeto parado. |
+| 14/10 | `RST_REPO` etapa 4 (Projects): o `req-20261014-001` **falhou** (Auto-add sub-issues do Project novo pôs a filha antes da adição explícita: "Content already exists"); causa confirmada pelo HITL no Project nº 15. PRs #57 (log da falha sem títulos), #58 (tolera os workflows padrão do Project novo) e #59 (resumo de sucesso, tempos e texto do checklist) mergeados. O `req-20261014-002` **passou** e foi conferido contra os originais: etapa 4 provada em run real. |
 
 ## 3. Capabilities e o que está provado
 
@@ -33,7 +35,7 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 | `backup_repository` | `BKP_REPO` | `backup-repository.yml` | **Provado em run real.** Git (bundle, LFS, submódulo só gitlink, arquivo ~25 MiB), labels, milestones, issues com sub-issues e dependências, Projects (parcial, com regra E). |
 | `backup_projects` | `BKP_PROJ` | `backup-projects.yml` | **Provado** nos escopos `PROJECT`, `OWNER_PROJECT_SET` e `SOURCE_REPOSITORY`. Atenção: `OWNER_PROJECT_SET` grava **todos** os Projects do dono; avisar no ECR. |
 | `backup_issues` | `BKP_ISSUES` | `backup-issues.yml` | **Provado**, inclusive relações. Um repositório por linha. |
-| `restore_repository` | `RST_REPO` | `restore-repository.yml` | Etapas 1 (git), 2 (labels e milestones), 3 (issues e comentários) e 3b (sub-issues e dependências) **provadas em run real**. Etapa 4 (Projects) **implementada, só teste local**. Sempre cria repositório novo e privado. |
+| `restore_repository` | `RST_REPO` | `restore-repository.yml` | Etapas 1 (git), 2 (labels e milestones), 3 (issues e comentários), 3b (sub-issues e dependências) e **4 (Projects)** **provadas em run real** (a 4 no `req-20261014-002`). **Ressalva:** o tratamento dos workflows padrão do Project novo (4b: item "já existe" por Auto-add sub-issues, reposicionamento, Done retido em issue aberta, extras aceitos) tem prova **só em teste local**; no `-002` o `workflow_effects` veio vazio. Sempre cria repositório novo e privado. |
 | `list_capabilities`, `show_status`, `validate_evidence`, `help` | — | — | Informativas, respondidas na conversa. |
 
 **Classes:** 5 de 18 implementadas no `BKP_REPO` (`git`, `labels`, `milestones`, `issues`, `projects`). As 13 restantes entram em cada execução como restrições aceitas (`NOT-VERIFIED`): `pull_requests`, `actions`, `checks`, `actions_caches`, `environments`, `variables`, `secret_metadata`, `deployments`, `rules_and_branch_protection`, `collaborators`, `webhooks`, `codespaces_repository_state_delta`, `other_discovered_state`.
@@ -48,15 +50,17 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 | Environment dos segredos | `onedrive-backup` |
 | Destino no OneDrive | `Apps/GitHub repo_backup/<destination>/<request_id>/{package,evidence}/` |
 | Repositórios de teste | `Moriblo/backup_teste` (LFS, submódulo, tags), `Moriblo/backup_teste_issues` (privado; issues, relações, Project nº 13 e nº 14 "Teste restore") |
-| Repositórios criados pelas restaurações de teste | `Moriblo/backup_teste_issues-restaurado`, `-restaurado-2` a `-restaurado-5` (todos privados; candidatos a limpeza pelo HITL) |
+| Repositórios criados pelas restaurações de teste | `Moriblo/backup_teste_issues-restaurado-2` a `-restaurado-7` (todos privados; candidatos a limpeza pelo HITL). O `-restaurado-6` é um alvo **parcial** (run `-001` falhou na etapa 4) e o `-restaurado-7` é o da prova da etapa 4 |
+| Projects criados pelas restaurações de teste | nº 15 (**incompleto**, do `-001`, ligado ao `-restaurado-6`), nº 16 e nº 17 (do `-002`, ligados ao `-restaurado-7`; cópias de #13 e #14). A decisão de apagar é do HITL |
 | Último backup completo | `req-20261004-006`, `backups/backup_teste_issues/req-20261004-006`, run `37184520042`, todos os passos com sucesso |
-| Última restauração provada | `req-20261003-019` (etapa 3b), run `37167245637`, alvo `backup_teste_issues-restaurado-5` |
-| Próximo `request_id` livre | `req-20261013-001` em diante, conforme a data do GO (confirme no `commands.log` do `main`) |
+| Última restauração provada | `req-20261014-002` (etapa 4), run `38515538532`, alvo `backup_teste_issues-restaurado-7`; as cinco classes `OK`, 55 escritas de 72 planejadas, Projects nº 16 e nº 17 conferidos contra os originais pelo HITL. Antes: `req-20261003-019` (etapa 3b) |
+| Restauração que falhou (causa conhecida) | `req-20261014-001`, run `38507996550`, alvo `-restaurado-6`, Project nº 15: `RstAddIssueItem` "Content already exists in this project" (corrigido no PR #58) |
+| Próximo `request_id` livre | `req-20261014-003` em diante, conforme a data do GO (confirme no `commands.log` do `main`) |
 | Repositório-alvo original das Fases 0 e 1 | `Moriblo/MIT`, **ainda sem backup real** |
 
 ## 5. Próximos passos (em ordem)
 
-1. **Provar a etapa 4 (Projects) do `RST_REPO` em run real.** Fonte: `backups/backup_teste_issues/req-20261004-006`. Alvo sugerido: `backup_teste_issues-restaurado-6`. Antes do GO, confirmar que o `RESTORE_WRITE_TOKEN` tem o escopo `project`. Depois, conferir o quadro restaurado na interface e registrar a prova na seção I.14 por PR.
+1. **(feito em 14/10)** Provar a etapa 4 (Projects) do `RST_REPO` em run real: `req-20261014-002`. Opcional, sem pressa: um run que **force a corrida** (pai antes da filha, com o Auto-add sub-issues ganhando) para provar em run real o caminho "já existe", o reposicionamento e os extras aceitos do 4b. O `-002` não os exercitou.
 2. **Classes temporais**, prioridade do protocolo (II.12): `actions` (runs, jobs, logs, artifacts), `checks`, `actions_caches` e entregas de `webhooks`. A retenção do GitHub mudou em 01/10/2026.
 3. **Classe `pull_requests`** (PRs, reviews, threads, comentários), a última do nível 3.
 4. **Primeiro backup real do `Moriblo/MIT`** com `BKP_REPO` e as restrições aceitas.
@@ -68,7 +72,9 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
    - Apagar as variáveis `AZURE_CLIENT_ID` e `AZURE_TENANT_ID` e o app Entra antigo "Repository Preservation OneDrive Writer".
    - Atualizar ou fechar as issues #5, #7 e #11, paradas desde 03/10 e com partes já superadas.
    - Limpar os repositórios `-restaurado*` de teste, quando o HITL decidir.
-   - Corrigir, por PR, o comentário de cabeçalho do `restore-repository.yml`. Ele ainda diz que Projects **não** são restaurados, mas a etapa 4 foi mergeada no PR #55. O engine pode apresentar um ECR com a descrição errada.
+   - (feito no PR #58) O comentário de cabeçalho do `restore-repository.yml` foi corrigido.
+   - Decidir o destino dos repositórios `-restaurado*` e dos Projects nº 15, 16 e 17 (o HITL decide; o engine não apaga nada).
+   - Ajustes manuais do checklist da prova: desligar o *Pull request merged* do Project nº 17; configurar o filtro e ligar o *Auto-add to project* (a API não o lista, mas ele existe na aba Workflows).
 
 ## 6. Registro de decisões do HITL
 
@@ -87,16 +93,23 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 | 03/10 | `data_backup_path` (restaurar dados de outro backup) foi **adiado** até haver necessidade. |
 | 04/10 | Restauração de Projects cria sempre um Project **novo**. `copyProjectV2` não é usado (hipótese não provada). |
 | 13/10 | Contexto do projeto consolidado no projeto do Claude, com instruções de continuidade (`claude/INSTRUCOES_DO_PROJETO.md`). |
+| 14/10 | Engine volta a ser a sessão 01YHH... do Claude Code; a sessão ligada ao projeto só mantém os documentos e revisa PRs. O ECR req-20261013-001 montado na sessão do projeto foi cancelado sem gravação. Contexto copiado para docs/contexto/ (PR #56). |
+| 14/10 | Etapa 4: um **item a mais** no Project restaurado só é aceito se for **sub-issue de uma issue restaurada que está no Project** (adicionado pelo Auto-add sub-issues); fica, é listado com o motivo e a classe vira `PARTIAL`. Qualquer outro item inesperado é `FAILED`. Vale também para o extra que só aparece na conferência final. |
+| 14/10 | Etapa 4: **Status Done não é gravado** numa issue aberta no backup (o Auto-close a fecharia), só no campo `Status`; `PARTIAL`. O restore nunca muda o estado de uma issue por causa de um workflow do Project. |
+| 14/10 | Etapa 4: o **reposicionamento** dos itens é tentado (`updateProjectV2ItemPosition`); se falhar, `PARTIAL` com nota. O restore não apaga os workflows padrão do Project novo (irreversível e contradiz restaurar o estado deles). |
+| 14/10 | **Log do Actions:** o repositório executor é **público**, então nenhum texto que vá para o log traz títulos, nomes de labels, campos, views ou workflows, nem valores. Divergências usam posição ("campo 2"), o erro da API é cortado na primeira aspa, e o detalhe completo fica no `restore-result.json`. Em sucesso, o log traz `RESTORE_SUMMARY` por classe e `RESTORE_TIMINGS`. |
+| 14/10 | Um workflow do backup que a API não lista no Project restaurado **não** é "inexistente" (o *Auto-add to project* existe na aba Workflows e a API não o devolve): o checklist diz "não listado pela API; configure o filtro e ligue à mão". |
+| 14/10 | PRs em sequência, mergeados pelo HITL: 4a (#57) depois 4b (#58) depois 4c (#59). O HITL aceitou, antes de cada run, o `PARTIALLY-PRESERVED` dos Projects, os extras dos workflows, o Done retido e o alvo parcial mantido em caso de falha. |
 
 ## 7. Sessões do Claude que operaram o projeto
 
 | Sessão | Período | Trabalho |
 |---|---|---|
 | claude.ai/code/session_01R9yS4DP5NjxYb5wy4Wt31D | 29/09–02/10 | Fluxo ECR/GO/`commands.log`/Dispatcher, primeiros backups reais, pacote restaurável, LFS |
-| claude.ai/code/session_01YHH3f36KATMnp9YNqn5g9E | 02/10–04/10 | Etapa 2A, Projects, `BKP_PROJ`, `BKP_ISSUES`, `RST_REPO` etapas 1 a 4 |
+| claude.ai/code/session_01YHH3f36KATMnp9YNqn5g9E | 02/10–14/10 | Etapa 2A, Projects, `BKP_PROJ`, `BKP_ISSUES`, `RST_REPO` etapas 1 a 4; em 14/10: `BKP_REPO` `-005`/`-006` e `RST_REPO` `-001`/`-002`, PRs #55 a #59 e este contexto |
 | Sessão de 13/10 (ligada ao projeto Repo_Backup) | 13/10– | Consolidação do contexto no projeto, status e instruções |
 
-**Limitação da sessão ligada ao projeto (verificada em 14/10):** lê o repositório, a API do GitHub (runs, passos, issues, PRs), grava o `commands.log` e abre PRs. **Não** baixa logs de job nem artefatos do Actions: ficam num armazenamento da Microsoft que o proxy da sessão bloqueia (403). Para ler o `BKP_RESULT` ou a evidência, usar o navegador no computador do HITL (o engine pode abrir a página do run) ou o próprio HITL. A situação dos passos de cada job é visível pela API.
+**O que cada sessão consegue ler do Actions (verificado em 14/10 numa sessão do Claude Code):** lê o repositório, a API do GitHub (runs, passos, issues, PRs), grava o `commands.log` e abre PRs, e **baixa o log de um job** (`get_job_logs`, inclusive o `BKP_RESULT` e as linhas `RESTORE_*`). **Não** baixa os **artefatos** do Actions: o link temporário aponta para o armazenamento da Microsoft e o proxy da sessão o bloqueia (403). Para ler o `restore-result.json` ou a evidência completa, o HITL abre o artefato (ou a pasta no OneDrive) e cola o trecho. Não tente contornar o bloqueio. (A versão anterior deste parágrafo dizia que nem os logs de job eram baixáveis; isso vale só para a sessão ligada ao projeto, que usa outro conjunto de ferramentas.) Desde o PR #57 o log traz o motivo das falhas e, desde o #59, o resumo de cada classe, então o artefato raramente é necessário.
 
 **Regra: um só engine por vez.** Duas sessões operando juntas arriscam `request_id` repetido e runs simultâneos, que invalidam o refresh token do OneDrive.
 
