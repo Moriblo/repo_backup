@@ -2,7 +2,7 @@
 
 # Instruções do projeto Repo_Backup (continuidade de contexto)
 
-**Versão:** 13/10/2026
+**Versão:** 14/10/2026 (sem mudança de conteúdo; só o `STATUS_ATUAL.md` mudou nesta data)
 **Para que serve:** garantir que qualquer sessão nova, em qualquer produto do Claude, retome o projeto sem depender da memória de conversas anteriores, e que nada decidido ou feito se perca entre sessões.
 
 ---
