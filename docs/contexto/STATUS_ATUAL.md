@@ -46,12 +46,12 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 
 | Item | Valor |
 |---|---|
-| Repositório executor | `Moriblo/repo_backup` (**público**) |
+| Repositório executor | `Moriblo/repo_backup` (**público** hoje; decisão de 14/10: tornar **privado**, mas só depois de resolver a pré-condição dos segredos de environment, ver §5 e I.15) |
 | Environment dos segredos | `onedrive-backup` |
 | Destino no OneDrive | `Apps/GitHub repo_backup/<destination>/<request_id>/{package,evidence}/` |
 | Repositórios de teste | `Moriblo/backup_teste` (LFS, submódulo, tags), `Moriblo/backup_teste_issues` (privado; issues, relações, Project nº 13 e nº 14 "Teste restore") |
-| Repositórios criados pelas restaurações de teste | `Moriblo/backup_teste_issues-restaurado-2` a `-restaurado-7` (todos privados; candidatos a limpeza pelo HITL). O `-restaurado-6` é um alvo **parcial** (run `-001` falhou na etapa 4) e o `-restaurado-7` é o da prova da etapa 4 |
-| Projects criados pelas restaurações de teste | nº 15 (**incompleto**, do `-001`, ligado ao `-restaurado-6`), nº 16 e nº 17 (do `-002`, ligados ao `-restaurado-7`; cópias de #13 e #14). A decisão de apagar é do HITL |
+| Repositórios criados pelas restaurações de teste | `Moriblo/backup_teste_issues-restaurado-2` a `-restaurado-7` (todos privados; **a apagar pelo HITL**, decisão de 14/10; a evidência fica no OneDrive). O `-restaurado-6` é um alvo **parcial** (run `-001` falhou na etapa 4) e o `-restaurado-7` é o da prova da etapa 4 |
+| Projects criados pelas restaurações de teste | nº 15 (**incompleto**, do `-001`, ligado ao `-restaurado-6`), nº 16 e nº 17 (do `-002`, ligados ao `-restaurado-7`; cópias de #13 e #14). A apagar pelo HITL (decisão de 14/10) |
 | Último backup completo | `req-20261004-006`, `backups/backup_teste_issues/req-20261004-006`, run `37184520042`, todos os passos com sucesso |
 | Última restauração provada | `req-20261014-002` (etapa 4), run `38515538532`, alvo `backup_teste_issues-restaurado-7`; as cinco classes `OK`, 55 escritas de 72 planejadas, Projects nº 16 e nº 17 conferidos contra os originais pelo HITL. Antes: `req-20261003-019` (etapa 3b) |
 | Restauração que falhou (causa conhecida) | `req-20261014-001`, run `38507996550`, alvo `-restaurado-6`, Project nº 15: `RstAddIssueItem` "Content already exists in this project" (corrigido no PR #58) |
@@ -65,15 +65,13 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 3. **Classe `pull_requests`** (PRs, reviews, threads, comentários), a última do nível 3.
 4. **Primeiro backup real do `Moriblo/MIT`** com `BKP_REPO` e as restrições aceitas.
 5. **Higiene e riscos:**
-   - A partir de **19/10/2026**, o `ubuntu-latest` migra para Ubuntu 26. Rodar um backup curto depois dessa data ou fixar `ubuntu-24.04`.
-   - Aviso de Node 20 descontinuado em `actions/checkout@v4`, `actions/create-github-app-token@v2` e `actions/upload-artifact@v4`.
+   - (feito, PR de higiene de 14/10) `runs-on: ubuntu-24.04` fixo em todos os workflows (o `ubuntu-latest` migra para o Ubuntu 26 em 19/10/2026) e actions em Node 24: `checkout@v5`, `upload-artifact@v6`, `create-github-app-token@v3`. Rodar um backup curto depois do merge confirma. Pendente, sem pressa: trocar `app-id` por `client-id` (deprecado) e avaliar `checkout`/`upload-artifact` v7.
    - Conferir a validade do `SOURCE_READ_TOKEN`, do `PROJECTS_READ_TOKEN` e do `RESTORE_WRITE_TOKEN` (clássico, com `repo` e `workflow`, amplo). Avaliar revogar este último entre os testes.
-   - Decidir se o `repo_backup` deve virar privado.
+   - **`repo_backup` privado (decisão do HITL de 14/10), com uma pré-condição.** No plano gratuito, os segredos de **environment** são ignorados em repositório privado, e todos os workflows usam `environment: onedrive-backup`: tornar privado agora **interrompe o sistema**. Resolver antes (decisão de projeto + PR próprio): mover os segredos para segredos de repositório (e mudar onde o App Writer regrava o refresh token), ou assinar o Pro. Consequências aceitas: sem proteção de branch (o check "Registry traceability" vira só detectivo) e os minutos de Actions entram na cota do plano. Ver I.15.
    - Apagar as variáveis `AZURE_CLIENT_ID` e `AZURE_TENANT_ID` e o app Entra antigo "Repository Preservation OneDrive Writer".
-   - Atualizar ou fechar as issues #5, #7 e #11, paradas desde 03/10 e com partes já superadas.
-   - Limpar os repositórios `-restaurado*` de teste, quando o HITL decidir.
+   - (feito em 14/10, sem PR) As issues #5, #7 e #11 foram atualizadas ou fechadas conforme o estado atual (ver o comentário de cada uma).
+   - O HITL apaga os repositórios `-restaurado-2` a `-restaurado-7` e os Projects nº 15, 16 e 17 (decisão de 14/10).
    - (feito no PR #58) O comentário de cabeçalho do `restore-repository.yml` foi corrigido.
-   - Decidir o destino dos repositórios `-restaurado*` e dos Projects nº 15, 16 e 17 (o HITL decide; o engine não apaga nada).
    - Ajustes manuais do checklist da prova: desligar o *Pull request merged* do Project nº 17; configurar o filtro e ligar o *Auto-add to project* (a API não o lista, mas ele existe na aba Workflows).
 
 ## 6. Registro de decisões do HITL
@@ -94,10 +92,12 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 | 04/10 | Restauração de Projects cria sempre um Project **novo**. `copyProjectV2` não é usado (hipótese não provada). |
 | 13/10 | Contexto do projeto consolidado no projeto do Claude, com instruções de continuidade (`claude/INSTRUCOES_DO_PROJETO.md`). |
 | 14/10 | Engine volta a ser a sessão 01YHH... do Claude Code; a sessão ligada ao projeto só mantém os documentos e revisa PRs. O ECR req-20261013-001 montado na sessão do projeto foi cancelado sem gravação. Contexto copiado para docs/contexto/ (PR #56). |
+| 14/10 | **Higiene:** o HITL apaga os repositórios `-restaurado-2` a `-restaurado-7` e os Projects nº 15, 16 e 17 (evidência fica no OneDrive). Todos os workflows com `runs-on: ubuntu-24.04` e actions em Node 24 (PR de higiene). |
+| 14/10 | **`repo_backup` privado** (plano gratuito): aceitas a perda da proteção de branch (o check "Registry traceability" vira só detectivo) e a entrada dos minutos de Actions na cota. A regra de log sem títulos e nomes continua como **boa prática**. **Pré-condição levantada pelo engine:** environments e seus segredos são ignorados em repositório privado no plano Free; resolver antes de tornar privado (I.15). |
 | 14/10 | Etapa 4: um **item a mais** no Project restaurado só é aceito se for **sub-issue de uma issue restaurada que está no Project** (adicionado pelo Auto-add sub-issues); fica, é listado com o motivo e a classe vira `PARTIAL`. Qualquer outro item inesperado é `FAILED`. Vale também para o extra que só aparece na conferência final. |
 | 14/10 | Etapa 4: **Status Done não é gravado** numa issue aberta no backup (o Auto-close a fecharia), só no campo `Status`; `PARTIAL`. O restore nunca muda o estado de uma issue por causa de um workflow do Project. |
 | 14/10 | Etapa 4: o **reposicionamento** dos itens é tentado (`updateProjectV2ItemPosition`); se falhar, `PARTIAL` com nota. O restore não apaga os workflows padrão do Project novo (irreversível e contradiz restaurar o estado deles). |
-| 14/10 | **Log do Actions:** o repositório executor é **público**, então nenhum texto que vá para o log traz títulos, nomes de labels, campos, views ou workflows, nem valores. Divergências usam posição ("campo 2"), o erro da API é cortado na primeira aspa, e o detalhe completo fica no `restore-result.json`. Em sucesso, o log traz `RESTORE_SUMMARY` por classe e `RESTORE_TIMINGS`. |
+| 14/10 | **Log do Actions:** o repositório executor era **público**, então nenhum texto que vá para o log traz títulos, nomes de labels, campos, views ou workflows, nem valores. Divergências usam posição ("campo 2"), o erro da API é cortado na primeira aspa, e o detalhe completo fica no `restore-result.json`. Em sucesso, o log traz `RESTORE_SUMMARY` por classe e `RESTORE_TIMINGS`. |
 | 14/10 | Um workflow do backup que a API não lista no Project restaurado **não** é "inexistente" (o *Auto-add to project* existe na aba Workflows e a API não o devolve): o checklist diz "não listado pela API; configure o filtro e ligue à mão". |
 | 14/10 | PRs em sequência, mergeados pelo HITL: 4a (#57) depois 4b (#58) depois 4c (#59). O HITL aceitou, antes de cada run, o `PARTIALLY-PRESERVED` dos Projects, os extras dos workflows, o Done retido e o alvo parcial mantido em caso de falha. |
 

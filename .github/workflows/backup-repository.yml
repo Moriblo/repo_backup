@@ -82,7 +82,7 @@ permissions:
 jobs:
   backup-repository:
     name: BKP_REPO ${{ inputs.request_id }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04      # fixo: o ubuntu-latest migra para o Ubuntu 26 em 19/10/2026
     # Limite de segurança contra execução presa; ajuste se repositórios grandes precisarem.
     timeout-minutes: 120
     # Environment que guarda ONEDRIVE_CLIENT_ID, ONEDRIVE_REFRESH_TOKEN e SOURCE_READ_TOKEN.
@@ -111,7 +111,7 @@ jobs:
       # refs (que roda neste diretório e envia o SOURCE_TOKEN) mandava DOIS cabeçalhos
       # Authorization e o GitHub respondia HTTP 400 "Duplicate header" (run do req-20260929-006).
       - name: Checkout execution repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
 
@@ -192,7 +192,7 @@ jobs:
       - name: Issue secrets-writer token (GitHub App Writer)
         id: writer
         if: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_APP_ID != '' }}
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_APP_ID }}
           private-key: ${{ secrets.REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY }}
@@ -230,7 +230,7 @@ jobs:
           SECRETS_WRITER_TOKEN: ${{ steps.writer.outputs.token }}
         run: python3 backup/scripts/bkp_repo.py validate-destination
 
-      # Confirma que git e git-lfs existem no runner (ubuntu-latest já os traz).
+      # Confirma que git e git-lfs existem no runner (o ubuntu-24.04 já os traz).
       - name: Install Git LFS
         shell: bash
         run: |
@@ -607,7 +607,7 @@ jobs:
       # Retenção curta (7 dias): a cópia definitiva está no OneDrive.
       - name: Publish evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: bkp-repo-${{ inputs.request_id }}
           path: evidence/

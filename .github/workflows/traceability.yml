@@ -37,12 +37,12 @@ permissions:
 jobs:
   traceability:
     name: Registry traceability
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04      # fixo: o ubuntu-latest migra para o Ubuntu 26 em 19/10/2026
     timeout-minutes: 15
     steps:
       # Baixa o repositório na versão do pull request.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # PyYAML lê o registro; jsonschema é importado pelo dispatch_check.py, que o script
       # carrega para ler a lista de permissão de Mnemonics.
