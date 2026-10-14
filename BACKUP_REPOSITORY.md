@@ -128,7 +128,7 @@ O código já está no repositório (SA-08). O HITL já fez (environment `onedri
 - **Opcional (rotação):** criar o GitHub App **Writer** (*Secrets: Read and write* e *Environments: Read and write*, instalado só em `Moriblo/repo_backup`; o *Environments* é necessário porque o secret fica em um environment) e gravar a variável `REPOSITORY_PRESERVATION_SECRETS_APP_ID` e o secret `REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY`. Sem isso o backup funciona, mas o refresh token **não** é renovado (seção I.11).
 - **Atenção:** não rode dois backups ao mesmo tempo. Com rotação ligada, cada execução gira o refresh token; duas em paralelo podem invalidar uma à outra.
 - **Atenção:** se o environment tiver "Required reviewers", cada execução espera aprovação no GitHub.
-- **Antes da restauração (`RST_REPO`):** criar o secret `RESTORE_WRITE_TOKEN` (ver I.10) no environment `onedrive-backup` e **restringir o environment à branch `main`** (Settings → Environments → Deployment branches). Esse token é o primeiro com poder de escrita no GitHub: só o workflow do `RST_REPO` o usa, e só no repositório que ele cria.
+- **Antes da restauração (`RST_REPO`):** criar o secret `RESTORE_WRITE_TOKEN` (ver I.10) no environment `onedrive-backup` e **restringir o environment à branch `main`** (Settings → Environments → Deployment branches). **Em repositório privado no plano gratuito os environments e seus segredos são ignorados (ver I.15, "Visibilidade do repositório executor").** Esse token é o primeiro com poder de escrita no GitHub: só o workflow do `RST_REPO` o usa, e só no repositório que ele cria.
 
 ## I.3 Os 15 passos de cada execução (índice)
 
@@ -598,7 +598,26 @@ Quando a restauração existir, esses limites entram no relatório final como li
 
 ## I.15 Facilidades opcionais
 
+### Visibilidade do repositório executor: público ou privado (decisão do HITL de 14/10/2026: tornar privado)
+
+O `Moriblo/repo_backup` foi **público** até aqui. O HITL decidiu torná-lo **privado**, no plano gratuito (GitHub Free). O que muda, e o que precisa ser resolvido **antes** de torná-lo privado:
+
+| Ponto | Repositório público | Repositório privado no plano Free |
+|---|---|---|
+| **Environments e seus segredos** (`onedrive-backup`: `ONEDRIVE_REFRESH_TOKEN`, `SOURCE_READ_TOKEN`, `PROJECTS_READ_TOKEN`, `RESTORE_WRITE_TOKEN`, a chave do App Writer e a restrição do environment à branch `main`) | Funcionam | **Ignorados.** A documentação do GitHub diz que, num repositório convertido em privado, "any configured protection rules or environment secrets will be ignored, and you will not be able to configure any environments" no plano Free (só Pro, Team e Enterprise configuram environments em repositório privado). **Todos os workflows declaram `environment: onedrive-backup`**; sem os segredos o sistema para (preflight `BLOCKED`, token de escrita ausente). |
+| Proteção de branch e rulesets (o check obrigatório "Registry traceability" da regra de `main`) | Disponíveis | **Indisponíveis no plano gratuito** (informação do HITL; conferir em Settings → Branches). O check continua rodando em cada pull request e mostrando ✔ ou ✘, mas **deixa de poder bloquear o merge**: vira **só detectivo**. |
+| Minutos do GitHub Actions | Gratuitos nos runners padrão | **Consomem a cota mensal do plano** (no Free, 2.000 minutos por mês e 500 MB de armazenamento de artefatos, segundo o conhecimento do engine; **conferir em Settings → Billing**). Os runs de backup e restauração levam de 1 a 8 minutos cada. |
+| Texto dos logs | Qualquer um lê o log do Actions | Só quem tem acesso ao repositório. **A regra continua valendo como boa prática:** nenhum texto que vá para o log traz títulos, nomes de labels, campos, views ou workflows, nem valores (ver I.14, `RESTORE_SUMMARY`). |
+
+**Pré-condição para tornar privado (a resolver pelo HITL, com decisão de projeto):** os segredos do environment `onedrive-backup` precisam sair do environment. Caminhos possíveis: (1) **segredos e variáveis de repositório** (disponíveis em repositório privado no plano Free), o que exige tirar `environment: onedrive-backup` dos workflows e mudar onde o App Writer regrava o refresh token do OneDrive (hoje ele grava um segredo de **environment**); (2) assinar o plano **Pro**; (3) manter o repositório público. Nada disto foi implementado: o engine não altera onde os segredos ficam sem uma decisão e um PR próprios. **Até lá, não torne o repositório privado.** Também cai a restrição do environment à branch `main` (I.9), que protegia o `RESTORE_WRITE_TOKEN`.
+
+**Artefatos de teste de restauração (decisão de 14/10):** o HITL apaga os repositórios `-restaurado-2` a `-restaurado-7` e os Projects nº 15, 16 e 17. A evidência continua no OneDrive (`<backup_path>/restores/<request_id>/evidence/`).
+
+**Workflows (14/10).** Todos os jobs passam a usar `runs-on: ubuntu-24.04` (o `ubuntu-latest` migra para o Ubuntu 26 em 19/10/2026) e as actions foram atualizadas para versões que rodam em Node 24: `actions/checkout@v5`, `actions/upload-artifact@v6` e `actions/create-github-app-token@v3`. O `app-id` do `create-github-app-token` está **deprecado** em favor de `client-id` (ainda funciona e gera um aviso); a troca exige mudar a variável `REPOSITORY_PRESERVATION_SECRETS_APP_ID` e fica para outro momento. Existem majors mais novos do `checkout` e do `upload-artifact` (v7), não adotados por não terem sido avaliados.
+
 ### Fazer o check de rastreabilidade bloquear merges (opcional, hoje **não ativado**)
+
+> **Atenção (14/10/2026):** esta facilidade depende de proteção de branch. Em repositório **privado no plano gratuito** ela **não existe**: o check continua útil como aviso (detectivo), mas não bloqueia. Os passos abaixo valem com o repositório público ou com plano Pro, Team ou Enterprise.
 
 **O que é.** O check **"Registry traceability"** (workflow `traceability.yml`) roda em todo pull request e mostra ✔ ou ✘. Por padrão ele **não impede o merge**. Se você quiser que um PR com o registro incoerente não possa ser mergeado, exija esse check na proteção de branch.
 
@@ -628,7 +647,7 @@ Fontes (documentação do GitHub): [Sobre branches protegidos](https://docs.gith
 
 **Como desativar.** Remova a regra em Settings → Branches.
 
-**Lembrete.** O controle de escrita direta no `main` continua sendo detectivo (passo 6): ele avisa com um run vermelho, mas não impede o push.
+**Lembrete.** O controle de escrita direta no `main` continua sendo detectivo (passo 6): ele avisa com um run vermelho, mas não impede o push. Com o repositório privado no plano gratuito, **todo** o controle do `main` e dos merges passa a ser detectivo (nada o impede por regra): a disciplina é revisar cada PR e conferir o check antes de mergear.
 
 ---
 
