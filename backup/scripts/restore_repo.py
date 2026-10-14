@@ -167,6 +167,51 @@ def log_text(text, limit=200):
     return text[:limit]
 
 
+SUMMARY_KEYS = {
+    "labels": ("expected", "created", "updated"),
+    "milestones": ("expected", "created", "numbers_changed"),
+    "issues": ("expected", "created", "closed", "writes", "comments", "numbers_changed", "verify_attempts"),
+    "relations": ("sub_issues", "dependencies", "writes", "skipped", "verify_attempts"),
+    "projects": ("writes", "planned_writes", "waits"),
+}
+PROJECT_KEYS = ("source_number", "target_number", "status", "stage", "items_added", "verify_attempts", "repair_passes", "seconds_by_stage", "waits")
+
+
+def class_summary(cls, res):
+    """Linha de resumo de UMA classe para o LOG do Actions (também em caso de sucesso), para o diagnóstico não depender do artefato.
+    O repositório executor é público: só entram contagens, números de issue e tempos, nunca títulos, nomes (labels, campos, views,
+    workflows) nem valores. Os detalhes completos ficam no restore-result.json."""
+    out = {"class": cls, "status": res.get("status")}
+    if res.get("seconds") is not None:
+        out["seconds"] = res["seconds"]
+    if res.get("status") not in ("OK", None) and res.get("reason"):
+        out["reason"] = log_text(res["reason"])
+    for key in SUMMARY_KEYS.get(cls, ()):
+        if key in res:
+            out[key] = res[key]
+    if cls == "labels" and "extras" in res:
+        out["extras_total"] = len(res["extras"])
+    for proj in res.get("projects") or []:
+        entry = {k: proj[k] for k in PROJECT_KEYS if k in proj}
+        items = proj.get("items") or {}
+        entry["items"] = {k: items[k] for k in ("expected", "restored", "archived", "skipped_total") if k in items}
+        entry["fields_total"] = len((proj.get("fields") or {}).get("restored") or [])
+        entry["views_total"] = len((proj.get("views") or {}).get("restored") or [])
+        fx = proj.get("workflow_effects") or {}
+        if fx:
+            entry["workflow_effects"] = {
+                "added_by_workflow": fx.get("added_by_workflow"), "done_not_written": fx.get("done_not_written"),
+                "repositioned": fx.get("repositioned"), "unexpected_items": fx.get("unexpected_items"),
+                "reposition_error": log_text(fx["reposition_error"]) if fx.get("reposition_error") else None,
+                "auto_added_extras": [{"number": e.get("number"), "reason": log_text(e.get("reason"))} for e in fx.get("auto_added_extras") or []]}
+        if proj.get("workflows") is not None:
+            entry["workflows_to_adjust_by_hand"] = sum(1 for w in proj["workflows"] if w.get("action") != "nada")
+        if proj.get("error"):
+            entry["error"] = log_text(proj["error"])
+        out.setdefault("projects", []).append(entry)
+    return out
+
+
 def failure_digest(cls, res, limit=5):
     """Resumo de uma classe FAILED para o LOG do Actions. O repositório executor é PÚBLICO e o que se restaura vem de repositório
     privado: aqui só entram o motivo, contagens, o estágio e divergências sem títulos nem nomes. O detalhe completo fica no restore-result.json."""
@@ -872,10 +917,12 @@ def restore_data_classes(plan, repo, ctx=None):
             results[cls] = {"status": "NOT_VERIFIED", "reason": info["reason"]}
             continue
         items = json.loads((RESTORE_DIR / "package" / fname).read_text(encoding="utf-8"))
+        started = time.monotonic()
         if cls == "labels":
             results[cls] = restore_labels(repo, items)
         else:
             results[cls], mapping = restore_milestones(repo, items)
+        results[cls]["seconds"] = round(time.monotonic() - started, 1)
     # Issues: só se labels e milestones voltaram OK (as issues dependem deles) e se o plano cabe no teto.
     info = plan.get("classes", {}).get("issues", {"status": "NOT_VERIFIED", "reason": "o plano não traz a classe issues"})
     not_ok = [c for c in ("labels", "milestones") if results.get(c, {}).get("status") != "OK"]
@@ -892,14 +939,21 @@ def restore_data_classes(plan, repo, ctx=None):
         if reason:
             results["issues"] = {"status": "NOT_VERIFIED", "reason": reason}
         else:
+            started = time.monotonic()
             results["issues"], issue_map, ids, node_ids = restore_issues(repo, wplan)
+            results["issues"]["seconds"] = round(time.monotonic() - started, 1)
+    started = time.monotonic()
     results["relations"] = restore_relations_class(plan, repo, results["issues"], issue_map, ids)
+    results["relations"]["seconds"] = round(time.monotonic() - started, 1)
+    started = time.monotonic()
     results["projects"] = restore_projects_class(plan, repo, results, issue_map, node_ids, ctx or {})
+    results["projects"].setdefault("seconds", round(time.monotonic() - started, 1))
     return results, mapping, issue_map
 
 
 def cmd_restore():
     """Cria o alvo e restaura branches, tags e LFS, com conferência final."""
+    t_start = time.monotonic()
     plan = json.loads((RESTORE_DIR / "plan.json").read_text())
     source = plan["source_repository"]
     state = {"source_repository": source, "backup_path": plan["backup_path"], "target_repository": None, "created": False}
@@ -1019,6 +1073,7 @@ def cmd_restore():
         # Ids do GraphQL que os Projects pedem: o do dono (usuário ou organização) e o do repositório criado.
         owner_id = user.get("node_id") if route == "/user/repos" else gh("GET", f"/orgs/{owner}")[1].get("node_id")
         ctx = {"repo_node_id": created.get("node_id"), "owner_id": owner_id, "token_scopes": state.get("token_scopes")}
+        git_seconds = round(time.monotonic() - t_start, 1)
         classes, mapping, issue_map = restore_data_classes(plan, created["full_name"], ctx)
         project_map = {str(r["source_number"]): {"number": r.get("target_number"), "url": r.get("url")}
                        for r in classes.get("projects", {}).get("projects", []) if r.get("target_number") is not None}
@@ -1028,10 +1083,14 @@ def cmd_restore():
              "issues": {str(old): new for old, new in sorted(issue_map.items())}, "projects": project_map}, indent=2, sort_keys=True) + "\n")
         data = {"status": "OK", **state, "default_branch": default_branch, "heads": len(heads),
                 "tags": len(to_push) - len(heads), "skipped_refs": len(skipped), "skipped_examples": skipped[:5],
-                "lfs": plan["has_lfs"], "notes": notes, "backup_request_id": plan["backup_request_id"], "classes": classes}
+                "lfs": plan["has_lfs"], "notes": notes, "backup_request_id": plan["backup_request_id"], "classes": classes,
+                "seconds": {"git": git_seconds, **{c: v.get("seconds") for c, v in classes.items()}, "total": round(time.monotonic() - t_start, 1)}}
         write_result(data)
         print("RESTORE_OK " + json.dumps({k: data[k] for k in ("target_repository", "html_url", "default_branch", "heads", "tags", "skipped_refs", "lfs")}, sort_keys=True), flush=True)
         print("RESTORE_CLASSES " + json.dumps({c: v["status"] for c, v in classes.items()}, sort_keys=True), flush=True)
+        for cls, res in classes.items():
+            print("RESTORE_SUMMARY " + json.dumps(class_summary(cls, res), sort_keys=True, ensure_ascii=False), flush=True)
+        print("RESTORE_TIMINGS " + json.dumps(data["seconds"], sort_keys=True), flush=True)
         failed = sorted(c for c, v in classes.items() if v["status"] == "FAILED")
         for cls in failed:
             print("RESTORE_FAILURE " + json.dumps(failure_digest(cls, classes[cls]), sort_keys=True, ensure_ascii=False), flush=True)
