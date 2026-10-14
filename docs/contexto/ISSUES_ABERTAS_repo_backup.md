@@ -2,6 +2,8 @@
 
 # Issues abertas do repo_backup (cópia de 13/10/2026)
 
+> **Atualização de 14/10/2026.** A issue **#7 foi fechada** (SA-01 a SA-08 entregues; as pendências que sobravam foram movidas para a seção 5 de `STATUS_ATUAL.md`, ver o comentário de fechamento). As issues **#5** e **#11** seguem abertas e ganharam um comentário de estado cada uma (as cópias abaixo são os corpos de 13/10; a issue #11 ainda lista como pendentes itens já entregues: `restore_repository` etapas 1 a 4 e `BKP_PROJ`).
+
 > Cópia fiel do corpo das issues abertas de `Moriblo/repo_backup`, que registram decisões do HITL fora dos arquivos do repositório. Nenhuma tem comentários. A fonte é sempre o GitHub: se a issue mudar, esta cópia fica velha. Atualize-a com o ritual descrito em `claude/INSTRUCOES_DO_PROJETO.md`.
 
 ---
