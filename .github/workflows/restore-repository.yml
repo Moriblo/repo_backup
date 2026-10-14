@@ -19,8 +19,14 @@
 #   e NUNCA pode ser a origem; envia só refs/heads/* e refs/tags/* (sem --force) e o LFS; define a branch padrão e
 #   confere as refs. Depois recria as labels e os milestones do mesmo backup (sem apagar nada; as labels padrão do
 #   GitHub que não existem na origem ficam) e as issues com comentários (cópia equivalente, com @menções e referências
-#   cruzadas neutralizadas e sem assignees) e confere o resultado. Sub-issues e dependências entre as issues restauradas voltam na classe relations (etapa 3b); Projects NÃO são restaurados nesta etapa
-#   (o RESTAURAR.txt do backup explica o que fazer à mão). refs/pull/* não voltam (o GitHub não aceita).
+#   cruzadas neutralizadas e sem assignees) e confere o resultado. Sub-issues e dependências entre as issues restauradas voltam na classe relations (etapa 3b).
+#   Os Projects (etapa 4, classe projects) voltam como Projects NOVOS e PRIVADOS, "<título> (restaurado)", ligados ao repositório restaurado,
+#   com campos, views, itens, valores, arquivados e status updates; os itens são ligados às issues restauradas pelo título. Exige o escopo
+#   `project` no RESTORE_WRITE_TOKEN e só roda se as issues voltaram OK. NÃO voltam: as regras dos workflows do Project (a API não as expõe
+#   nem permite criá-las; o RESTAURAR-PROJETO.txt traz o checklist), agrupamento e ordenação das views, colaboradores e seleção múltipla.
+#   Os workflows padrão do Project novo mexem no quadro enquanto ele é montado (Auto-add sub-issues adiciona as filhas, Item added põe Status
+#   = Todo, Auto-close fecha a issue quando o Status vira Done): o restore tolera, confere e declara (PARTIAL), nunca apaga.
+#   refs/pull/* não voltam (o GitHub não aceita).
 #
 # SEQUÊNCIA DOS PASSOS (não reordenar; ver BACKUP_REPOSITORY.md)
 #   1. Revalidar inputs            -> rejeita valores fora do schema

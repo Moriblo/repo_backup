@@ -51,6 +51,7 @@ import github_projects_read as pr
 # Tipos de campo que o GitHub cria sozinho em todo Project (não são recriados) e os que a API deixa criar.
 CUSTOM_TYPES = ("TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION")
 SUFFIX = " (restaurado)"
+ALREADY_THERE = "Content already exists"       # resposta do GitHub quando um workflow (Auto-add sub-issues) já pôs o item no Project
 INTERNAL_ERROR = pr.INTERNAL_ERROR
 VALUE_TYPES = {"ProjectV2ItemFieldTextValue": "text", "ProjectV2ItemFieldNumberValue": "number", "ProjectV2ItemFieldDateValue": "date",
                "ProjectV2ItemFieldSingleSelectValue": "select", "ProjectV2ItemFieldIterationValue": "iteration"}
@@ -169,7 +170,7 @@ def plan_projects(source, projects, items, issues, issue_map, node_ids):
         views = sorted(project["views"]["nodes"], key=lambda v: v["number"])
         writes = (2 + len(fields) + 1 + sum(1 + bool(v.get("filter")) for v in views) + len(steps)
                   + sum(len(s["values"]) for s in steps) + sum(s["archived"] for s in steps)
-                  + len((project.get("statusUpdates") or {}).get("nodes", [])) + bool(project.get("closed")))
+                  + len((project.get("statusUpdates") or {}).get("nodes", [])) + bool(project.get("closed")) + len(steps))      # + reposicionamento no pior caso
         plans.append({"source": project, "title": project["title"] + SUFFIX, "fields": fields, "views": views, "items": steps,
                       "skipped": skipped, "unsupported": sorted(set(multi) | unsupported), "writes": writes,
                       "status_updates": (project.get("statusUpdates") or {}).get("nodes", []),
@@ -384,13 +385,64 @@ def create_views(writer, plan, project_id, details, index):
             writer.write("RstUpdateView", "updateProjectV2View", data)
 
 
-def verify(graph, rest_get, plan, project_id, expected_items, issue_states, project_meta, conflicts):
+def issue_number_of(url):
+    """Número da issue no fim de uma URL da API (parent_issue_url), ou None."""
+    tail = str(url or "").rstrip("/").rsplit("/", 1)[-1]
+    return int(tail) if tail.isdigit() else None
+
+
+def classify_items(items, expected_ids, step_numbers, repo_full, rest_get):
+    """Separa os itens que o Project tem a mais: (aceitos, inesperados). Só é aceito o item que é uma sub-issue de uma issue restaurada
+    que está no Project (o workflow Auto-add sub-issues do GitHub a adicionou sozinho). Devolve listas de (item, motivo ou None)."""
+    accepted, unexpected = [], []
+    for item in items:
+        if item["id"] in expected_ids:
+            continue
+        content = item.get("content") or {}
+        number = content.get("number")
+        repo = ((content.get("repository") or {}).get("nameWithOwner") or "").lower()
+        if item.get("type") != "ISSUE" or number is None or repo != (repo_full or "").lower():
+            unexpected.append((item, "não é uma issue do repositório restaurado"))
+            continue
+        status, data = rest_get(number)
+        parent = issue_number_of(data.get("parent_issue_url")) if status == 200 else None
+        if parent in step_numbers:
+            accepted.append((item, f"sub-issue de #{parent}, adicionada pelo workflow Auto-add sub-issues"))
+        else:
+            unexpected.append((item, "não é sub-issue de uma issue restaurada que está no Project"))
+    return accepted, unexpected
+
+
+def reposition(writer, project_id, order, actual_ids, notes):
+    """Põe os itens esperados na ordem do backup com updateProjectV2ItemPosition. `order` = ids esperados em ordem; `actual_ids` = ids de
+    todos os itens do Project como estão agora. Devolve (quantos movidos, erro ou None). Falha de escrita não derruba: o chamador declara PARTIAL."""
+    current = list(actual_ids)
+    moved = 0
+    try:
+        for i, item_id in enumerate(order):
+            wanted_before = [x for x in current if x in set(order)]
+            if wanted_before[i] == item_id:
+                continue
+            data = {"projectId": project_id, "itemId": item_id}
+            if i > 0:
+                data["afterId"] = order[i - 1]
+            writer.write("RstMoveItem", "updateProjectV2ItemPosition", data)
+            moved += 1
+            current.remove(item_id)
+            current.insert(0 if i == 0 else current.index(order[i - 1]) + 1, item_id)
+    except ProjectRestoreError as exc:
+        return moved, str(exc)
+    return moved, None
+
+
+def verify(graph, rest_get, plan, project_id, expected_items, issue_states, project_meta, conflicts, check_order=True, repo_full=None):
     """Relê o Project e compara com o plano. Devolve (divergências, valores a regravar, Project relido, divergências completas).
 
     As divergências (`bad`) vão para o LOG do Actions e o repositório executor é público: elas nunca trazem títulos, nomes de campos
     ou de views, nem valores (usam a posição: "campo 2", "view 1", "item 3"). O texto completo, com os valores, vai em `full`
-    (restore-result.json, que fica no artefato e no OneDrive)."""
-    details, items, _ = read_project(graph, project_id)
+    (restore-result.json, que fica no artefato e no OneDrive). `check_order` = False quando o reposicionamento falhou (a ordem já foi
+    declarada). Itens a mais que são sub-issues de itens restaurados (Auto-add sub-issues) não são divergência: `classify_items` os aceita."""
+    details, all_items, _ = read_project(graph, project_id)
     bad, repair, full = [], [], []
 
     def add(safe, complete=None):
@@ -417,15 +469,27 @@ def verify(graph, rest_get, plan, project_id, expected_items, issue_states, proj
         got = names.get(v["name"])
         if got is None or got["layout"] != v["layout"] or (got.get("filter") or "") != (v.get("filter") or ""):
             add(f"view {n} ausente ou diferente (layout ou filtro)", f"view {v['name']} ausente ou diferente (layout ou filtro)")
-    if len(items) != len(expected_items):
-        add(f"{len(items)} itens no Project restaurado, esperava {len(expected_items)}")
+
+    expected_ids = {item_id for _, item_id in expected_items}
+    items = all_items
+    step_numbers = {s["new"] for s, _ in expected_items if s["kind"] == "issue"}
+    _, unexpected = classify_items([i for i in items if i["id"] not in expected_ids], expected_ids, step_numbers, repo_full, rest_get)
+    for item, why in unexpected:
+        pos = next(n for n, i in enumerate(all_items, 1) if i["id"] == item["id"])
+        add(f"item inesperado na posição {pos}: {why}")
+    by_id = {i["id"]: i for i in items}
+    present = [i for i in items if i["id"] in expected_ids]
+    if len(present) != len(expected_items):
+        add(f"{len(present)} itens no Project restaurado, esperava {len(expected_items)}")
+    if check_order and [i["id"] for i in present] != [item_id for _, item_id in expected_items if item_id in by_id]:
+        add("a ordem dos itens difere do backup")
     for n, (step, item_id) in enumerate(expected_items):
-        if n >= len(items):
-            break
-        got = items[n]
+        got = by_id.get(item_id)
+        if got is None:
+            continue
         label = f"item {n + 1}"
         if norm(item_title(got)) != norm(step["title"]):
-            add(f"{label}: o título lido na posição {n + 1} não é o esperado")
+            add(f"{label}: o título lido não é o esperado")
             continue
         if bool(got.get("isArchived")) != step["archived"]:
             add(f"{label}: arquivado = {got.get('isArchived')}, esperava {step['archived']}")
@@ -461,18 +525,45 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
     result["stage"] = "views"
     create_views(writer, plan, project_id, details, index)
 
-    expected = []
+    pending_steps, expected = [], []
     result["stage"] = "itens"
     for step in plan["items"]:
-        if step["kind"] == "issue":
-            added = writer.write("RstAddIssueItem", "addProjectV2ItemById", {"projectId": project_id, "contentId": step["node_id"]}, (["item"], "id"))
-        else:
-            added = writer.write("RstAddDraftItem", "addProjectV2DraftIssue", {"projectId": project_id, "title": step["title"], "body": step["body"]},
-                                 (["projectItem", "item"], "id"))
-        expected.append((step, added["id"]))
-        result["items_added"] = len(expected)
+        item_id = None
+        try:
+            if step["kind"] == "issue":
+                item_id = writer.write("RstAddIssueItem", "addProjectV2ItemById", {"projectId": project_id, "contentId": step["node_id"]}, (["item"], "id"))["id"]
+            else:
+                item_id = writer.write("RstAddDraftItem", "addProjectV2DraftIssue", {"projectId": project_id, "title": step["title"], "body": step["body"]},
+                                       (["projectItem", "item"], "id"))["id"]
+        except ProjectRestoreError as exc:
+            if step["kind"] != "issue" or ALREADY_THERE not in str(exc):
+                raise
+            pending_steps.append(step)               # um workflow do GitHub já pôs este item no Project: o id é achado na releitura
+        expected.append([step, item_id])
+        result["items_added"] = sum(1 for _, i in expected if i)
+    result["stage"] = "conferência dos itens"
+    time.sleep(ctx["settle"])                       # os workflows padrão do Project novo reagem à inclusão (Status = Todo, Auto-add sub-issues...)
+    _, now_items, _ = read_project(graph, project_id)
+    by_node = {(i.get("content") or {}).get("id"): i["id"] for i in now_items if (i.get("content") or {}).get("id")}
+    for pair in expected:
+        if pair[1] is None:
+            pair[1] = by_node.get(pair[0]["node_id"])
+            if pair[1] is None:
+                raise ProjectRestoreError(f"[RstAddIssueItem] {ALREADY_THERE}, mas o item não foi achado no Project")
+    expected = [(step, item_id) for step, item_id in expected]
+    expected_ids = {item_id for _, item_id in expected}
+    step_numbers = {s["new"] for s, _ in expected if s["kind"] == "issue"}
+    accepted, unexpected = classify_items([i for i in now_items if i["id"] not in expected_ids], expected_ids, step_numbers, ctx.get("repo_full"), rest_get)
+    effects = {"added_by_workflow": [s["old"] for s in pending_steps],
+               "auto_added_extras": [{"number": (i.get("content") or {}).get("number"), "reason": why} for i, why in accepted],
+               "unexpected_items": len(unexpected), "done_not_written": [], "repositioned": 0, "reposition_error": None}
+    result["workflow_effects"] = effects
+    now_ids = {i["id"] for i in now_items}
+    order = [item_id for _, item_id in expected if item_id in now_ids]       # um item que o GitHub não guardou é pego pela conferência
+    if [i["id"] for i in now_items if i["id"] in expected_ids] != order:
+        result["stage"] = "reposicionamento"
+        effects["repositioned"], effects["reposition_error"] = reposition(writer, project_id, order, [i["id"] for i in now_items], notes)
     result["stage"] = "valores"
-    time.sleep(ctx["settle"])                       # os workflows padrão do Project novo reagem à inclusão (por exemplo, Status = Todo)
     skipped_values = []
     for step, item_id in expected:
         step["applied"] = []
@@ -480,6 +571,9 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
             data, reason = value_input(index, value[0], value)
             if data is None:
                 skipped_values.append(f"{step['title']}: {reason}")
+                continue
+            if (step["kind"] == "issue" and value[1] == "select" and value[2] == "Done" and ctx["issue_state"].get(step["old"]) == "open"):
+                effects["done_not_written"].append(step["old"])      # o workflow Auto-close fecharia a issue, que no backup está aberta
                 continue
             step["applied"].append(value)
             writer.write("RstSetValue", "updateProjectV2ItemFieldValue",
@@ -502,7 +596,8 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
     result["stage"] = "conferência"
     attempts, repaired = 0, 0
     for attempts in range(1, ctx["tries"] + 1):
-        bad, repair, restored, full = verify(graph, rest_get, plan, project_id, expected, issue_states, meta, conflicts)
+        bad, repair, restored, full = verify(graph, rest_get, plan, project_id, expected, issue_states, meta, conflicts,
+                                             effects["reposition_error"] is None, ctx.get("repo_full"))
         if not bad:
             break
         if repair and repaired < 2:                 # um workflow pode ter sobrescrito o valor depois da escrita: regrava e confere de novo
@@ -528,7 +623,8 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
                          "skipped": plan["skipped"][:20], "skipped_total": len(plan["skipped"])},
                   fields={"restored": [f["name"] for f in plan["fields"]]}, views={"restored": [v["name"] for v in plan["views"]]},
                   status_updates=len(plan["status_updates"]), skipped_values=skipped_values[:10])
-    pending = plan["skipped"] or skipped_values or plan["unsupported"]
+    pending = (plan["skipped"] or skipped_values or plan["unsupported"] or effects["auto_added_extras"] or effects["done_not_written"]
+               or effects["reposition_error"])
     result["status"] = "PARTIAL" if pending else "OK"
     if plan["unsupported"]:
         result["unsupported"] = plan["unsupported"]
@@ -557,12 +653,21 @@ def checklist_text(results):
         for w in r["workflows"]:
             lines.append(f"  - {w['name']}: no backup {'LIGADO' if w['enabled_in_backup'] else 'DESLIGADO'}; "
                          f"no restaurado {({True: 'LIGADO', False: 'DESLIGADO', None: 'ausente'})[w['enabled_in_restored']]}; ação: {w['action']}")
+        fx = r.get("workflow_effects") or {}
+        if fx.get("added_by_workflow"):
+            lines.append(f"  - Issues já postas no Project pelo GitHub (Auto-add sub-issues) antes da adição explícita: {', '.join('#' + str(n) for n in fx['added_by_workflow'])} (tratadas como presentes).")
+        for extra in fx.get("auto_added_extras") or []:
+            lines.append(f"  - Item a mais, deixado no Project: issue #{extra['number']} ({extra['reason']}). O restore não apaga nada: remova à mão se não quiser.")
+        if fx.get("done_not_written"):
+            lines.append(f"  - Status Done NÃO gravado nas issues {', '.join('#' + str(n) for n in fx['done_not_written'])} (abertas no backup): o workflow Auto-close do Project as fecharia.")
+        if fx.get("reposition_error"):
+            lines.append("  - A ordem dos itens não pôde ser ajustada ao backup (reposicionamento falhou); ajuste à mão.")
         lines += ["  - Agrupamento e ordenação das views, colaboradores e as regras (gatilho, filtro, ação) dos workflows não voltam.", ""]
     return "\n".join(lines) + "\n"
 
 
 def restore_projects(*, source, projects, items, issues, issue_map, node_ids, issue_states, repo_node_id, owner_id, api_base, token,
-                     token_scopes, budget, rest_get, evidence_dir, write_delay=0.8, rate_wait=60.0, settle=5.0, tries=4, delay=3.0):
+                     token_scopes, repo_full=None, budget, rest_get, evidence_dir, write_delay=0.8, rate_wait=60.0, settle=5.0, tries=4, delay=3.0):
     """Restaura os Projects do backup. Devolve o resultado da classe (status OK, PARTIAL, FAILED ou NOT_VERIFIED)."""
     if token_scopes is not None and "project" not in token_scopes:
         return {"status": "NOT_VERIFIED", "reason": f"o token de escrita não tem o escopo project (escopos: {', '.join(token_scopes) or 'nenhum'})"}
@@ -574,7 +679,7 @@ def restore_projects(*, source, projects, items, issues, issue_map, node_ids, is
         return {"status": "NOT_VERIFIED", "reason": f"os Projects exigiriam cerca de {total} escritas, acima do que resta do teto ({max(budget, 0)}); nada foi escrito"}
     writer = Writer(api_base, token, write_delay, rate_wait)
     graph = pr.Graph(api_base, token)
-    ctx = {"owner_id": owner_id, "repo_node_id": repo_node_id, "settle": settle, "tries": tries, "delay": delay, "issue_state": issue_states}
+    ctx = {"owner_id": owner_id, "repo_node_id": repo_node_id, "repo_full": repo_full, "settle": settle, "tries": tries, "delay": delay, "issue_state": issue_states}
     results, notes = [], []
     for n, plan in enumerate(plans):
         result = {"source_number": plan["source"]["number"], "title": plan["title"], "status": "FAILED", "stage": "início", "items_added": 0}
