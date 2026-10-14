@@ -158,8 +158,13 @@ NAME_CLASSES = ("labels", "milestones")      # as divergências dessas classes s
 
 
 def log_text(text, limit=200):
-    """Texto de erro para o LOG: sem o que estiver entre aspas ou crases (a API às vezes repete o que recebeu) e com tamanho limitado."""
-    return re.sub(r"([\"'`]).*?\1", "<…>", str(text))[:limit]
+    """Texto de erro para o LOG: corta no PRIMEIRO caractere de aspas (simples, dupla ou crase) e põe "<…>" no lugar do resto, porque a
+    API às vezes repete o que recebeu e um par de aspas misturadas escaparia de uma máscara por pares. Tamanho limitado."""
+    text = str(text)
+    hit = re.search(r"[\"'`]", text)
+    if hit:
+        text = text[:hit.start()] + "<…>"
+    return text[:limit]
 
 
 def failure_digest(cls, res, limit=5):

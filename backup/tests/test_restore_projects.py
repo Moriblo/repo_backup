@@ -581,7 +581,10 @@ class VerificationTest(Base):
         self.assertEqual(result["status"], "FAILED", result)
         proj = result["projects"][0]
         self.assertEqual(proj["repair_passes"], 2)                           # no máximo 2 regravações
-        self.assertIn("Status", proj["mismatches"][0])
+        self.assertIn("o valor do campo 1 difere", proj["mismatches"][0])
+        self.assertNotIn("Status", " ".join(proj["mismatches"]))
+        self.assertNotIn("Todo", " ".join(proj["mismatches"]))                 # nem o valor
+        self.assertIn("Status", proj["mismatch_details"][0])                   # o completo fica no resultado
         self.assertIn("divergência", result["reason"])
 
     def test_workflow_que_fecha_a_issue_vira_failed(self):
@@ -650,21 +653,27 @@ class SilentFailureTest(Base):
 
     def test_filtro_da_view_ignorado(self):
         self.world.ignore = {"updateProjectV2View"}
-        self.assertIn("view View 2", self.failed())
+        text = self.failed()
+        self.assertIn("view 2 ausente", text)
+        self.assertNotIn("View 2", text)
 
     def test_layout_da_view_ignorado(self):
         self.world.view_layout = "TABLE_LAYOUT"
-        self.assertIn("view View 2", self.failed())
+        self.assertIn("view 2 ausente", self.failed())
 
     def test_campo_que_nao_foi_criado(self):
         self.world.ignore_field = "Prioridade"
-        self.assertIn("campo Prioridade ausente", self.failed())
+        text = self.failed()
+        self.assertIn("campo 2 ausente", text)
+        self.assertNotIn("Prioridade", text)                              # só a posição: o nome não vai para o log
 
     def test_opcoes_do_status_nao_atualizadas(self):
         details, items = source_project()
         next(f for f in details["fields"]["nodes"] if f["name"] == "Status")["options"].append({"id": "S9", "name": "Bloqueado", "color": "RED", "description": ""})
         self.world.ignore = {"updateProjectV2Field"}
-        self.assertIn("campo Status: opções diferentes", self.failed(projects=[details], items=items))
+        text = self.failed(projects=[details], items=items)
+        self.assertIn("campo 1: opções diferentes", text)
+        self.assertNotIn("Status", text)
 
     def test_falha_de_conferencia_no_primeiro_project_nao_tenta_o_segundo(self):
         d13, i13 = source_project(13)
@@ -741,6 +750,42 @@ class FailureReportTest(Base):
         proj = self.run_restore(tries=1)["projects"][0]
         self.assertIn("o título lido na posição 1 não é o esperado", proj["mismatches"][0])
         self.assertFalse(any(t in " ".join(proj["mismatches"]) for t in DEFAULT_TITLES))
+
+
+class LogSafetyTest(Base):
+    """Nada do que vai para o log do Actions (o repositório é público) traz nome de campo ou de view nem o valor de um metadado."""
+    READMES = ["Segredo do projeto: \"duplas\" e 'simples' e d'água", "só aspas simples d'água 'x'", 'só duplas "x" y']
+
+    def test_metadados_divergentes_dizem_so_a_chave(self):
+        for readme in self.READMES:
+            self.setUp()
+            details, items = source_project()
+            details["readme"], details["shortDescription"] = readme, "Descrição privada"
+            self.world.ignore = {"updateProjectV2"}                        # o GitHub "ignora" a gravação dos metadados
+            result = self.run_restore(projects=[details], items=items)
+            proj = result["projects"][0]
+            self.assertEqual(proj["status"], "FAILED", result)
+            safe = " | ".join(proj["mismatches"])
+            self.assertIn("Project: readme difere", safe)
+            self.assertIn("Project: shortDescription difere", safe)
+            self.assertNotIn("Segredo", safe)
+            self.assertNotIn("privada", safe)
+            self.assertNotIn("água", safe)
+            self.assertNotIn(readme, safe)
+            # o texto completo, com os valores, fica no resultado
+            full = " | ".join(proj["mismatch_details"])
+            self.assertIn(repr(readme), full)
+
+    def test_nomes_de_campos_e_views_nao_aparecem(self):
+        self.world.ignore_field = "Prioridade"
+        self.world.view_layout = "TABLE_LAYOUT"
+        self.world.drop_status = 999
+        proj = self.run_restore(tries=1)["projects"][0]
+        safe = " | ".join(proj["mismatches"])
+        for name in ("Prioridade", "Status", "View 1", "View 2", "Todo", "Alta"):
+            self.assertNotIn(name, safe)
+        self.assertIn("campo 2 ausente", safe)
+        self.assertIn("view 2 ausente", safe)
 
 
 class FailureTest(Base):

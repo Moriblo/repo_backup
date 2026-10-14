@@ -753,7 +753,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 66cde91575aec42d4eae27fb509b3bc7e362d37a
+      current_sha: 17d8bcdd6f08fbdd586ec20cbc18d97e9d399981
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -1400,7 +1400,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 2b808f51a781c160edc0775af232e5483c4778a1
+      current_sha: e708aa62e8dd003bd98b81206dff8ac71a331358
     validation:
       status: VALIDATED
       scope: "Rodou no run real req-20261003-009 (run 37137225805) nos três subcomandos - fetch (backup baixado e conferido), restore (repositório privado criado, 1 branch enviada, refs conferidas, branch padrão definida) e build-evidence (evidence.json e manifest.json válidos nos schemas 2.0). Não provado em run real - tags, Git LFS, refs/pull/*, branches com workflows, metadados do repo-metadata.json, as recusas (alvo existente ou igual à origem, token inválido), falhas no meio e repositório grande; essas só têm teste local. Etapa 2 (labels e milestones) provada no run real req-20261003-014 (run 37154176501, Moriblo/backup_teste_issues-restaurado-2): preflight de três classes PASS, git PRESERVED (1 branch, commit 4f61034 idêntico ao da origem, conferido pelo HITL), labels e milestones PRESERVED-AS-EQUIVALENT-REPRESENTATION (4 labels do backup, uma delas a padrão bug atualizada com a descrição do backup, mais 9 padrão do GitHub listadas; 1 milestone, mapa 1->1), COMPLETE_WITH_EXCEPTIONS, evidence.json, manifest.json e restore-map.json lidos e conferidos com os prints do HITL (labels, milestones, descrição). Não provado nesta etapa - prazo de milestone (a origem não tem), milestone fechado, buraco na numeração, tópicos (a origem não tem), escolha da branch padrão (só existe a main), mais de 100 labels, limite de taxa, saída 48 e classe NOT-VERIFIED. Etapa 3 (issues e comentários) exercitada no run real req-20261003-017 (run 37161077470, Moriblo/backup_teste_issues-restaurado-3), que terminou FAILED por defeito da conferência e não por falha de escrita: o workflow criou as 6 issues e os comentários (restore-map 1..6, 13 escritas) e o HITL conferiu na interface o cabeçalho, as labels, o milestone, a ausência de assignees, os comentários e a neutralização (@menção, dono/repo#N e URL entre crases, bloco de código e e-mail intactos), e a issue original ficou sem nenhum evento novo; a conferência de volta por listagem viu só 3 das 6 issues (atraso da listagem do GitHub) e foi trocada por leitura direta de cada issue com repetição limitada. A versão corrigida passou no run real req-20261003-018 (run 37162323557, Moriblo/backup_teste_issues-restaurado-4): preflight de quatro classes PASS, git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION (6 issues, 6 comentários, 1 fechamento, 13 escritas, numeração sem mudança, verify_attempts 1), COMPLETE_WITH_EXCEPTIONS, com evidence.json, manifest.json, restore-map.json e restore-result.json lidos e a aba Issues e a issue 3 conferidas pelo HITL na interface (cabeçalho, labels, milestone, sem assignees, comentário com cabeçalho). Não provado em run real - repositório grande e o teto de 450 escritas, limite de taxa, numeração com buracos (a origem não tem), origem com assignees ou reações, a repetição da conferência (verify_attempts maior que 1), a saída 48 por falha de escrita, e a linha do tempo da issue original neste run (conferida só no run req-20261003-017). Escopos do token (nomes do cabeçalho X-OAuth-Scopes de GET /user; null para token sem o cabeçalho) passam a ser registrados em restore-result.json (`token_scopes`) e numa linha RESTORE_TOKEN do log, para a restauração de Projects poder exigir o escopo project; só teste local, ainda não rodou em run real."
@@ -1425,10 +1425,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: fc1c4f62894b96651225f2515fb4476210e38f2e
+      current_sha: 6213a72d0e7b4d7fd0e96d22f1407399d906aa1c
     validation:
       status: NOT_VALIDATED
-      scope: "Executado localmente e no CI dos pull requests (124 testes, mais verificação de mutação dos pontos de segurança e das conferências de labels, milestones, issues, relações, escopos do token e da integração dos Projects). Não roda contra o GitHub nem contra o OneDrive reais."
+      scope: "Executado localmente e no CI dos pull requests (126 testes, mais verificação de mutação dos pontos de segurança e das conferências de labels, milestones, issues, relações, escopos do token e da integração dos Projects). Não roda contra o GitHub nem contra o OneDrive reais."
     relationships:
       - {capability_id: restore_repository, relationship: VALIDATES}
 
@@ -1446,7 +1446,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: b9a020c2fc62ddf1a82a02574f1f786792d30a2a
+      current_sha: dd22d0bac688137d48807b7634050d9d9025702d
     validation:
       status: NOT_VALIDATED
       scope: "Só teste local contra uma API GraphQL simulada com estado; ainda não rodou em run real. Não provado - nenhum dos nomes de payload, a criação de views com campos visíveis, os workflows padrão do GitHub reagindo à inclusão de itens, a conferência de volta, o limite de taxa."
@@ -1464,10 +1464,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: a964e389d1a97f90f4b1bb46bbe6c49b9fb37c97
+      current_sha: 53536473f57b0898a273c371f1e00e56e1dbf3c2
     validation:
       status: NOT_VALIDATED
-      scope: "Executado localmente e no CI dos pull requests (59 testes, mais verificação de mutação do planejamento, da escrita e da conferência). Não roda contra o GitHub real."
+      scope: "Executado localmente e no CI dos pull requests (61 testes, mais verificação de mutação do planejamento, da escrita e da conferência). Não roda contra o GitHub real."
     relationships:
       - {capability_id: restore_repository, relationship: VALIDATES}
 

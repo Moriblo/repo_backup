@@ -385,52 +385,63 @@ def create_views(writer, plan, project_id, details, index):
 
 
 def verify(graph, rest_get, plan, project_id, expected_items, issue_states, project_meta, conflicts):
-    """Relê o Project e compara com o plano. Devolve (divergências, valores a regravar, Project relido)."""
+    """Relê o Project e compara com o plano. Devolve (divergências, valores a regravar, Project relido, divergências completas).
+
+    As divergências (`bad`) vão para o LOG do Actions e o repositório executor é público: elas nunca trazem títulos, nomes de campos
+    ou de views, nem valores (usam a posição: "campo 2", "view 1", "item 3"). O texto completo, com os valores, vai em `full`
+    (restore-result.json, que fica no artefato e no OneDrive)."""
     details, items, _ = read_project(graph, project_id)
-    bad, repair = [], []
+    bad, repair, full = [], [], []
+
+    def add(safe, complete=None):
+        bad.append(safe)
+        full.append(complete or safe)
+
+    field_pos = {f["name"]: n for n, f in enumerate(plan["fields"], 1)}
     for key, want in project_meta.items():
         got = details.get(key)
         same = (got or "") == (want or "") if key in ("title", "shortDescription", "readme") else got == want
         if not same:
-            bad.append(f"Project: {key} é {got!r}, esperava {want!r}")
+            add(f"Project: {key} difere", f"Project: {key} é {got!r}, esperava {want!r}")
     index = field_index(details)
     for f in plan["fields"]:
         if f["name"] in conflicts:
             continue
         current = index.get(f["name"])
         if current is None or current["type"] != f["dataType"]:
-            bad.append(f"campo {f['name']} ausente ou de outro tipo")
+            add(f"campo {field_pos[f['name']]} ausente ou de outro tipo", f"campo {f['name']} ausente ou de outro tipo")
         elif f["dataType"] == "SINGLE_SELECT" and set(current["options"]) != {o["name"] for o in f.get("options") or []}:
-            bad.append(f"campo {f['name']}: opções diferentes")
+            add(f"campo {field_pos[f['name']]}: opções diferentes", f"campo {f['name']}: opções diferentes")
     names = {v["name"]: v for v in details["views"]["nodes"]}
-    for v in plan["views"]:
+    for n, v in enumerate(plan["views"], 1):
         got = names.get(v["name"])
         if got is None or got["layout"] != v["layout"] or (got.get("filter") or "") != (v.get("filter") or ""):
-            bad.append(f"view {v['name']} ausente ou diferente (layout ou filtro)")
+            add(f"view {n} ausente ou diferente (layout ou filtro)", f"view {v['name']} ausente ou diferente (layout ou filtro)")
     if len(items) != len(expected_items):
-        bad.append(f"{len(items)} itens no Project restaurado, esperava {len(expected_items)}")
+        add(f"{len(items)} itens no Project restaurado, esperava {len(expected_items)}")
     for n, (step, item_id) in enumerate(expected_items):
         if n >= len(items):
             break
         got = items[n]
-        label = f"item {n + 1}"                       # sem o título: o texto vai para o log, e o repositório é público
+        label = f"item {n + 1}"
         if norm(item_title(got)) != norm(step["title"]):
-            bad.append(f"{label}: o título lido na posição {n + 1} não é o esperado")
+            add(f"{label}: o título lido na posição {n + 1} não é o esperado")
             continue
         if bool(got.get("isArchived")) != step["archived"]:
-            bad.append(f"{label}: arquivado = {got.get('isArchived')}, esperava {step['archived']}")
+            add(f"{label}: arquivado = {got.get('isArchived')}, esperava {step['archived']}")
         have = {c[:2]: c for c in (comparable(v) for v in (got.get("fieldValues") or {}).get("nodes", [])) if c}
         for want in step["applied"]:
             if have.get(want[:2]) != tuple(want):
-                bad.append(f"{label}: {want[0]} é {have.get(want[:2], (None, None, None))[2:]!r}, esperava {want[2:]!r}")
+                add(f"{label}: o valor do campo {field_pos.get(want[0], '?')} difere",
+                    f"{label}: {want[0]} é {have.get(want[:2], (None, None, None))[2:]!r}, esperava {want[2:]!r}")
                 repair.append((item_id, want))
     for step, _ in expected_items:
         if step["kind"] == "issue":
             want = issue_states[step["new"]]
             status, data = rest_get(step["new"])
             if status != 200 or data.get("state") != want:
-                bad.append(f"issue {step['old']} (nova {step['new']}): estado {data.get('state')!r}, esperava {want!r} (um workflow do Project pode tê-la mudado)")
-    return bad, repair, details
+                add(f"issue {step['old']} (nova {step['new']}): estado {data.get('state')!r}, esperava {want!r} (um workflow do Project pode tê-la mudado)")
+    return bad, repair, details, full
 
 
 def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
@@ -491,7 +502,7 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
     result["stage"] = "conferência"
     attempts, repaired = 0, 0
     for attempts in range(1, ctx["tries"] + 1):
-        bad, repair, restored = verify(graph, rest_get, plan, project_id, expected, issue_states, meta, conflicts)
+        bad, repair, restored, full = verify(graph, rest_get, plan, project_id, expected, issue_states, meta, conflicts)
         if not bad:
             break
         if repair and repaired < 2:                 # um workflow pode ter sobrescrito o valor depois da escrita: regrava e confere de novo
@@ -505,7 +516,7 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
             time.sleep(ctx["delay"])
     result["verify_attempts"], result["repair_passes"] = attempts, repaired
     if bad:
-        result.update(status="FAILED", mismatches=bad[:10])
+        result.update(status="FAILED", mismatches=bad[:10], mismatch_details=full[:10])
         return result
     restored_workflows = {w["name"]: w["enabled"] for w in restored["workflows"]["nodes"]}
     result["workflows"] = [{"name": w["name"], "enabled_in_backup": w["enabled"], "enabled_in_restored": restored_workflows.get(w["name"]),

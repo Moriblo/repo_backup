@@ -1729,6 +1729,15 @@ class FailureDigestTest(unittest.TestCase):
             {"source_number": 13, "status": "FAILED", "stage": "itens", "mismatches": [f"item {n}: arquivado" for n in range(9)]}]})
         self.assertEqual(len(projects["projects"][0]["mismatches"]), 5)
 
+    def test_log_text_corta_na_primeira_aspa_de_qualquer_tipo(self):
+        import restore_repo
+        for text in ("erro 'Segredo\" resto", "erro \"Segredo' resto", "erro `Segredo\" resto", "erro d'água \"Segredo\" resto"):
+            masked = restore_repo.log_text(text)
+            self.assertEqual(masked, "erro <…>" if not text.startswith("erro d'") else "erro d<…>")
+            self.assertNotIn("Segredo", masked)
+        self.assertEqual(restore_repo.log_text("sem aspas nenhuma"), "sem aspas nenhuma")
+        self.assertEqual(len(restore_repo.log_text("x" * 500)), 200)
+
     def test_classes_de_nomes_so_dao_contagens(self):
         import restore_repo
         for cls in ("labels", "milestones"):
@@ -1844,8 +1853,24 @@ class ProjectsTest(Base):
         proc = self.go()
         self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
         line = self.failure_lines(proc)[0]
-        self.assertIn("[RstCreateField] UNPROCESSABLE: Could not resolve <…> no quadro", line["reason"])
+        self.assertIn("[RstCreateField] UNPROCESSABLE: Could not resolve <…>", line["reason"])
         self.assertNotIn("Tarefa concluída", proc.stdout)
+
+    def test_log_nao_traz_metadados_nem_nomes_do_project(self):
+        readme = "Segredo do projeto: \"duplas\" e 'simples' e d'água"
+        details, items = tp.source_project(hidden=True, issue_titles=[i["title"] for i in self.ISSUES])
+        details["readme"] = readme
+        self.make_backup(projects=([details], items))
+        self.world.ignore = {"updateProjectV2", "createProjectV2Field"}     # a gravação dos metadados e do campo é ignorada
+        proc = self.go()
+        self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
+        text = proc.stdout + proc.stderr
+        for secret in ("Segredo", "água", "duplas", "Prioridade", "View 2"):
+            self.assertNotIn(secret, text)
+        proj = self.failure_lines(proc)[0]["projects"][0]
+        self.assertIn("Project: readme difere", " | ".join(proj["mismatches"]))
+        # o completo está no restore-result.json (artefato), não no log
+        self.assertIn("Segredo do projeto", json.dumps(self.evidence("restore-result.json")["classes"]["projects"], ensure_ascii=False))
 
     def test_log_de_classe_com_nomes_so_traz_contagens(self):
         FakeGitHub.label_fail = {"prioridade ✔ alta": 500}
