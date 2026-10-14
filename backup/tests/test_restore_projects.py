@@ -49,7 +49,7 @@ class World:
         self.projects, self.ops, self.seen_auth = {}, [], set()
         self.counter = 0
         self.issues = {f"NODE_{n + 1}": {"number": NEW_BASE + n + 1, "title": t} for n, t in enumerate(DEFAULT_TITLES)}
-        self.issue_state = {NEW_BASE + n + 1: "open" for n in range(len(DEFAULT_TITLES))}
+        self.issue_state = {NEW_BASE + n + 1: ("closed" if n + 1 == 6 else "open") for n in range(len(DEFAULT_TITLES))}   # a 6 ("Tarefa já concluída") é fechada, como no backup
         self.default_public = True              # o Project novo nasce público: o restore tem de torná-lo privado
         self.status_on_add = True               # workflow padrão: item incluído -> Status = Todo
         self.drop_status = 0                    # as próximas N escritas de Status não ficam gravadas (workflow que sobrescreve)
@@ -58,6 +58,12 @@ class World:
         self.view_layout = None                 # o GitHub cria toda view com este layout, ignorando o pedido
         self.vanish = set()                     # adições que devolvem um id mas o item não fica no Project
         self.ignore_field = None                # nome do campo cuja criação é ignorada
+        self.children = {}                      # id de nó do pai -> ids de nó das filhas que o workflow Auto-add sub-issues põe sozinho
+        self.late_children = {}                 # Auto-add ATRASADO: as filhas só entram no Project na primeira gravação de valor (depois da releitura dos itens)
+        self.children_at_end = False            # as filhas entram no fim do Project (senão, logo depois do pai)
+        self.parent_of = {}                     # número novo da filha -> número novo do pai (o que a API REST devolve em parent_issue_url)
+        self.close_on_value = False             # qualquer valor gravado num item de issue fecha a issue (um workflow inesperado)
+        self.fail_nth_message = "Content already exists in this project"
         self.fail_nth = {}                      # operationName -> número da chamada que falha (as anteriores funcionam)
         self.calls = {}
         self.fail = {}                          # operationName -> lista `errors`
@@ -68,6 +74,12 @@ class World:
     def new_id(self, prefix):
         self.counter += 1
         return f"{prefix}_{self.counter}"
+
+
+class FakeError(Exception):
+    def __init__(self, kind, message):
+        super().__init__(message)
+        self.kind, self.message = kind, message
 
 
 class FakeAPI(http.server.BaseHTTPRequestHandler):
@@ -94,13 +106,16 @@ class FakeAPI(http.server.BaseHTTPRequestHandler):
             return self._send({"data": None, "errors": [{"type": "INTERNAL", "message": "Something went wrong while executing your query. Please include `X`."}]})
         w.calls[op] = w.calls.get(op, 0) + 1
         if op in w.fail_nth and w.calls[op] == w.fail_nth[op]:
-            return self._send({"data": None, "errors": [{"type": "UNPROCESSABLE", "message": "Content already exists in this project"}]})
+            return self._send({"data": None, "errors": [{"type": "UNPROCESSABLE", "message": w.fail_nth_message}]})
         if op in w.fail:
             return self._send({"data": None, "errors": w.fail[op]})
         mutation = re.search(r"\{ (\w+)\(input", body["query"]) if body["query"].lstrip().startswith("mutation") else None
         if mutation:
             w.ops.append((op, mutation.group(1), variables["input"]))
-            return self._send({"data": {mutation.group(1): self.mutate(w, mutation.group(1), variables["input"], body["query"])}})
+            try:
+                return self._send({"data": {mutation.group(1): self.mutate(w, mutation.group(1), variables["input"], body["query"])}})
+            except FakeError as exc:
+                return self._send({"data": None, "errors": [{"type": exc.kind, "message": exc.message}]})
         return self._send({"data": self.read(w, op, variables)})
 
     # --- escritas ---------------------------------------------------------------------------
@@ -161,6 +176,8 @@ class FakeAPI(http.server.BaseHTTPRequestHandler):
             if "configuration" in data:
                 view["visible"] = data["configuration"].get("visibleFieldIds")
         elif name in ("addProjectV2ItemById", "addProjectV2DraftIssue"):
+            if name == "addProjectV2ItemById" and any(i.get("node") == data["contentId"] for i in p["items"]):
+                raise FakeError("UNPROCESSABLE", "Content already exists in this project")
             item = {"id": w.new_id("PVTI"), "archived": False, "values": {}}
             if name == "addProjectV2ItemById":
                 item["node"] = data["contentId"]
@@ -171,11 +188,28 @@ class FakeAPI(http.server.BaseHTTPRequestHandler):
             if name not in w.vanish:
                 p["items"].append(item)
             out["item" if name == "addProjectV2ItemById" else "projectItem"] = {"id": item["id"]}
-            if name == "addProjectV2ItemById" and '"item"' in json.dumps(w.introspection):
-                pass
+            for child in w.children.get(item.get("node"), []):               # workflow Auto-add sub-issues
+                if not any(i.get("node") == child for i in p["items"]):
+                    extra = {"id": w.new_id("PVTI"), "archived": False, "node": child, "values": {"Status": {"select": "Todo"}} if w.status_on_add else {}}
+                    if w.children_at_end:
+                        p["items"].append(extra)
+                    else:
+                        p["items"].insert(p["items"].index(item) + 1, extra)
+        elif name == "updateProjectV2ItemPosition":
+            item = self.item_of(p, data["itemId"])
+            p["items"].remove(item)
+            after = data.get("afterId")
+            p["items"].insert(0 if not after else p["items"].index(self.item_of(p, after)) + 1, item)
         elif name == "updateProjectV2ItemFieldValue":
             field, item = self.field_of(p, data["fieldId"]), self.item_of(p, data["itemId"])
             value = data["value"]
+            for parent_node, kids in list(w.late_children.items()):
+                for kid in kids:
+                    if any(i.get("node") == parent_node for i in p["items"]) and not any(i.get("node") == kid for i in p["items"]):
+                        p["items"].append({"id": w.new_id("PVTI"), "archived": False, "node": kid, "values": {}})
+                w.late_children.pop(parent_node)
+            if w.close_on_value and item.get("node"):
+                w.issue_state[w.issues[item["node"]]["number"]] = "closed"
             if "singleSelectOptionId" in value:
                 option = next(o["name"] for o in field["options"] if o["id"] == value["singleSelectOptionId"])
                 if field["name"] == "Status" and w.drop_status > 0:
@@ -309,14 +343,17 @@ class Base(unittest.TestCase):
         issues = issues if issues is not None else backup_issues()
         args = dict(source=SOURCE, projects=projects, items=items, issues=issues,
                     issue_map={i["number"]: NEW_BASE + i["number"] for i in issues}, node_ids={i["number"]: f"NODE_{i['number']}" for i in issues},
-                    issue_states={i["number"]: "open" for i in issues}, repo_node_id="R_new", owner_id="U_dono", api_base=self.base, token=TOKEN,
-                    token_scopes=["repo", "project"], budget=450, rest_get=self.rest_get, evidence_dir=self.evidence,
+                    issue_states={i["number"]: ("closed" if i["number"] == 6 else "open") for i in issues}, repo_node_id="R_new", owner_id="U_dono", api_base=self.base, token=TOKEN,
+                    token_scopes=["repo", "project"], repo_full=RESTORED, budget=450, rest_get=self.rest_get, evidence_dir=self.evidence,
                     write_delay=0, rate_wait=0, settle=0, tries=2, delay=0)
         args.update(kw)
         return rp.restore_projects(**args)
 
     def rest_get(self, number):
-        return 200, {"state": self.world.issue_state.get(number, "open")}
+        data = {"state": self.world.issue_state.get(number, "open")}
+        if number in self.world.parent_of:
+            data["parent_issue_url"] = f"https://api.github.com/repos/{RESTORED}/issues/{self.world.parent_of[number]}"
+        return 200, data
 
     def project(self, n=1):
         return self.world.projects[f"PVT_new{n}"]
@@ -419,7 +456,7 @@ class PlanTest(unittest.TestCase):
 
     def test_estimativa_de_escritas_cobre_o_que_o_plano_faz(self):
         plan = self.plan(None)
-        self.assertEqual(plan["writes"], 2 + 2 + 1 + (1 + 2) + 7 + (6 * 2 + 1))
+        self.assertEqual(plan["writes"], 2 + 2 + 1 + (1 + 2) + 7 + (6 * 2 + 1) + 7)       # + reposicionamento no pior caso
 
 
 class RestoreTest(Base):
@@ -487,8 +524,9 @@ class RestoreTest(Base):
         details, items = source_project(archived=1)                       # o arquivado é o último (issue 90, "Item arquivado")
         issues = backup_issues() + [{"number": 90, "title": "Item arquivado"}]
         self.world.issues["NODE_90"] = {"number": NEW_BASE + 90, "title": "Item arquivado"}
-        self.world.issue_state[NEW_BASE + 90] = "open"
-        result = self.run_restore(projects=[details], items=items, issues=issues, issue_states={i["number"]: "open" for i in issues})
+        self.world.issue_state[NEW_BASE + 90] = "closed"                    # o arquivado é Done e a issue está fechada
+        result = self.run_restore(projects=[details], items=items, issues=issues,
+                                  issue_states={i["number"]: ("closed" if i["number"] in (6, 90) else "open") for i in issues})
         self.assertEqual(result["status"], "OK", result)
         p = self.project()
         self.assertEqual([i["archived"] for i in p["items"]], [False] * 7 + [True])
@@ -588,7 +626,7 @@ class VerificationTest(Base):
         self.assertIn("divergência", result["reason"])
 
     def test_workflow_que_fecha_a_issue_vira_failed(self):
-        self.world.auto_close = True
+        self.world.close_on_value = True
         result = self.run_restore()
         self.assertEqual(result["status"], "FAILED", result)
         self.assertTrue(any("estado" in m and "workflow" in m for m in result["projects"][0]["mismatches"]), result)
@@ -626,7 +664,7 @@ class VerificationTest(Base):
         self.addCleanup(setattr, FakeAPI, "read", original)
         result = self.run_restore()
         self.assertEqual(result["status"], "FAILED", result)
-        self.assertIn("na posição 1", result["projects"][0]["mismatches"][0])
+        self.assertIn("a ordem dos itens difere do backup", result["projects"][0]["mismatches"])
 
 
 class SilentFailureTest(Base):
@@ -689,24 +727,270 @@ class SilentFailureTest(Base):
         self.assertIn(unittest.mock.call(7.5), sleep.call_args_list)
 
 
+class WorkflowInterferenceTest(Base):
+    """4b: os workflows padrão de um Project novo mexem no quadro enquanto ele é montado (run real req-20261014-001): o restore tolera, confere e declara."""
+    PARENT, CHILD = "NODE_5", "NODE_6"
+
+    def setUp(self):
+        super().setUp()
+        self.world.children = {self.PARENT: [self.CHILD]}                    # a issue 5 é pai da 6; Auto-add sub-issues põe a filha sozinho
+        self.world.parent_of = {NEW_BASE + 6: NEW_BASE + 5}
+
+    def source(self, order=None, drop=None):
+        """Project 13 de teste; `order` = títulos na ordem de posição desejada; `drop` = título a tirar do Project."""
+        details, items = source_project()
+        if drop:
+            items = [i for i in items if rp.item_title(i) != drop]
+        if order:
+            for n, title in enumerate(order):
+                next(i for i in items if rp.item_title(i) == title)["position_order"] = n
+        return details, items
+
+    def effects(self, result):
+        return result["projects"][0]["workflow_effects"]
+
+    def test_filha_adicionada_pelo_pai_nao_derruba_a_restauracao(self):
+        result = self.run_restore()
+        self.assertEqual(result["status"], "OK", result)
+        self.assertEqual(self.effects(result)["added_by_workflow"], [6])
+        p = self.project()
+        self.assertEqual(self.titles(p), DEFAULT_TITLES + ["Rascunho sem issue"])
+        self.assertEqual(len(p["items"]), 7)
+        self.assertEqual(p["items"][5]["values"]["Status"]["select"], "Done")      # os valores do backup valem também para o item que o GitHub pôs
+        self.assertEqual(self.effects(result)["repositioned"], 0)
+        self.assertIn("Issues já postas no Project pelo GitHub", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+
+    def test_filha_antes_do_pai_nao_tem_colisao(self):
+        order = [DEFAULT_TITLES[i] for i in (0, 1, 2, 3, 5, 4)] + ["Rascunho sem issue"]      # a filha (6) antes do pai (5)
+        details, items = self.source(order)
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual(result["status"], "OK", result)
+        self.assertEqual(self.effects(result)["added_by_workflow"], [])
+        self.assertEqual(self.titles(self.project()), order)
+
+    def test_ordem_do_backup_e_restaurada_com_reposicionamento(self):
+        self.world.children_at_end = True                                    # o GitHub põe a filha no fim; o backup a quer antes do rascunho
+        order = DEFAULT_TITLES[:5] + ["Rascunho sem issue", DEFAULT_TITLES[5]]
+        details, items = self.source(order)
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual(result["status"], "OK", result)
+        self.assertEqual(self.effects(result)["repositioned"], 1)
+        self.assertEqual(self.titles(self.project()), order)
+        self.assertEqual(len(self.ops("updateProjectV2ItemPosition")), 1)
+
+    def test_reposicionamento_que_falha_fica_partial_e_diz_o_erro(self):
+        self.world.children_at_end = True
+        self.world.fail["RstMoveItem"] = [{"type": "FORBIDDEN", "message": "x"}]
+        order = DEFAULT_TITLES[:5] + ["Rascunho sem issue", DEFAULT_TITLES[5]]
+        details, items = self.source(order)
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual(result["status"], "PARTIAL", result)
+        self.assertIn("[RstMoveItem] FORBIDDEN", self.effects(result)["reposition_error"])
+        self.assertIn("reposicionamento falhou", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+
+    def test_reposicionamento_ignorado_pelo_github_e_pego_na_conferencia(self):
+        self.world.children_at_end = True
+        self.world.ignore = {"updateProjectV2ItemPosition"}
+        order = DEFAULT_TITLES[:5] + ["Rascunho sem issue", DEFAULT_TITLES[5]]
+        details, items = self.source(order)
+        proj = self.run_restore(projects=[details], items=items)["projects"][0]
+        self.assertEqual(proj["status"], "FAILED")
+        self.assertIn("a ordem dos itens difere do backup", proj["mismatches"])
+
+    def test_sub_issue_a_mais_e_aceita_listada_e_deixa_partial(self):
+        details, items = self.source(drop=DEFAULT_TITLES[5])                 # a 6 não está no Project do backup, mas é filha da 5
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual(result["status"], "PARTIAL", result)
+        extras = self.effects(result)["auto_added_extras"]
+        self.assertEqual([e["number"] for e in extras], [NEW_BASE + 6])
+        self.assertIn(f"sub-issue de #{NEW_BASE + 5}", extras[0]["reason"])
+        self.assertIn("Auto-add sub-issues", extras[0]["reason"])
+        self.assertEqual(len(self.project()["items"]), 7)                    # 5 issues + o rascunho + a filha: nada foi apagado
+        self.assertIn(f"Item a mais, deixado no Project: issue #{NEW_BASE + 6}", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+
+    def test_auto_add_atrasado_e_declarado_na_conferencia_final(self):
+        self.world.children = {}
+        self.world.late_children = {self.PARENT: [self.CHILD]}               # a filha só entra depois da leitura de reconciliação
+        details, items = self.source(drop=DEFAULT_TITLES[5])
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual(result["status"], "PARTIAL", result)
+        extras = self.effects(result)["auto_added_extras"]
+        self.assertEqual([e["number"] for e in extras], [NEW_BASE + 6])
+        self.assertIn("Auto-add sub-issues", extras[0]["reason"])
+        self.assertIn(f"Item a mais, deixado no Project: issue #{NEW_BASE + 6}", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+        self.assertEqual(len(self.project()["items"]), 7)
+
+    def test_extra_atrasado_sem_pai_restaurado_falha(self):
+        self.world.children = {}
+        self.world.late_children = {self.PARENT: [self.CHILD]}
+        self.world.parent_of = {}
+        details, items = self.source(drop=DEFAULT_TITLES[5])
+        proj = self.run_restore(projects=[details], items=items)["projects"][0]
+        self.assertEqual(proj["status"], "FAILED")
+        self.assertTrue(any(m.startswith("item inesperado") for m in proj["mismatches"]))
+
+    def test_extra_aceito_na_reconciliacao_nao_e_contado_duas_vezes(self):
+        details, items = self.source(drop=DEFAULT_TITLES[5])
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual([e["number"] for e in self.effects(result)["auto_added_extras"]], [NEW_BASE + 6])
+
+    def test_done_so_e_retido_no_campo_status(self):
+        details, items = self.source()
+        details["fields"]["nodes"].append({"id": "F_fase", "name": "Fase", "dataType": "SINGLE_SELECT", "__typename": "ProjectV2SingleSelectField",
+                                           "options": [{"id": "O1", "name": "Todo", "color": "GRAY", "description": ""},
+                                                       {"id": "O2", "name": "Done", "color": "GREEN", "description": ""}]})
+        items[0]["fieldValues"]["nodes"].append({"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Done", "optionId": "O2", "color": "GREEN",
+                                                 "description": "", "field": {"id": "F_fase", "name": "Fase"}})
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual(result["status"], "OK", result)
+        self.assertEqual(self.effects(result)["done_not_written"], [])
+        self.assertEqual(self.project()["items"][0]["values"]["Fase"]["select"], "Done")      # a issue 1 é aberta, mas "Fase" não é o campo vigiado
+        self.assertEqual(self.world.issue_state[NEW_BASE + 1], "open")
+
+    def test_item_a_mais_que_nao_e_sub_issue_de_item_restaurado_falha(self):
+        details, items = self.source(drop=DEFAULT_TITLES[5])
+        self.world.parent_of = {}                                            # a 6 não tem pai: o item a mais não se explica
+        proj = self.run_restore(projects=[details], items=items)["projects"][0]
+        self.assertEqual(proj["status"], "FAILED")
+        self.assertTrue(any(m.startswith("item inesperado na posição") for m in proj["mismatches"]), proj["mismatches"])
+        self.assertFalse(any(t in " ".join(proj["mismatches"]) for t in DEFAULT_TITLES))
+
+    def test_filha_de_pai_fora_do_project_nao_e_aceita(self):
+        details, items = self.source(drop=DEFAULT_TITLES[5])
+        self.world.parent_of = {NEW_BASE + 6: NEW_BASE + 5 + 100}            # pai que não é um item restaurado deste Project
+        proj = self.run_restore(projects=[details], items=items)["projects"][0]
+        self.assertEqual(proj["status"], "FAILED")
+        self.assertIn("não é sub-issue de uma issue restaurada que está no Project", " ".join(proj["mismatches"]))
+
+    def test_ja_existe_mas_o_item_nao_esta_no_project_continua_falhando(self):
+        self.world.children = {}
+        self.world.fail_nth["RstAddIssueItem"] = 3                           # "Content already exists" sem o item existir de verdade
+        proj = self.run_restore()["projects"][0]
+        self.assertEqual(proj["status"], "FAILED")
+        self.assertIn("o item não foi achado no Project", proj["error"])
+
+    def test_erro_de_rascunho_com_a_mesma_mensagem_nao_e_tratado_como_ja_existe(self):
+        self.world.fail["RstAddDraftItem"] = [{"type": "UNPROCESSABLE", "message": "Content already exists in this project"}]
+        proj = self.run_restore()["projects"][0]
+        self.assertEqual(proj["status"], "FAILED")
+        self.assertIn("[RstAddDraftItem] UNPROCESSABLE", proj["error"])
+        self.assertEqual(proj["stage"], "itens")
+
+    def test_done_em_issue_aberta_nao_e_gravado(self):
+        self.world.auto_close = True
+        self.world.issue_state[NEW_BASE + 6] = "open"                        # no backup a 6 tem Status Done mas está aberta
+        issues = backup_issues()
+        result = self.run_restore(issue_states={i["number"]: "open" for i in issues})
+        self.assertEqual(result["status"], "PARTIAL", result)
+        self.assertEqual(self.effects(result)["done_not_written"], [6])
+        self.assertEqual(self.world.issue_state[NEW_BASE + 6], "open")      # o Auto-close não chegou a fechar a issue
+        self.assertEqual(self.project()["items"][5]["values"]["Status"]["select"], "Todo")
+        self.assertIn("Status Done NÃO gravado nas issues #6", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+
+    def test_done_em_issue_fechada_e_gravado(self):
+        result = self.run_restore()                                          # a 6 é fechada no fixture
+        self.assertEqual(self.effects(result)["done_not_written"], [])
+        self.assertEqual(self.project()["items"][5]["values"]["Status"]["select"], "Done")
+
+    def test_outros_status_em_issue_aberta_seguem_normais(self):
+        result = self.run_restore()
+        self.assertEqual(self.project()["items"][0]["values"]["Status"]["select"], "In Progress")
+        self.assertEqual(result["status"], "OK")
+
+
+class RepositionUnitTest(unittest.TestCase):
+    class StubWriter:
+        def __init__(self, fail_at=None):
+            self.calls, self.fail_at = [], fail_at
+
+        def write(self, operation, mutation, data, returns=None):
+            if self.fail_at is not None and len(self.calls) == self.fail_at:
+                raise rp.ProjectRestoreError("[RstMoveItem] FORBIDDEN: x")
+            self.calls.append((operation, mutation, data))
+
+    def test_item_que_vai_para_o_topo_nao_leva_afterid(self):
+        writer = self.StubWriter()
+        moved, error = rp.reposition(writer, "P", ["c", "a", "b"], ["a", "b", "c"], [])
+        self.assertEqual((moved, error), (1, None))
+        self.assertEqual(writer.calls, [("RstMoveItem", "updateProjectV2ItemPosition", {"projectId": "P", "itemId": "c"})])
+
+    def test_item_no_meio_leva_o_afterid_do_anterior(self):
+        writer = self.StubWriter()
+        moved, error = rp.reposition(writer, "P", ["a", "b", "c"], ["a", "c", "b"], [])
+        self.assertEqual((moved, error), (1, None))
+        self.assertEqual(writer.calls[0][2], {"projectId": "P", "itemId": "b", "afterId": "a"})
+
+    def test_extras_no_meio_nao_atrapalham_e_nada_se_move_se_ja_esta_na_ordem(self):
+        writer = self.StubWriter()
+        self.assertEqual(rp.reposition(writer, "P", ["a", "b"], ["a", "X", "b"], []), (0, None))
+        self.assertEqual(writer.calls, [])
+
+    def test_ordem_totalmente_invertida(self):
+        writer = self.StubWriter()
+        moved, error = rp.reposition(writer, "P", ["a", "b", "c", "d"], ["d", "c", "b", "a"], [])
+        self.assertEqual(error, None)
+        self.assertLessEqual(moved, 3)
+        # simula o resultado dos movimentos
+        current = ["d", "c", "b", "a"]
+        for _, _, data in writer.calls:
+            current.remove(data["itemId"])
+            current.insert(0 if "afterId" not in data else current.index(data["afterId"]) + 1, data["itemId"])
+        self.assertEqual(current, ["a", "b", "c", "d"])
+
+    def test_falha_na_escrita_devolve_o_erro_sem_levantar(self):
+        writer = self.StubWriter(fail_at=0)
+        moved, error = rp.reposition(writer, "P", ["b", "a"], ["a", "b"], [])
+        self.assertEqual(moved, 0)
+        self.assertIn("[RstMoveItem] FORBIDDEN", error)
+
+
+class ClassifyUnitTest(unittest.TestCase):
+    def item(self, number, repo=RESTORED, kind="ISSUE", item_id="I1"):
+        return {"id": item_id, "type": kind, "content": {"number": number, "repository": {"nameWithOwner": repo}}}
+
+    def test_aceita_so_sub_issue_de_issue_restaurada_do_proprio_repositorio(self):
+        parents = {7: 5, 8: 99}
+        rest = lambda n: (200, {"parent_issue_url": f"https://api.github.com/repos/{RESTORED}/issues/{parents[n]}"} if n in parents else {})
+        accepted, unexpected = rp.classify_items([self.item(7, item_id="a"), self.item(8, item_id="b"), self.item(9, item_id="c"),
+                                                  self.item(7, repo="outro/repo", item_id="d"), self.item(7, kind="DRAFT_ISSUE", item_id="e")],
+                                                 set(), {5}, RESTORED, rest)
+        self.assertEqual([i["id"] for i, _ in accepted], ["a"])
+        self.assertEqual([i["id"] for i, _ in unexpected], ["b", "c", "d", "e"])
+
+    def test_repositorio_comparado_sem_diferenca_de_caixa_e_leitura_que_falha_nao_aceita(self):
+        rest_ok = lambda n: (200, {"parent_issue_url": f"https://api.github.com/repos/x/issues/5"})
+        self.assertEqual(len(rp.classify_items([self.item(7, repo=RESTORED.upper())], set(), {5}, RESTORED, rest_ok)[0]), 1)
+        rest_fail = lambda n: (500, {})
+        self.assertEqual(len(rp.classify_items([self.item(7)], set(), {5}, RESTORED, rest_fail)[1]), 1)
+
+    def test_itens_esperados_sao_ignorados(self):
+        self.assertEqual(rp.classify_items([self.item(7, item_id="a")], {"a"}, {5}, RESTORED, lambda n: (200, {})), ([], []))
+
+    def test_numero_da_issue_pela_url(self):
+        self.assertEqual(rp.issue_number_of("https://api.github.com/repos/o/r/issues/12"), 12)
+        self.assertIsNone(rp.issue_number_of(None))
+        self.assertIsNone(rp.issue_number_of("https://x/abc"))
+
+
 class FailureReportTest(Base):
     """4a: uma falha no meio diz o que já foi criado, o checklist não a esconde e nenhum título vai para um texto que chega ao log."""
 
     def test_falha_no_meio_registra_o_que_ja_existe(self):
-        self.world.fail["RstAddIssueItem"] = [{"type": "UNPROCESSABLE", "message": "Content already exists in this project"}]
+        self.world.fail["RstAddIssueItem"] = [{"type": "UNPROCESSABLE", "message": "Resource not accessible"}]
         result = self.run_restore()
         proj = result["projects"][0]
         self.assertEqual((result["status"], proj["status"], proj["stage"], proj["items_added"], proj["target_number"]), ("FAILED", "FAILED", "itens", 0, 1))
         self.assertEqual(proj["url"], "https://github.com/users/dono/projects/1")
-        self.assertIn("[RstAddIssueItem] UNPROCESSABLE: Content already exists", proj["error"])
+        self.assertIn("[RstAddIssueItem] UNPROCESSABLE: Resource not accessible", proj["error"])
         self.assertEqual(len(self.world.projects), 1)                      # o Project criado continua lá: nada é apagado
 
     def test_falha_na_sexta_adicao_como_no_run_real(self):
         self.world.fail_nth["RstAddIssueItem"] = 6
+        self.world.fail_nth_message = "Resource not accessible"              # um erro que NÃO é "já existe": continua falhando
         proj = self.run_restore()["projects"][0]
         self.assertEqual((proj["status"], proj["stage"], proj["items_added"]), ("FAILED", "itens", 5))
         self.assertEqual(len(self.project()["items"]), 5)
-        self.assertIn("Content already exists", proj["error"])
+        self.assertIn("Resource not accessible", proj["error"])
 
     def test_checklist_lista_o_project_incompleto_e_o_nao_tentado(self):
         d13, i13 = source_project(13)
@@ -748,7 +1032,7 @@ class FailureReportTest(Base):
         self.addCleanup(setattr, FakeAPI, "read", original)
         self.setUp()
         proj = self.run_restore(tries=1)["projects"][0]
-        self.assertIn("o título lido na posição 1 não é o esperado", proj["mismatches"][0])
+        self.assertIn("a ordem dos itens difere do backup", proj["mismatches"])
         self.assertFalse(any(t in " ".join(proj["mismatches"]) for t in DEFAULT_TITLES))
 
 

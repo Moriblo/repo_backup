@@ -1836,17 +1836,31 @@ class ProjectsTest(Base):
 
     def test_log_traz_o_motivo_da_falha_do_project_sem_titulos(self):
         self.world.fail_nth["RstAddIssueItem"] = 3
+        self.world.fail_nth_message = "Resource not accessible"
         proc = self.go()
         self.assertEqual(proc.returncode, 48, proc.stdout + proc.stderr)
         lines = self.failure_lines(proc)
         self.assertEqual([l["class"] for l in lines], ["projects"])
-        self.assertIn("[RstAddIssueItem] UNPROCESSABLE: Content already exists", lines[0]["reason"])
+        self.assertIn("[RstAddIssueItem] UNPROCESSABLE: Resource not accessible", lines[0]["reason"])
         proj = lines[0]["projects"][0]
         self.assertEqual((proj["status"], proj["stage"], proj["items_added"], proj["target_number"]), ("FAILED", "itens", 2, 1))
         for issue in self.ISSUES:
             self.assertNotIn(issue["title"], proc.stdout + proc.stderr)
         self.assertIn("INCOMPLETO", (self.root / "evidence" / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
         self.assert_no_leak()
+
+    def test_filhas_adicionadas_pelo_github_nao_derrubam_a_restauracao(self):
+        """O caso do run real req-20261014-001: o pai entra no Project e o Auto-add sub-issues põe as filhas antes da adição explícita."""
+        self.world.children = {"NODE_1": ["NODE_2", "NODE_3"]}                # as relações do fixture: a issue 1 é pai da 2 e da 4 (nova 3)
+        proc = self.go()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        res = self.cls()
+        self.assertEqual(res["status"], "OK", res)
+        self.assertEqual(res["projects"][0]["workflow_effects"]["added_by_workflow"], [2, 4])
+        p = self.world.projects["PVT_new1"]
+        self.assertEqual([i["node"] for i in p["items"] if i.get("node")], ["NODE_1", "NODE_2", "NODE_3"])
+        self.assertEqual(self.failure_lines(proc), [])
+        self.assertIn("Issues já postas no Project pelo GitHub", (self.root / "evidence" / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
 
     def test_log_mascara_o_que_a_api_repete_entre_aspas(self):
         self.world.fail["RstCreateField"] = [{"type": "UNPROCESSABLE", "message": "Could not resolve 'Tarefa concluída' no quadro"}]

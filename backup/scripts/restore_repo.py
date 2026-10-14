@@ -855,7 +855,7 @@ def restore_projects_class(plan, repo, results, issue_map, node_ids, ctx):
     return rpj.restore_projects(
         source=plan["source_repository"], projects=load("api-projects.json"), items=load("api-project-items.json"), issues=issues,
         issue_map=issue_map, node_ids=node_ids, issue_states={i["number"]: ("closed" if i.get("state") == "closed" else "open") for i in issues},
-        repo_node_id=ctx.get("repo_node_id"), owner_id=ctx.get("owner_id"), api_base=API, token=os.environ.get("RESTORE_TOKEN", ""),
+        repo_node_id=ctx.get("repo_node_id"), repo_full=repo, owner_id=ctx.get("owner_id"), api_base=API, token=os.environ.get("RESTORE_TOKEN", ""),
         token_scopes=ctx.get("token_scopes"), budget=MAX_WRITES - used, rest_get=lambda n: gh("GET", f"/repos/{repo}/issues/{n}"),
         evidence_dir=EVIDENCE, write_delay=WRITE_DELAY, rate_wait=RATE_WAIT, settle=float(os.environ.get("RESTORE_PROJECT_SETTLE", "5")),
         tries=VERIFY_TRIES, delay=VERIFY_DELAY)
