@@ -33,7 +33,7 @@
 #   7. Enviar o pacote ao OneDrive -> upload conferido por hash
 #   8. Evidência e manifest 2.0    -> validados contra os schemas
 #   9. Enviar a evidência          -> ao OneDrive, conferida por hash
-#  10. Limpar e publicar           -> apaga o estado local; artefato do Actions (sempre)
+#  10. Limpar e publicar           -> apaga o estado local (SEM artefato do Actions: o repositório é público)
 #
 # REGRAS QUE ESTE WORKFLOW RESPEITA
 #   - A origem é READ-ONLY: só consultas GraphQL/REST de leitura (o leitor recusa `mutation`).
@@ -298,11 +298,6 @@ jobs:
         shell: bash
         run: python3 backup/scripts/onedrive.py cleanup
 
-      - name: Publish evidence
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: bkp-proj-${{ inputs.request_id }}
-          path: evidence/
-          if-no-files-found: ignore
-          retention-days: 7
+      # SEM artefato do Actions (decisão de 14/10/2026): o repositório executor é PÚBLICO e os artefatos podem ser baixados por qualquer
+      # usuário logado no GitHub. A pasta evidence/ traz títulos, nomes de labels, campos e views e, em falha, valores de repositórios
+      # privados. A evidência completa vai SÓ ao OneDrive; o log do job traz apenas resumos seguros (contagens, números, estados e tempos).

@@ -183,6 +183,16 @@ class MappingTest(unittest.TestCase):
             self.assertIn(f"{m.lower()}_matrix", wf["jobs"]["guard"]["outputs"])
             self.assertIn(f"{m.lower()}_count", wf["jobs"]["guard"]["outputs"])
 
+    def test_nenhum_workflow_publica_artefato_do_actions(self):
+        """O repositório executor é PÚBLICO: um artefato do Actions é baixável por qualquer usuário logado e a pasta evidence/ tem
+        títulos, nomes e valores de repositórios privados. A evidência vai só ao OneDrive (achado de segurança de 15/10/2026)."""
+        workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+        self.assertGreaterEqual(len(workflows), 6)
+        for path in workflows:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            uses = [step.get("uses", "") for job in (data.get("jobs") or {}).values() for step in job.get("steps", []) or []]
+            self.assertFalse([u for u in uses if u.startswith("actions/upload-artifact")], f"{path.name} publica artefato")
+
     def test_inputs_do_workflow_batem_com_a_matriz(self):
         # O `with:` de cada job do dispatcher só usa campos que a matriz do Mnemonic produz,
         # e cobre todos os inputs obrigatórios do workflow chamado.
