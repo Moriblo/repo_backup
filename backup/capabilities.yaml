@@ -753,7 +753,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 23c957ae55d4b5d4b2f8d2a70c70a9e45990ede7
+      current_sha: 533ec2b70c26bc137506e24c2530a7071b5e1c4d
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -863,7 +863,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 0f3ff63bcfc2ee04e5270d8f26d3772b96f825ad
+      current_sha: cbecc5932beeb4c5697614f0da5440ead911ed2f
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
@@ -892,7 +892,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 07c9e0fc8946fb90eabef5adc381a30b68372a90
+      current_sha: a659d06066aff942f93b203313d3a74495890403
     validation:
       status: VALIDATED
       scope: "Três runs reais completos pelo dispatcher (BKP_PROJ, destino backups/projetos no OneDrive real): (a) req-20261003-004, escopo PROJECT (Moriblo nº 13, 7 itens, classe PARTIAL por 6 issues de repositório privado ocultas); (b) req-20261003-005, escopo OWNER_PROJECT_SET (Moriblo, 8 Projects e 201 itens, 356 KB). Em todos - preflight PASS de uma só classe sem o SOURCE_READ_TOKEN, destino validado, leitura, pacote (api-projects*.json e RESTAURAR.txt) e evidência enviados com hash quickXorHash conferido (9 de 9 arquivos), COMPLETE_WITH_EXCEPTIONS, passos do SOURCE_READ_TOKEN e das issues pulados nos escopos PROJECT e OWNER_PROJECT_SET, como previsto. O OWNER_PROJECT_SET grava TODOS os Projects do dono, inclusive os não relacionados a este repositório. (c) req-20261003-008, escopo SOURCE_REPOSITORY (Moriblo/backup_teste_issues): os passos do SOURCE_READ_TOKEN e da leitura das issues rodaram (não foram pulados), 1 Project e 7 itens no pacote, o arquivo de itens com 12481 bytes (igual ao do run com a regra E do BKP_REPO), COMPLETE_WITH_EXCEPTIONS, 9 de 9 arquivos com hash conferido; o inventário (candidatos TITLE_MATCH e excluídos) não foi aberto. Não provado - preflight BLOCKED e linha de continuação sem o PROJECTS_READ_TOKEN, falha de envio, Projects de organização."
@@ -1277,7 +1277,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 02b94e57f35462cc4564fe9916eba0186889448c
+      current_sha: cc3a26e4c83bc10b88cd538e0379baf1ae629460
     validation:
       status: VALIDATED
       scope: "Run real completo (req-20261003-003, run 37089900544, Moriblo/backup_teste_issues, repositório privado): o token clássico read:project não enxerga o repositório; a descoberta alternativa lista os Projects do dono e a regra E confirma o vínculo pelos títulos: o quadro nº 13 ficou com TITLE_MATCH 6/6 (7 itens, 14 campos, 1 view, 6 workflows, Status e Prioridade conferidos contra a tela) e os nº 12 e nº 5 foram excluídos (TITLES_DO_NOT_MATCH, 0/101 e 0/1) e NÃO entraram no pacote (api-project-items.json de 177 KB para 12 KB). Classe PARTIALLY-PRESERVED: 6 itens com a referência da issue oculta (o estado do quadro sobrevive). Escopos PROJECT (quadro nº 13, 7 itens) e OWNER_PROJECT_SET (8 Projects, 201 itens, TODOS os do dono, sem filtro) provados em runs reais pelo BKP_PROJ (37091894311 e 37092140044). Escopo SOURCE_REPOSITORY pelo BKP_PROJ (req-20261003-008, run 37093767488): as issues da origem lidas numa pasta de trabalho fora do pacote (SOURCE_TITLES_DIR) e 1 Project com 7 itens no pacote, o arquivo de itens com os mesmos 12481 bytes do run req-20261003-003, ou seja, só o quadro nº 13 (o conteúdo do inventário com os candidatos excluídos não foi aberto nesta checagem). Paginação real exercitada no run anterior (101 itens em 2 páginas, run 37087638922). Não provado - falso positivo por título repetido entre repositórios, origem sem issues, Project só com rascunhos, Projects de organização, valores de campo de iteração, data e número, itens arquivados e status updates. Sonda do schema (introspecção, só consulta; grava `schema_probe` em api-projects-inventory.json e api-projects-status.json: mutations de ProjectV2 e campos de views, workflows e das entradas de criação) acrescentada depois destes runs, com o bloqueio de mutations refeito (operação `mutation` ou `subscription`, e o documento tem de começar por `query`): só teste local com servidor simulado; ainda não rodou em run real. A sonda rodou em run real (req-20261004-001, run 37176285236, Moriblo/backup_teste_issues, Project 14): API_PROBE OK, 262 mutations no schema, 32 de ProjectV2 (entre elas createProjectV2View, updateProjectV2View, copyProjectV2 e, de workflow, só deleteProjectV2Workflow); os workflows expõem só nome, número, estado ligado e datas. A segunda versão da sonda registra também os argumentos dos campos, os tipos possíveis das uniões e a entrada de cada mutation de ProjectV2 (`<Mutation>Input`), e segue os tipos de Projects citados (teto de 150): só teste local; ainda não rodou em run real. A sonda 2 rodou em run real (req-20261004-002, run 37178564776, Project 14): todos os tipos seguidos, nenhum cortado pelo teto (types_not_followed vazio). Resultados que mudaram o leitor: ProjectV2.items tem `archivedStates` (sem pedir ARCHIVED o item arquivado não vinha: o Project tinha 6 itens e o backup leu 5) e `orderBy` POSITION; as views expõem configuration.visibleFields, groupByFields, verticalGroupByFields e sortByFields. A primeira versão que pedia tudo isso na mesma consulta FALHOU no run real req-20261004-003 (run 37179285175): API_READ projects FAILED com 'GRAPHQL_ERROR: Something went wrong while executing your query' (erro interno do GitHub, sem dizer qual consulta), e nenhum arquivo de Projects foi guardado (a classe inteira se perdeu por causa de uma peça opcional). A correção: a consulta principal voltou à forma provada em run real e as leituras novas ficaram em consultas próprias e tolerantes a falha (quatro partes das views, itens arquivados e ordem por posição): se uma falhar, a classe fica PARTIAL com a causa e o resto é guardado; o erro passa a trazer o nome da operação e o erro interno do GitHub é repetido; campo de seleção múltipla deixa a classe PARTIAL (opções e valores ainda não são lidos). A correção rodou em run real (req-20261004-004, run 37180173248, Project 14): COMPLETE_WITH_EXCEPTIONS com os arquivos de Projects guardados; das seis leituras opcionais, cinco funcionaram (item arquivado com os valores e a posição, agrupamento, agrupamento vertical e ordenação das views) e só `views.visibleFields` (consulta `configuration { visibleFields(first: 100) }`) falhou, com erro interno persistente do GitHub depois das cinco tentativas, sem perder o resto. Duas alternativas para os campos visíveis (a mesma consulta com página menor e a lista `fields` da própria view) entraram depois, cada uma numa consulta própria: só teste local; ainda não rodaram em run real."
@@ -1304,10 +1304,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: bc86e14d30792d33710ed7d95cef8952924ad5a1
+      current_sha: 3234dba8c93a80660cf4dc164b583c8c198e2e8f
     validation:
       status: NOT_VALIDATED
-      scope: Executado localmente e no CI dos pull requests (43 testes, mais verificação de mutação, incluindo o bloqueio de mutations, a sonda do schema e as leituras opcionais de itens arquivados, ordem por posição e partes das views, com as alternativas dos campos visíveis).
+      scope: Executado localmente e no CI dos pull requests (45 testes, mais verificação de mutação, incluindo o HTTP 401 (credencial recusada) e o bloqueio de mutations, a sonda do schema e as leituras opcionais de itens arquivados, ordem por posição e partes das views, com as alternativas dos campos visíveis).
     relationships:
       - {capability_id: backup_repository, relationship: VALIDATES}
       - {capability_id: backup_projects, relationship: VALIDATES}
@@ -1326,10 +1326,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: d43ea1c87fcf1eab1b8ebcdd0a8eea2763f602b9
+      current_sha: 31e7fc18e2f237c667491feba6a56113a42c3f5a
     validation:
       status: NOT_VALIDATED
-      scope: "Executado localmente e no CI dos pull requests (18 testes, mais verificação de mutação). Não roda no dispatcher real."
+      scope: "Executado localmente e no CI dos pull requests (19 testes, mais verificação de mutação, incluindo o envio da evidência após FAILED). Não roda no dispatcher real."
     relationships:
       - {capability_id: backup_issues, relationship: VALIDATES}
       - {capability_id: restore_repository, relationship: VALIDATES}
@@ -1350,7 +1350,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 23aa36c7958baf4fa342e4e4fa6ac957be19b6eb
+      current_sha: 764922ad0d96802d31980ed9a6a3a7602829a7ff
     validation:
       status: NOT_VALIDATED
       scope: "Executado localmente e no CI dos pull requests (12 testes, mais verificação de mutação). Não roda no Actions real nem contra o OneDrive."
@@ -1486,7 +1486,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 01cf17a9d2374e0c93ccc19764accf03de02d25c
+      current_sha: ca6189f58661d30f01cac4f0c1b15bc628507b4c
     validation:
       status: VALIDATED
       scope: "Run real completo pelo dispatcher (req-20261003-010, run 37139570337): backup de labels, milestones e issues de Moriblo/backup_teste_issues para backups/backup_teste_issues. Preflight PASS de três classes com o SOURCE_READ_TOKEN, destino validado, leitura da API (4 labels, 1 milestone, 6 issues, comentários, eventos, repo-metadata.json), 9 arquivos do pacote e 5 de evidência enviados com hash conferido, COMPLETE_WITH_EXCEPTIONS (três objetos PRESERVED-AS-EQUIVALENT-REPRESENTATION, sem objeto git, limitações LIM-labels/milestones/issues-equivalent, capability_id backup_issues). evidence.json e manifest.json foram lidos (anexados pelo HITL) e conferem com o esperado. Não provado - repositório grande e limite de taxa da API, reações (o repositório de teste não tem; api-issue-reactions.json saiu vazio), relações entre issues, Issues desativado (410), continuação sem o token, mais de uma linha por push e linhas de Mnemonics diferentes no mesmo push. Sub-issues e dependências foram provadas em run posterior (req-20261003-011, run 37141791507; ver o leitor)."

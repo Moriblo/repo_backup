@@ -200,6 +200,23 @@ class BkpTest(unittest.TestCase):
         self.assertEqual(ev["objects"][0]["disposition"], "FAILED")
         self.assertEqual(man["status"], "FAILED")
 
+    def test_projects_recusado_com_401_ainda_monta_evidencia_e_manifest(self):
+        """Run real req-20261015-003: a classe FAILED não impede evidence.json e manifest.json; só derruba o job (exit 1).
+        O workflow tem de enviar essa evidência mesmo assim (ver test_dispatch_check)."""
+        self.proj_env()
+        self.assertEqual(self.bkp("preflight", PROJECTS_TOKEN_OUTCOME="success").returncode, 0)
+        tp.FakeGraph.http_fail = {"ProjectByNumber": 401}
+        self.read_projects()
+        proc, ev, man = self.finish()
+        self.assertEqual(proc.returncode, 1)
+        self.assertIsNotNone(ev)
+        self.assertIsNotNone(man)
+        self.assertEqual(ev["objects"][0]["disposition"], "FAILED")
+        self.assertEqual(man["status"], "FAILED")
+        self.assertIn("HTTP 401", json.dumps(ev))
+        self.assertEqual(self.result(proc)["status"], "FAILED")
+        self.assertTrue(self.result(proc)["evidence_sha256"])
+
     def test_sem_pacote_no_destino_projects_falha(self):
         self.proj_env()
         self.assertEqual(self.bkp("preflight", PROJECTS_TOKEN_OUTCOME="success").returncode, 0)

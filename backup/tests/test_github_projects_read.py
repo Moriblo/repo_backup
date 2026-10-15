@@ -155,7 +155,7 @@ class FakeGraph(http.server.BaseHTTPRequestHandler):
         cls.queries[op] = body["query"]
         cls.seen.append((op, self.command, self.headers.get("Authorization"), body["query"].lstrip()[:5]))
         if op in cls.http_fail:
-            return self._send(cls.http_fail[op], {"message": "x"})
+            return self._send(cls.http_fail[op], {"message": "Bad credentials" if cls.http_fail[op] == 401 else "x"})
         if cls.flaky.get(op, 0) > 0:
             cls.flaky[op] -= 1
             return self._send(500, {"message": "boom"})
@@ -465,6 +465,32 @@ class ReadTest(unittest.TestCase):
         every = self.run_read("OWNER_PROJECT_SET", {"owner": "dono"})
         self.assertEqual((every["status"], every["count"]), ("OK", 2))
         self.assertEqual({i["project_number"] for i in self.load("api-project-items.json")}, {13, 14})
+
+    def test_http_401_vira_failed_sem_dica_de_escopo_e_sem_repetir(self):
+        """Run real req-20261015-003: HTTP 401 na primeira consulta. 401 é credencial recusada, não escopo nem visibilidade."""
+        FakeGraph.http_fail["ProjectsOfRepository"] = 401
+        st = self.run_read()
+        self.assertEqual(st["status"], "FAILED")
+        self.assertIn("HTTP 401", st["detail"])
+        self.assertIn("credencial recusada", st["detail"])
+        self.assertIn("Bad credentials", st["detail"])            # a mensagem do GitHub chega ao log
+        self.assertIn("revogado", st["detail"])
+        self.assertNotIn("read:project", st["detail"])            # a dica antiga (escopo/visibilidade) induzia ao erro
+        self.assertNotIn("privado", st["detail"])
+        self.assertEqual([s for s in FakeGraph.seen if s[0] == "ProjectsOfRepository"].__len__(), 1)   # 401 não é repetido
+        self.assertFalse((self.root / "package" / "api-projects.json").exists())
+        self.assertTrue((self.root / "evidence" / "api-projects-status.json").exists())   # o status é gravado: a classe fica FAILED
+
+    def test_mensagem_do_401_e_curta_e_tolera_corpo_invalido(self):
+        class Exc:
+            def __init__(self, raw):
+                self.raw = raw
+
+            def read(self):
+                return self.raw
+        self.assertEqual(g.auth_message(Exc(b"<html>nao e json</html>")), "sem mensagem")
+        self.assertEqual(g.auth_message(Exc(b"{}")), "sem mensagem")
+        self.assertEqual(len(g.auth_message(Exc(json.dumps({"message": "x" * 500}).encode()))), 80)
 
     def test_project_inexistente_falha(self):
         st = self.run_read("PROJECT", {"owner": "dono", "number": 99})

@@ -571,6 +571,7 @@ jobs:
       # Só roda se o destino foi validado (senão sai com 21). O manifest lista os arquivos
       # do pacote com o caminho no OneDrive, o SHA-256 e o tamanho.
       - name: Build schema 2.0 evidence and manifest
+        id: evidence
         shell: bash
         env:
           DESTINATION_VALIDATED: ${{ steps.destination.outputs.destination_validated }}
@@ -580,6 +581,9 @@ jobs:
       # a <destination>/<request_id>/evidence/. Falha: BKP_RESULT FAILED (EVIDENCE_UPLOAD_FAILED),
       # que passa a ser o ÚLTIMO BKP_RESULT e substitui o do passo anterior.
       - name: Upload evidence to OneDrive
+        # Roda também quando o passo anterior terminou FAILED (exit 1 de propósito: FAILED derruba o job). Sem isto a evidência
+        # montada era descartada junto com o runner (run req-20261015-003). Não roda se a evidência nem foi montada.
+        if: ${{ always() && steps.destination.outcome == 'success' && steps.evidence.outcome != 'skipped' }}
         shell: bash
         env:
           ONEDRIVE_CLIENT_ID: ${{ vars.ONEDRIVE_CLIENT_ID }}

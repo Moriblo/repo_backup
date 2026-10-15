@@ -221,12 +221,16 @@ jobs:
 
       # Gera evidence.json e manifest.json (schemas 2.0), valida e imprime o BKP_RESULT.
       - name: Build schema 2.0 evidence and manifest
+        id: evidence
         shell: bash
         env:
           DESTINATION_VALIDATED: ${{ steps.destination.outputs.destination_validated }}
         run: python3 backup/scripts/bkp_repo.py build-evidence
 
       - name: Upload evidence to OneDrive
+        # Roda também quando o passo anterior terminou FAILED (exit 1 de propósito: FAILED derruba o job). Sem isto a evidência
+        # montada era descartada junto com o runner (run req-20261015-003). Não roda se a evidência nem foi montada.
+        if: ${{ always() && steps.destination.outcome == 'success' && steps.evidence.outcome != 'skipped' }}
         shell: bash
         env:
           ONEDRIVE_CLIENT_ID: ${{ vars.ONEDRIVE_CLIENT_ID }}

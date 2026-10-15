@@ -193,6 +193,26 @@ class MappingTest(unittest.TestCase):
             uses = [step.get("uses", "") for job in (data.get("jobs") or {}).values() for step in job.get("steps", []) or []]
             self.assertFalse([u for u in uses if u.startswith("actions/upload-artifact")], f"{path.name} publica artefato")
 
+    def test_evidencia_e_enviada_mesmo_quando_a_montagem_termina_failed(self):
+        """build-evidence sai com 1 de propósito quando uma classe é FAILED (o job não pode parecer sucesso). Sem `always()` o envio da
+        evidência era pulado e ela se perdia com o runner (run req-20261015-003). O envio roda se a evidência foi montada e o destino
+        foi validado, e nunca roda se a montagem foi pulada."""
+        for name in ("backup-repository", "backup-projects", "backup-issues", "restore-repository"):
+            data = yaml.safe_load((ROOT / ".github" / "workflows" / f"{name}.yml").read_text(encoding="utf-8"))
+            steps = [st for job in data["jobs"].values() for st in job.get("steps", [])]
+            by_name = {st.get("name"): st for st in steps}
+            build, upload = by_name["Build schema 2.0 evidence and manifest"], by_name["Upload evidence to OneDrive"]
+            cond = str(upload.get("if", ""))
+            self.assertIn("always()", cond, name)
+            self.assertIn("steps.destination.outcome == 'success'", cond, name)
+            if name != "restore-repository":
+                self.assertEqual(build.get("id"), "evidence", name)
+                self.assertIn("steps.evidence.outcome != 'skipped'", cond, name)
+            # A ordem importa: o envio vem depois da montagem e antes da limpeza do estado do OneDrive.
+            order = [st.get("name") for st in steps]
+            self.assertLess(order.index(build["name"]), order.index(upload["name"]), name)
+            self.assertLess(order.index(upload["name"]), order.index("Remove local OneDrive state"), name)
+
     def test_inputs_do_workflow_batem_com_a_matriz(self):
         # O `with:` de cada job do dispatcher só usa campos que a matriz do Mnemonic produz,
         # e cobre todos os inputs obrigatórios do workflow chamado.
