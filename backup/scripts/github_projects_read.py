@@ -287,6 +287,16 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def auth_message(exc):
+    """Texto `message` do corpo de uma resposta 401 (curto, sem segredo); "sem mensagem" se o corpo não for o esperado."""
+    try:
+        message = json.loads(exc.read().decode("utf-8")).get("message", "")
+    except (OSError, ValueError, AttributeError):
+        message = ""
+    message = " ".join(str(message).split())[:80]
+    return message or "sem mensagem"
+
+
 class Graph:
     """Cliente mínimo do GraphQL do GitHub: só consultas, com repetição em falha transitória."""
 
@@ -326,6 +336,10 @@ class Graph:
                 if exc.code >= 500 and attempt < MAX_TRIES:
                     sleep(2 * attempt)
                     continue
+                if exc.code == 401:
+                    # 401 = o GitHub não reconheceu a credencial. Escopo e visibilidade do repositório NÃO geram 401 (geram 403,
+                    # NOT_FOUND ou `null`). A mensagem do GitHub (ex.: "Bad credentials") é curta e não contém segredo.
+                    raise GraphqlError("HTTP 401", f"credencial recusada pelo GitHub: {auth_message(exc)}") from None
                 raise GraphqlError(f"HTTP {exc.code}") from None
             except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
                 if attempt == MAX_TRIES:
@@ -706,7 +720,12 @@ def cmd_read():
             all_items += [dict(i, project_number=details["number"], project_id=details["id"]) for i in items]
             partial = partial or redacted > 0
     except GraphqlError as exc:
-        hint = " (token clássico com read:project? o repositório é privado e o token não tem `repo`?)" if exc.kind in ("HTTP 401", "HTTP 403", "NOT_FOUND", "INSUFFICIENT_SCOPES", "FORBIDDEN") else ""
+        if exc.kind == "HTTP 401":
+            hint = " (o token foi recusado: inválido, revogado, expirado, ou o secret PROJECTS_READ_TOKEN não tem o valor do token; escopo e visibilidade não geram 401)"
+        elif exc.kind in ("HTTP 403", "NOT_FOUND", "INSUFFICIENT_SCOPES", "FORBIDDEN"):
+            hint = " (token clássico com read:project? o repositório é privado e o token não tem `repo`?)"
+        else:
+            hint = ""
         entry["detail"] = f"{exc}{hint}"
         print(f"::error::API_READ projects: FAILED: {exc}{hint}")
     except Exception as exc:  # noqa: BLE001
