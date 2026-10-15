@@ -753,7 +753,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 3fd921d03b000aa3cef09f07c082c6836b1a5c8c
+      current_sha: 23c957ae55d4b5d4b2f8d2a70c70a9e45990ede7
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -863,7 +863,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 78662a6fa955524a9f9832a54a1df7b7129d6be0
+      current_sha: 0f3ff63bcfc2ee04e5270d8f26d3772b96f825ad
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
@@ -892,7 +892,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 8119c4f63b737e911bc3ad5143c0571caf664aa7
+      current_sha: 07c9e0fc8946fb90eabef5adc381a30b68372a90
     validation:
       status: VALIDATED
       scope: "Três runs reais completos pelo dispatcher (BKP_PROJ, destino backups/projetos no OneDrive real): (a) req-20261003-004, escopo PROJECT (Moriblo nº 13, 7 itens, classe PARTIAL por 6 issues de repositório privado ocultas); (b) req-20261003-005, escopo OWNER_PROJECT_SET (Moriblo, 8 Projects e 201 itens, 356 KB). Em todos - preflight PASS de uma só classe sem o SOURCE_READ_TOKEN, destino validado, leitura, pacote (api-projects*.json e RESTAURAR.txt) e evidência enviados com hash quickXorHash conferido (9 de 9 arquivos), COMPLETE_WITH_EXCEPTIONS, passos do SOURCE_READ_TOKEN e das issues pulados nos escopos PROJECT e OWNER_PROJECT_SET, como previsto. O OWNER_PROJECT_SET grava TODOS os Projects do dono, inclusive os não relacionados a este repositório. (c) req-20261003-008, escopo SOURCE_REPOSITORY (Moriblo/backup_teste_issues): os passos do SOURCE_READ_TOKEN e da leitura das issues rodaram (não foram pulados), 1 Project e 7 itens no pacote, o arquivo de itens com 12481 bytes (igual ao do run com a regra E do BKP_REPO), COMPLETE_WITH_EXCEPTIONS, 9 de 9 arquivos com hash conferido; o inventário (candidatos TITLE_MATCH e excluídos) não foi aberto. Não provado - preflight BLOCKED e linha de continuação sem o PROJECTS_READ_TOKEN, falha de envio, Projects de organização."
@@ -1011,7 +1011,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 7429373f15ac2dfd149077bd38be26050394e3ec
+      current_sha: c78e3b060b86aeea8c63e00b75cf8c250c0d8908
     validation:
       status: VALIDATED
       scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. (e) com CAPABILITY_ID=backup_projects (BKP_PROJ), em dois runs reais (PROJECT nº 13, e OWNER_PROJECT_SET com 8 Projects e 201 itens): preflight de uma só classe sem exigir o SOURCE_READ_TOKEN, evidência e manifest 2.0 com o escopo no lugar do repositório e só o objeto projects (PARTIALLY-PRESERVED), COMPLETE_WITH_EXCEPTIONS. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura. (f) regressão do BKP_REPO depois da generalização por CAPABILITY_ID, em dois runs reais no repositório de teste de issues - req-20261003-006 (preflight BLOCKED com as mesmas 13 restrições, sem exigir mudança) e req-20261003-007 (continuação, COMPLETE_WITH_EXCEPTIONS - git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION, projects PARTIALLY-PRESERVED, 13 NOT-VERIFIED, 14 arquivos de pacote e 18 de evidência com hash conferido); e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008, 1 Project e 7 itens). validate-inputs e preflight de uma classe (git) com CAPABILITY_ID=restore_repository, sem exigir o SOURCE_READ_TOKEN, e destino validado em run real (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues). Não provado - preflight BLOCKED da restauração sem o RESTORE_WRITE_TOKEN."
@@ -1326,10 +1326,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: b50ad56e66513bfac11c9c19a932cbe19bbb6a4e
+      current_sha: d43ea1c87fcf1eab1b8ebcdd0a8eea2763f602b9
     validation:
       status: NOT_VALIDATED
-      scope: "Executado localmente e no CI dos pull requests (17 testes, mais verificação de mutação). Não roda no dispatcher real."
+      scope: "Executado localmente e no CI dos pull requests (18 testes, mais verificação de mutação). Não roda no dispatcher real."
     relationships:
       - {capability_id: backup_issues, relationship: VALIDATES}
       - {capability_id: restore_repository, relationship: VALIDATES}
@@ -1374,7 +1374,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 9f9e00f95745975b8ea9230b6316a633fa7e19c6
+      current_sha: 26670911c3bfdb3791eec019a6cd03327d90244e
     validation:
       status: VALIDATED
       scope: "Run real completo pelo dispatcher (req-20261003-009, run 37137225805): restauração do backup req-20261003-007 de Moriblo/backup_teste_issues para o repositório novo Moriblo/backup_teste_issues-restaurado, criado PRIVADO pelo workflow com o RESTORE_WRITE_TOKEN (token clássico, escopos repo e workflow). Preflight PASS de uma classe, destino validado, backup baixado e conferido, 1 branch (main) enviada e conferida contra o refs.tsv (0 tags, 0 refs puladas), branch padrão main, evidência e manifest 2.0 enviados com hash conferido (6 de 6 arquivos), COMPLETE_WITH_EXCEPTIONS (classe git PRESERVED; labels, milestones, issues e Projects NÃO restaurados, declarado na limitação LIM-restore-scope). Não provado - tags, refs/pull/*, Git LFS ao GitHub, branches com .github/workflows (permissão workflow), repo-metadata.json (descrição, tópicos e branch padrão a partir dele; este backup é anterior ao arquivo), target_name, alvo já existente, preflight BLOCKED sem o token, falha no meio e repositório grande. Não foi aberto o conteúdo do repositório restaurado nem o evidence.json nesta checagem. Etapa 2 (labels e milestones) provada no run real req-20261003-014 (run 37154176501, Moriblo/backup_teste_issues-restaurado-2): preflight de três classes PASS, git PRESERVED (1 branch, commit 4f61034 idêntico ao da origem, conferido pelo HITL), labels e milestones PRESERVED-AS-EQUIVALENT-REPRESENTATION (4 labels do backup, uma delas a padrão bug atualizada com a descrição do backup, mais 9 padrão do GitHub listadas; 1 milestone, mapa 1->1), COMPLETE_WITH_EXCEPTIONS, evidence.json, manifest.json e restore-map.json lidos e conferidos com os prints do HITL (labels, milestones, descrição). Não provado nesta etapa - prazo de milestone (a origem não tem), milestone fechado, buraco na numeração, tópicos (a origem não tem), escolha da branch padrão (só existe a main), mais de 100 labels, limite de taxa, saída 48 e classe NOT-VERIFIED. Etapa 3 (issues e comentários) exercitada no run real req-20261003-017 (run 37161077470, Moriblo/backup_teste_issues-restaurado-3), que terminou FAILED por defeito da conferência e não por falha de escrita: o workflow criou as 6 issues e os comentários (restore-map 1..6, 13 escritas) e o HITL conferiu na interface o cabeçalho, as labels, o milestone, a ausência de assignees, os comentários e a neutralização (@menção, dono/repo#N e URL entre crases, bloco de código e e-mail intactos), e a issue original ficou sem nenhum evento novo; a conferência de volta por listagem viu só 3 das 6 issues (atraso da listagem do GitHub) e foi trocada por leitura direta de cada issue com repetição limitada. A versão corrigida passou no run real req-20261003-018 (run 37162323557, Moriblo/backup_teste_issues-restaurado-4): preflight de quatro classes PASS, git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION (6 issues, 6 comentários, 1 fechamento, 13 escritas, numeração sem mudança, verify_attempts 1), COMPLETE_WITH_EXCEPTIONS, com evidence.json, manifest.json, restore-map.json e restore-result.json lidos e a aba Issues e a issue 3 conferidas pelo HITL na interface (cabeçalho, labels, milestone, sem assignees, comentário com cabeçalho). Não provado em run real - repositório grande e o teto de 450 escritas, limite de taxa, numeração com buracos (a origem não tem), origem com assignees ou reações, a repetição da conferência (verify_attempts maior que 1), a saída 48 por falha de escrita, e a linha do tempo da issue original neste run (conferida só no run req-20261003-017). Etapa 3b (sub-issues e dependências, classe relations, sempre depois das issues OK) provada no run real req-20261003-019 (run 37167245637, Moriblo/backup_teste_issues-restaurado-5, backup req-20261003-016): preflight PASS, fetch com a classe relations READY (os dois arquivos de relações vieram no pacote do BKP_REPO), as quatro classes OK, COMPLETE_WITH_EXCEPTIONS (1 preservada, 4 equivalentes, 0 falhas); restore-result.json: relations OK com 2 sub-issues, 1 dependência, 3 escritas, 0 puladas e verify_attempts 1; evidence.json, manifest.json, restore-map.json e restore-result.json lidos e conferidos. O HITL conferiu na interface do alvo: a issue 5 com as sub-issues 4 (aberta) e 6 (fechada, 1 de 2), a issue 2 bloqueada pela 4 e a issue 4 com o pai 5 e marcada como bloqueando. Isso prova as rotas reais sub_issues e dependencies/blocked_by, o uso do id novo da issue e a leitura de volta pelos resumos. Não provado em run real - relação com outra ponta em outro repositório ou fora do mapa (reportada como PARTIALLY-PRESERVED), teto de escritas com relações, falha de escrita de relação (saída 48), limite de taxa, mais de 100 filhas de um mesmo pai, hierarquia de vários níveis, verify_attempts maior que 1 nas relações, e a linha do tempo da issue original neste run."
@@ -1486,7 +1486,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 6d2b9a0f75d57d1b3e7b8e1b6597fc608fd950c3
+      current_sha: 01cf17a9d2374e0c93ccc19764accf03de02d25c
     validation:
       status: VALIDATED
       scope: "Run real completo pelo dispatcher (req-20261003-010, run 37139570337): backup de labels, milestones e issues de Moriblo/backup_teste_issues para backups/backup_teste_issues. Preflight PASS de três classes com o SOURCE_READ_TOKEN, destino validado, leitura da API (4 labels, 1 milestone, 6 issues, comentários, eventos, repo-metadata.json), 9 arquivos do pacote e 5 de evidência enviados com hash conferido, COMPLETE_WITH_EXCEPTIONS (três objetos PRESERVED-AS-EQUIVALENT-REPRESENTATION, sem objeto git, limitações LIM-labels/milestones/issues-equivalent, capability_id backup_issues). evidence.json e manifest.json foram lidos (anexados pelo HITL) e conferem com o esperado. Não provado - repositório grande e limite de taxa da API, reações (o repositório de teste não tem; api-issue-reactions.json saiu vazio), relações entre issues, Issues desativado (410), continuação sem o token, mais de uma linha por push e linhas de Mnemonics diferentes no mesmo push. Sub-issues e dependências foram provadas em run posterior (req-20261003-011, run 37141791507; ver o leitor)."

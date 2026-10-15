@@ -372,7 +372,8 @@ def cmd_preflight():
     # Valida o resultado contra o sub-schema `capability_preflight` do command-request.
     schema = load("backup/schemas/command-request.schema.yaml")["properties"]["capability_preflight"]
     jsonschema.validate(pf, schema)
-    # preflight.json é gravado mesmo no BLOCKED: o workflow o publica como artefato (rastro da decisão pendente).
+    # preflight.json é gravado mesmo no BLOCKED. O workflow NÃO publica artefato (o repositório é público): no BLOCKED a evidência não
+    # chega ao OneDrive e o rastro da decisão pendente é o BKP_RESULT do log, que traz a lista de restrições.
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     (EVIDENCE / "preflight.json").write_text(json.dumps(pf, indent=2, sort_keys=True) + "\n")
     # Lista pronta para o HITL copiar na linha de continuação do commands.log.

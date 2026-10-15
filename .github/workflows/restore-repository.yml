@@ -36,7 +36,7 @@
 #   5. Baixar e conferir o backup  -> SHA-256 de cada arquivo contra o manifest; só aceita BKP_REPO não FAILED
 #   6. Restaurar                   -> cria o alvo privado, envia branches, tags e LFS, confere as refs
 #   7. Evidência e manifest 2.0    -> validados contra os schemas; enviados ao OneDrive
-#   8. Limpar e publicar           -> apaga o estado local; artefato do Actions (sempre)
+#   8. Limpar e publicar           -> apaga o estado local (SEM artefato do Actions: o repositório é público)
 #
 # REGRAS QUE ESTE WORKFLOW RESPEITA
 #   - O backup (OneDrive) é só LIDO. A origem do backup nunca é tocada.
@@ -222,14 +222,9 @@ jobs:
         shell: bash
         run: python3 backup/scripts/onedrive.py cleanup
 
-      - name: Publish evidence
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: rst-repo-${{ inputs.request_id }}
-          path: evidence/
-          if-no-files-found: ignore
-          retention-days: 7
+      # SEM artefato do Actions (decisão de 14/10/2026): o repositório executor é PÚBLICO e os artefatos podem ser baixados por qualquer
+      # usuário logado no GitHub. A pasta evidence/ traz títulos, nomes de labels, campos e views e, em falha, valores de repositórios
+      # privados. A evidência completa vai SÓ ao OneDrive; o log do job traz apenas resumos seguros (contagens, números, estados e tempos).
 
       # O job só termina em sucesso se o backup foi baixado, a restauração passou e a evidência foi gerada.
       - name: Fail the job if the restoration did not complete
