@@ -56,6 +56,9 @@ class World:
         self.auto_close = False                 # workflow: Status = Done fecha a issue
         self.ignore = set()                     # mutations que respondem sucesso mas não gravam nada (a conferência tem de pegar)
         self.view_layout = None                 # o GitHub cria toda view com este layout, ignorando o pedido
+        self.update_ignores_layout = False      # updateProjectV2View responde sucesso mas não muda o layout
+        self.default_views = 1                  # quantas tabelas "View n" o Project novo já traz
+        self.same_name_defaults = False         # todas as tabelas padrão se chamam "View 1"
         self.vanish = set()                     # adições que devolvem um id mas o item não fica no Project
         self.ignore_field = None                # nome do campo cuja criação é ignorada
         self.children = {}                      # id de nó do pai -> ids de nó das filhas que o workflow Auto-add sub-issues põe sozinho
@@ -138,7 +141,8 @@ class FakeAPI(http.server.BaseHTTPRequestHandler):
             title = {"id": w.new_id("RF"), "name": "Title", "dataType": "TITLE", "__typename": "ProjectV2Field"}
             w.projects[pid] = {"id": pid, "number": number, "title": data["title"], "short": None, "readme": None, "public": w.default_public, "closed": False,
                                "repo_id": data.get("repositoryId"), "owner_id": data["ownerId"], "fields": [title, status],
-                               "views": [{"id": w.new_id("RV"), "name": "View 1", "number": 1, "layout": "TABLE_LAYOUT", "filter": None, "visible": None}],
+                               "views": [{"id": w.new_id("RV"), "name": "View 1" if w.same_name_defaults else f"View {n}", "number": n, "layout": "TABLE_LAYOUT", "filter": None, "visible": None}
+                                         for n in range(1, w.default_views + 1)],
                                "workflows": [{"name": n, "enabled": e} for n, e in w.default_workflows], "items": [], "status_updates": []}
             out["projectV2"] = {"id": pid, "number": number, "url": f"https://github.com/users/dono/projects/{number}"}
             return out
@@ -171,8 +175,8 @@ class FakeAPI(http.server.BaseHTTPRequestHandler):
             out["projectV2View"] = {"id": view["id"]}
         elif name == "updateProjectV2View":
             view = next(v for q in w.projects.values() for v in q["views"] if v["id"] == data["viewId"])
-            for key in ("name", "filter"):
-                if key in data:
+            for key in ("name", "filter", "layout"):
+                if key in data and not (key == "layout" and w.update_ignores_layout):
                     view[key] = data[key] or None
             if "configuration" in data:
                 view["visible"] = data["configuration"].get("visibleFieldIds")
@@ -481,14 +485,61 @@ class RestoreTest(Base):
         self.assertLessEqual(result["writes"], result["planned_writes"])
         self.assertEqual(self.world.seen_auth, {f"Bearer {TOKEN}"})
 
-    def test_a_primeira_view_reaproveita_a_padrao_e_a_de_outro_layout_e_criada(self):
+    def test_a_primeira_view_reaproveita_sempre_a_padrao_e_as_outras_sao_criadas(self):
         self.run_restore()
-        self.assertEqual(len(self.ops("createProjectV2View")), 1)           # só a "View 2" (board) foi criada
+        self.assertEqual(len(self.ops("createProjectV2View")), 1)           # só a "View 2" (board) foi criada; a tabela padrão virou a "View 1"
+        first = next(o for o in self.ops("updateProjectV2View") if o[2]["name"] == "View 1")
+        self.assertEqual(first[2]["layout"], "TABLE_LAYOUT")                 # o layout do backup vai no updateProjectV2View
         details, items = source_project()
-        details["views"]["nodes"][0]["layout"] = "BOARD_LAYOUT"
+        details["views"]["nodes"][0]["layout"] = "BOARD_LAYOUT"              # layout diferente do da view padrão (tabela): continua reaproveitando
         self.setUp()
         self.run_restore(projects=[details], items=items)
-        self.assertEqual(len(self.ops("createProjectV2View")), 2)
+        self.assertEqual(len(self.ops("createProjectV2View")), 1)
+        self.assertEqual([(v["name"], v["layout"]) for v in self.project()["views"]], [("View 1", "BOARD_LAYOUT"), ("View 2", "BOARD_LAYOUT")])
+
+    @staticmethod
+    def board_only():
+        """Original só com um board (o caso do MIT): uma única view, de layout BOARD_LAYOUT, no lugar da tabela padrão."""
+        details, items = source_project()
+        board = copy.deepcopy(details["views"]["nodes"][1])
+        board.update(name="View 1", number=1, filter=None)
+        details["views"]["nodes"] = [board]
+        return details, items
+
+    def test_original_so_com_board_nao_deixa_a_tabela_padrao_a_mais(self):
+        details, items = self.board_only()
+        result = self.run_restore(projects=[details], items=items)
+        self.assertEqual(result["status"], "OK", result)
+        self.assertEqual([(v["name"], v["layout"], v["filter"]) for v in self.project()["views"]], [("View 1", "BOARD_LAYOUT", None)])
+        self.assertEqual(self.ops("createProjectV2View"), [])               # nada criado: a tabela padrão foi convertida em board
+        update = self.ops("updateProjectV2View")[0][2]
+        self.assertEqual((update["name"], update["layout"]), ("View 1", "BOARD_LAYOUT"))
+
+    def test_conferencia_acusa_view_a_mais(self):
+        self.world.default_views = 2                                         # o Project novo vem com uma tabela a mais
+        details, items = self.board_only()
+        proj = self.run_restore(projects=[details], items=items)["projects"][0]
+        self.assertEqual(proj["status"], "FAILED")
+        self.assertIn("view a mais no Project restaurado (posição 2): o original tem 1 view(s)", proj["mismatches"])
+        self.assertIn("View 2", " ".join(proj["mismatch_details"]))         # o texto completo (com o nome) só vai para o restore-result.json
+        self.assertNotIn("View 2", " ".join(proj["mismatches"]))            # o log do Actions (repositório público) não leva nome de view
+
+    def test_conferencia_acusa_view_a_mais_mesmo_com_nome_repetido(self):
+        """Duas views "View 1" (board e a tabela padrão a mais): comparar por nome as juntaria numa só."""
+        self.world.default_views = 2
+        self.world.same_name_defaults = True
+        details, items = self.board_only()
+        proj = self.run_restore(projects=[details], items=items)["projects"][0]
+        self.assertEqual(proj["status"], "FAILED")
+        self.assertEqual([m for m in proj["mismatches"] if m.startswith("view")],
+                         ["view a mais no Project restaurado (posição 2): o original tem 1 view(s)"])
+
+    def test_layout_ignorado_na_view_reaproveitada_e_pego(self):
+        self.world.update_ignores_layout = True                              # o GitHub aceita o update mas não troca tabela por board
+        details, items = self.board_only()
+        proj = self.run_restore(projects=[details], items=items)["projects"][0]
+        self.assertEqual(proj["status"], "FAILED")
+        self.assertIn("view 1 ausente ou diferente (layout ou filtro)", proj["mismatches"])
 
     def test_opcoes_do_status_diferentes_sao_atualizadas(self):
         details, items = source_project()
@@ -760,7 +811,8 @@ class WorkflowInterferenceTest(Base):
         self.assertEqual(len(p["items"]), 7)
         self.assertEqual(p["items"][5]["values"]["Status"]["select"], "Done")      # os valores do backup valem também para o item que o GitHub pôs
         self.assertEqual(self.effects(result)["repositioned"], 0)
-        self.assertIn("Issues já postas no Project pelo GitHub", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+        self.assertIn(f"Issues já postas no Project pelo GitHub (Auto-add sub-issues) antes da adição explícita: #6 no backup (#{NEW_BASE + 6} no restaurado)",
+                      (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
 
     def test_filha_antes_do_pai_nao_tem_colisao(self):
         order = [DEFAULT_TITLES[i] for i in (0, 1, 2, 3, 5, 4)] + ["Rascunho sem issue"]      # a filha (6) antes do pai (5)
@@ -808,7 +860,8 @@ class WorkflowInterferenceTest(Base):
         self.assertIn(f"sub-issue de #{NEW_BASE + 5}", extras[0]["reason"])
         self.assertIn("Auto-add sub-issues", extras[0]["reason"])
         self.assertEqual(len(self.project()["items"]), 7)                    # 5 issues + o rascunho + a filha: nada foi apagado
-        self.assertIn(f"Item a mais, deixado no Project: issue #{NEW_BASE + 6}", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+        self.assertIn(f"Item a mais, deixado no Project: issue #{NEW_BASE + 6} (#6 no backup)", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+        self.assertEqual(extras[0]["old_number"], 6)
 
     def test_auto_add_atrasado_e_declarado_na_conferencia_final(self):
         self.world.children = {}
@@ -887,7 +940,9 @@ class WorkflowInterferenceTest(Base):
         self.assertEqual(self.effects(result)["done_not_written"], [6])
         self.assertEqual(self.world.issue_state[NEW_BASE + 6], "open")      # o Auto-close não chegou a fechar a issue
         self.assertEqual(self.project()["items"][5]["values"]["Status"]["select"], "Todo")
-        self.assertIn("Status Done NÃO gravado nas issues #6", (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8"))
+        text = (self.evidence / "RESTAURAR-PROJETO.txt").read_text(encoding="utf-8")
+        self.assertIn(f"Status Done NÃO gravado nas issues #6 no backup (#{NEW_BASE + 6} no restaurado)", text)    # o número muda: o checklist mostra os dois
+        self.assertEqual(self.effects(result)["numbers"], {"6": NEW_BASE + 6})
 
     def test_done_em_issue_fechada_e_gravado(self):
         result = self.run_restore()                                          # a 6 é fechada no fixture
