@@ -371,11 +371,13 @@ def visible_ids(view, index):
 
 
 def create_views(writer, plan, project_id, details, index):
-    """Recria as views: a primeira reaproveita a view padrão do Project novo quando o layout bate; as outras são criadas."""
-    existing = list(details["views"]["nodes"])
+    """Recria as views. A primeira view do backup reaproveita SEMPRE a primeira view padrão do Project novo (a tabela "View 1"), que
+    recebe nome, layout, filtro e campos visíveis do backup (UpdateProjectV2ViewInput aceita `layout`); as outras são criadas. Antes, só se
+    reaproveitava a padrão quando o layout batia: um original só com um board ficava com a tabela padrão MAIS o board criado."""
+    existing = sorted(details["views"]["nodes"], key=lambda v: v.get("number") or 0)
     for n, view in enumerate(plan["views"]):
         ids = visible_ids(view, index)
-        target = existing[0] if n == 0 and existing and existing[0]["layout"] == view["layout"] else None
+        target = existing[0] if n == 0 and existing else None
         if target is None:
             data = {"projectId": project_id, "name": view["name"], "layout": view["layout"]}
             if ids:
@@ -385,7 +387,7 @@ def create_views(writer, plan, project_id, details, index):
             if view.get("filter"):
                 writer.write("RstUpdateView", "updateProjectV2View", {"viewId": view_id, "filter": view["filter"]})
         else:
-            data = {"viewId": target["id"], "name": view["name"], "filter": view.get("filter") or ""}
+            data = {"viewId": target["id"], "name": view["name"], "layout": view["layout"], "filter": view.get("filter") or ""}
             if ids:
                 data["configuration"] = {"visibleFieldIds": ids}
             writer.write("RstUpdateView", "updateProjectV2View", data)
@@ -470,11 +472,20 @@ def verify(graph, rest_get, plan, project_id, expected_items, issue_states, proj
             add(f"campo {field_pos[f['name']]} ausente ou de outro tipo", f"campo {f['name']} ausente ou de outro tipo")
         elif f["dataType"] == "SINGLE_SELECT" and set(current["options"]) != {o["name"] for o in f.get("options") or []}:
             add(f"campo {field_pos[f['name']]}: opções diferentes", f"campo {f['name']}: opções diferentes")
-    names = {v["name"]: v for v in details["views"]["nodes"]}
+    # Cada view esperada consome UMA view do Project restaurado (nome, layout e filtro iguais); o que sobra é view a mais. Comparar por nome
+    # (dict) escondia a tabela padrão duplicada: duas views "View 1" viravam uma só.
+    remaining = list(details["views"]["nodes"])
     for n, v in enumerate(plan["views"], 1):
-        got = names.get(v["name"])
-        if got is None or got["layout"] != v["layout"] or (got.get("filter") or "") != (v.get("filter") or ""):
+        match = next((g for g in remaining if g["name"] == v["name"] and g["layout"] == v["layout"] and (g.get("filter") or "") == (v.get("filter") or "")), None)
+        if match is None:
             add(f"view {n} ausente ou diferente (layout ou filtro)", f"view {v['name']} ausente ou diferente (layout ou filtro)")
+        else:
+            remaining.remove(match)
+    if plan["views"]:
+        for g in remaining:
+            pos = 1 + [x["id"] for x in details["views"]["nodes"]].index(g["id"])
+            add(f"view a mais no Project restaurado (posição {pos}): o original tem {len(plan['views'])} view(s)",
+                f"view a mais no Project restaurado: {g['name']} ({g['layout']}); o original tem {len(plan['views'])} view(s)")
 
     expected_ids = {item_id for _, item_id in expected_items}
     items = all_items
@@ -594,7 +605,11 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
     accepted, unexpected = classify_items([i for i in now_items if i["id"] not in expected_ids], expected_ids, step_numbers, ctx.get("repo_full"), rest_get)
     effects = {"added_by_workflow": [s["old"] for s in pending_steps],
                "auto_added_extras": [{"number": (i.get("content") or {}).get("number"), "reason": why} for i, why in accepted],
-               "unexpected_items": len(unexpected), "done_not_written": [], "repositioned": 0, "reposition_error": None}
+               "unexpected_items": len(unexpected), "done_not_written": [], "repositioned": 0, "reposition_error": None,
+               # número da issue no BACKUP -> número no repositório restaurado, para as issues citadas (o checklist mostra os dois)
+               "numbers": {str(s["old"]): s["new"] for s in pending_steps}}
+    for extra in effects["auto_added_extras"]:
+        extra["old_number"] = ctx.get("old_of", {}).get(extra["number"])
     result["workflow_effects"] = effects
     now_ids = {i["id"] for i in now_items}
     order = [item_id for _, item_id in expected if item_id in now_ids]       # um item que o GitHub não guardou é pego pela conferência
@@ -613,6 +628,7 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
             if (step["kind"] == "issue" and value[0] == "Status" and value[1] == "select" and value[2] == "Done"      # o Auto-close vigia o campo Status
                     and ctx["issue_state"].get(step["old"]) == "open"):
                 effects["done_not_written"].append(step["old"])      # o workflow Auto-close fecharia a issue, que no backup está aberta
+                effects["numbers"][str(step["old"])] = step["new"]
                 continue
             step["applied"].append(value)
             writer.write("RstSetValue", "updateProjectV2ItemFieldValue",
@@ -640,6 +656,7 @@ def restore_one(writer, graph, rest_get, plan, ctx, notes, result):
         known = {e["number"] for e in effects["auto_added_extras"]}
         for extra in late:                                  # Auto-add atrasado: o item a mais só apareceu depois da leitura dos itens
             if extra["number"] not in known:
+                extra.setdefault("old_number", ctx.get("old_of", {}).get(extra["number"]))
                 effects["auto_added_extras"].append(extra)
         if not bad:
             break
@@ -696,12 +713,20 @@ def checklist_text(results):
             lines.append(f"  - {w['name']}: no backup {'LIGADO' if w['enabled_in_backup'] else 'DESLIGADO'}; "
                          f"no restaurado {({True: 'LIGADO', False: 'DESLIGADO', None: 'não listado pela API'})[w['enabled_in_restored']]}; ação: {w['action']}")
         fx = r.get("workflow_effects") or {}
+        numbers = fx.get("numbers") or {}
+
+        def both(old):
+            """Issue citada pelo número do backup: mostra também o número no repositório restaurado (eles diferem)."""
+            new = numbers.get(str(old))
+            return f"#{old} no backup (#{new} no restaurado)" if new is not None else f"#{old} no backup"
         if fx.get("added_by_workflow"):
-            lines.append(f"  - Issues já postas no Project pelo GitHub (Auto-add sub-issues) antes da adição explícita: {', '.join('#' + str(n) for n in fx['added_by_workflow'])} (tratadas como presentes).")
+            lines.append(f"  - Issues já postas no Project pelo GitHub (Auto-add sub-issues) antes da adição explícita: {', '.join(both(n) for n in fx['added_by_workflow'])} (tratadas como presentes).")
         for extra in fx.get("auto_added_extras") or []:
-            lines.append(f"  - Item a mais, deixado no Project: issue #{extra['number']} ({extra['reason']}). O restore não apaga nada: remova à mão se não quiser.")
+            old = extra.get("old_number")
+            lines.append(f"  - Item a mais, deixado no Project: issue #{extra['number']}{f' (#{old} no backup)' if old is not None else ''} ({extra['reason']}; "
+                         f"os números da razão são os do restaurado). O restore não apaga nada: remova à mão se não quiser.")
         if fx.get("done_not_written"):
-            lines.append(f"  - Status Done NÃO gravado nas issues {', '.join('#' + str(n) for n in fx['done_not_written'])} (abertas no backup): o workflow Auto-close do Project as fecharia.")
+            lines.append(f"  - Status Done NÃO gravado nas issues {', '.join(both(n) for n in fx['done_not_written'])} (abertas no backup): o workflow Auto-close do Project as fecharia.")
         if fx.get("reposition_error"):
             lines.append("  - A ordem dos itens não pôde ser ajustada ao backup (reposicionamento falhou); ajuste à mão.")
         lines += ["  - Agrupamento e ordenação das views, colaboradores e as regras (gatilho, filtro, ação) dos workflows não voltam.", ""]
@@ -721,7 +746,8 @@ def restore_projects(*, source, projects, items, issues, issue_map, node_ids, is
         return {"status": "NOT_VERIFIED", "reason": f"os Projects exigiriam cerca de {total} escritas, acima do que resta do teto ({max(budget, 0)}); nada foi escrito"}
     writer = Writer(api_base, token, write_delay, rate_wait)
     graph = pr.Graph(api_base, token)
-    ctx = {"owner_id": owner_id, "repo_node_id": repo_node_id, "repo_full": repo_full, "settle": settle, "tries": tries, "delay": delay, "issue_state": issue_states}
+    ctx = {"owner_id": owner_id, "repo_node_id": repo_node_id, "repo_full": repo_full, "settle": settle, "tries": tries, "delay": delay, "issue_state": issue_states,
+           "old_of": {new: old for old, new in issue_map.items()}}
     results, notes = [], []
     started = time.monotonic()
     for n, plan in enumerate(plans):
