@@ -2,6 +2,8 @@
 
 Data: 17/10/2026. Referência: `docs/app/SPEC.md`, seção 7. Nenhum workflow, fluxo ou `commands.log` foi alterado.
 
+**Decisões do HITL (17/10/2026):** S1 usa o fallback (autorização do OneDrive fora do navegador); S4 versiona o bundle da libsodium no repositório com `<script integrity>`, sem CDN; S2 e S3 ficam **pendentes de ação do HITL**; o aplicativo fica **pausado** até o HITL fechar as pendências do projeto. A `SPEC.md` foi atualizada com essas mudanças.
+
 Resumo honesto: **S4 está provado; S1 tem resposta forte sem ação do HITL (não funciona direto do navegador); S2 e S3 ficam parciais e precisam de uma ação do HITL (token) para serem concluídos.** O ambiente onde rodei os testes só alcança uma lista fixa de domínios (não alcança `productionresultssa8.blob.core.windows.net`, nem CDNs como jsdelivr e cdnjs, e recusa `OPTIONS` em `api.github.com`), e isso limitou S2 e S3.
 
 | Spike | Resultado | Falta |
