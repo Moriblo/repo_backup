@@ -1448,8 +1448,12 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: d88bbc8b3d46d0242ae29407b43f76146c5bf6c3
     validation:
-      status: NOT_VALIDATED
-      scope: "Só teste local contra uma API GraphQL simulada com estado; ainda não rodou em run real. Não provado - nenhum dos nomes de payload, a criação de views com campos visíveis, os workflows padrão do GitHub reagindo à inclusão de itens, a conferência de volta, o limite de taxa."
+      status: VALIDATED
+      scope: "Provado em run real (RST_REPO etapa 4, todos com sucesso): criação dos Projects novos e privados, campos, views com a troca da tabela padrão pelo board, itens, valores, reposicionamento, conferência de volta e o caminho 'já existe' do 4b (Auto-add sub-issues pôs a issue 24 antes da adição explícita; primeira vez no run 38836929546, já com o PR #64, que é a versão atual do arquivo). Não provado: limite de taxa, Projects grandes e workflows além dos padrão do GitHub (as regras dos workflows não são recriáveis pela API)."
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/38515538532", commit: 4a632a91f224430e606b0ed7788bbe89b5081ce1}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/38830556735", commit: 2d48c431136f07db7d2a59384f4931309ee880ec}
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/38836929546", commit: ccf073a8808f51261fe50c1caaaa79cb371ac5b6}
     relationships:
       - {capability_id: restore_repository, relationship: EXECUTES}
 
