@@ -81,7 +81,7 @@ sleep = time.sleep
 # Limitações permanentes desta versão do leitor, copiadas para o inventário.
 LIMITATIONS = [
     "Pull requests are not preserved by this reader: they are listed in api-inventory.json "
-    "(numbers only) and remain a pending object class (pull_requests).",
+    "(numbers only) and are read by the pull_requests object class (github_pulls_read.py).",
     "Sub-issues and issue dependencies (blocked by / blocking) are preserved as references "
     "(repository, number, id, state) read from the dedicated endpoints; the issues on the other "
     "end of a cross-repository relationship are not read. The full timeline is not read.",

@@ -57,7 +57,7 @@ on:
         type: string
       # Repositório a copiar, no formato dono/nome. Nunca é alterado (READ-ONLY).
       source_repository:
-        description: "GitHub source repository in owner/name form, pattern ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ (required; READ-ONLY). Known restriction: GitHub Actions logs and artifacts are saved up to 5 GiB in total (oldest first); the rest is listed as SKIPPED_OVER_CAP and the actions class becomes PARTIALLY-PRESERVED. Checks and commit statuses are read for at most 500 candidate commits (branch and tag tips, refs/pull/*/head, run head commits) and 256 MiB; the rest is listed as SKIPPED_OVER_CAP and the checks class becomes PARTIALLY-PRESERVED. Check suites and runs of a private repository need a GitHub App with Checks: Read, so they are listed as CHECKS_DENIED and the checks class becomes PARTIALLY-PRESERVED"
+        description: "GitHub source repository in owner/name form, pattern ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ (required; READ-ONLY). Known restriction: GitHub Actions logs and artifacts are saved up to 5 GiB in total (oldest first); the rest is listed as SKIPPED_OVER_CAP and the actions class becomes PARTIALLY-PRESERVED. Checks and commit statuses are read for at most 500 candidate commits (branch and tag tips, refs/pull/*/head, run head commits) and 256 MiB; the rest is listed as SKIPPED_OVER_CAP and the checks class becomes PARTIALLY-PRESERVED. Check suites and runs of a private repository need a GitHub App with Checks: Read, so they are listed as CHECKS_DENIED and the checks class becomes PARTIALLY-PRESERVED. Pull requests (with commits, files, reviews, threads and comments) are read as a record only, for at most 2000 pull requests and 256 MiB (the rest is listed as SKIPPED_OVER_CAP); a pull request above the API limits of 250 commits or 3000 files is listed as LIMITED and the pull_requests class becomes PARTIALLY-PRESERVED"
         required: true
         type: string
       # Pasta de destino DENTRO do AppFolder do OneDrive (não é um caminho absoluto).
@@ -422,6 +422,23 @@ jobs:
           set -euo pipefail
           mkdir -p package "$EVIDENCE_DIR"
           python3 backup/scripts/github_checks_read.py read
+
+      # Lê pela API (REST + GraphQL só de consulta) a classe `pull_requests` (SÓ REGISTRO, sem restauração): os PRs de
+      # todos os estados, commits, arquivos alterados, reviews, comentários de review, threads, comentários de
+      # conversa, eventos e relações, até 2000 PRs e 256 MiB. Grava package/api-pull*.json e
+      # evidence/api-pulls-status.json. Roda depois do passo das classes labels/milestones/issues (usa o resultado
+      # dele para conferir a lista de PRs). O token precisa de Pull requests: Read-only. O log público traz só
+      # contagens e tamanhos. Como os outros passos de API, NÃO derruba o job.
+      - name: Read Pull requests
+        # Rede de segurança: sem api-pulls-status.json o build-evidence marca a classe FAILED.
+        continue-on-error: true
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p package "$EVIDENCE_DIR"
+          python3 backup/scripts/github_pulls_read.py read
 
       # Lê pela API GraphQL os Projects (v2) LIGADOS ao repositório de origem (escopo
       # SOURCE_REPOSITORY) e grava package/api-projects*.json e evidence/api-projects-status.json.
