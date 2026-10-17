@@ -1,6 +1,6 @@
 # Instruções do projeto Repo_Backup (continuidade de contexto)
 
-**Versão do documento:** 16/10/2026, 23h55. **Instruções do projeto vigentes: v2.0** (ver 1.1).
+**Versão do documento:** 17/10/2026, 18h55. **Instruções do projeto vigentes: v2.0** (ver 1.1).
 **Para que serve:** garantir que qualquer sessão nova, em qualquer produto do Claude, retome o projeto sem depender da memória de conversas anteriores, e que nada decidido ou feito se perca entre sessões.
 
 ---
@@ -73,9 +73,10 @@ O texto acima é o que está salvo no campo "Instruções" do projeto. Ele é ve
 
 | Documento | Conteúdo |
 |---|---|
+| `claude/MIT_BACKUP_FULL_COBERTURA.md` | O que o backup full do `Moriblo/MIT` precisa cobrir, o que já cobre e os prazos. |
 | `claude/STATUS_ATUAL.md` | Onde o projeto está, referências (runs, pastas, repositórios), próximos passos, riscos e registro de decisões do HITL. **Ler primeiro.** |
 | `claude/INSTRUCOES_DO_PROJETO.md` | Este documento. |
-| `claude/ISSUES_ABERTAS_repo_backup.md` | Cópia do corpo das issues abertas #5, #7 e #11, que guardam decisões fora dos arquivos do repositório. |
+| `claude/ISSUES_ABERTAS_repo_backup.md` | Cópia do corpo e dos comentários das issues abertas (hoje #5 e #70), que guardam decisões fora dos arquivos do repositório. |
 | `claude/APP_FRONTEND_SPEC.md` | Especificação da v1 do aplicativo (web estático no Pages, o app como engine, spikes S1–S4, PRs A–D). Decisão do HITL de 16/10. Depois do PR A, a versão vigente fica em `docs/app/SPEC.md` no repositório. |
 | `claude/STAGE_1_ONEDRIVE_DELEGATED_DECISION.md` | Decisões e setup de 29/09 (rota OneDrive delegada, fluxo acordado). **Histórico**: o estado atual está no `STATUS_ATUAL.md`. |
 
@@ -135,7 +136,7 @@ Faça sempre que houver: run real, PR mergeado, decisão do HITL, mudança de pl
    - os próximos passos;
    - o registro de decisões, com data, para **toda** decisão do HITL tomada na sessão.
 2. **Espelhos**: para cada arquivo da tabela da seção 3 que mudou no `main`, regravar no mesmo caminho do projeto (`project_write` com `local_path`, a partir de um clone atualizado). Na dúvida, regravar todos: é barato. Um arquivo novo importante no repositório (workflow ou schema) entra na tabela e no espelho.
-3. **Issues**: se as issues #5, #7 ou #11 mudaram, ou se uma issue nova passou a guardar decisões, regravar `claude/ISSUES_ABERTAS_repo_backup.md`.
+3. **Issues**: se as issues abertas (hoje #5 e #70) mudaram, ou se uma issue nova passou a guardar decisões, regravar `claude/ISSUES_ABERTAS_repo_backup.md`.
 4. **Cópia no repositório**: abrir um PR que atualiza `docs/contexto/` no `repo_backup` com as versões novas destes documentos, para que sessões do Claude Code sem acesso ao projeto também os enxerguem. O PR pode ir junto com um PR de código da mesma sessão.
 5. **Avisar o HITL** em uma linha o que foi salvo, ou o que não foi possível salvar.
 

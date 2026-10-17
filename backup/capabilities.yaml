@@ -771,7 +771,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 36a0cb27258632702b8345f2627afc0f402e7b6e
+      current_sha: f9bf0e3048dd1878c4a2b2a18e14e1b5904a0eaf
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -1379,8 +1379,10 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: c340cbd557ce7b7d636783d4b17d12b45d88531c
     validation:
-      status: NOT_VALIDATED
-      scope: "Só teste local contra uma API simulada (REST e GraphQL); ainda não rodou em run real. Não provado - as rotas reais de pulls, a permissão Pull requests: Read-only do SOURCE_READ_TOKEN, as consultas GraphQL de threads e de referências de fechamento, PR de fork, limites de 250 commits e 3000 arquivos, e volume."
+      status: VALIDATED
+      scope: "Run real completo (req-20261017-007, BKP_REPO de Moriblo/MIT, run 39070120535): 6/6 PRs (#4 a #8 e #25) lidos pela API (6 commits, 6 arquivos, 1 comentário de conversa, 23 eventos, 259 814 bytes, sem lacunas), classe PRESERVED-AS-EQUIVALENT-REPRESENTATION, 13 conferências aprovadas; consultas GraphQL de threads e de referências de fechamento disponíveis nos 6 PRs; cruzamento head.sha x refs.tsv 6/6; o SOURCE_READ_TOKEN com Pull requests: Read-only bastou (REST e GraphQL); log público só com contagens. Conferido pela sessão do projeto no log e no OneDrive. Não provado - reviews, comentários de review e threads com conteúdo (o MIT tem 0 reviews e 0 threads; só a consulta foi provada), PR de fork, os limites de 250 commits e 3000 arquivos, repositório privado e volume (muitos PRs, tetos de 2000 PRs e 256 MiB)."
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/39070120535", commit: c4a48ea5eadb9ad47e35d61f607373ea673cdf31}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
