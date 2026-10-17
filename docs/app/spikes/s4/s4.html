@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Spike S4: sealed box no navegador</title>
+<script src="../vendor/sodium-bundle.js"></script>
+<script>
+// Cifra `plaintext` com a chave pública (base64) no formato que a API de secrets do GitHub exige (crypto_box_seal).
+window.sealSecret = async (publicKeyB64, plaintext) => {
+  await sodium.ready;
+  const key = sodium.from_base64(publicKeyB64, sodium.base64_variants.ORIGINAL);
+  const sealed = sodium.crypto_box_seal(sodium.from_string(plaintext), key);
+  return sodium.to_base64(sealed, sodium.base64_variants.ORIGINAL);
+};
+</script>

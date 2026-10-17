@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Spike S2: ler o log de um job do Actions pelo navegador</title>
+<body style="font:16px system-ui;max-width:42rem;margin:2rem auto;padding:0 1rem">
+<h1>S2: log do job (redirecionamento e CORS)</h1>
+<p>Token fine-grained <b>só desta cópia</b> com <i>Actions: Read</i>. O token fica só na memória desta página (campo de senha, nunca gravado). Sugestão: <code>Moriblo/repo_backup</code>, job <code>116768072648</code> (RST_REPO <code>req-20261016-003</code>).</p>
+<input id="repo" value="Moriblo/repo_backup" size="30"> <input id="job" value="116768072648" size="14"> <input id="tok" type="password" size="30" placeholder="token (memória)"> <button id="go">Testar</button>
+<pre id="out"></pre>
+<script>
+const out = document.getElementById("out"), log = s => out.textContent += s + "\n";
+document.getElementById("go").onclick = async () => {
+  out.textContent = "";
+  const url = `https://api.github.com/repos/${document.getElementById("repo").value}/actions/jobs/${document.getElementById("job").value}/logs`;
+  try {
+    // O fetch segue o 302 sozinho para o domínio do armazenamento; se esse domínio não liberar CORS, o fetch falha aqui.
+    const r = await fetch(url, { headers: { Authorization: "Bearer " + document.getElementById("tok").value, "X-GitHub-Api-Version": "2022-11-28" } });
+    const t = await r.text();
+    log("HTTP " + r.status + " | url final: " + new URL(r.url).host + " | redirecionado: " + r.redirected + " | bytes: " + t.length);
+    log("marcadores achados: " + ["BKP_RESULT", "RESTORE_SUMMARY", "RESTORE_TIMINGS"].map(k => k + "=" + (t.includes(k) ? "sim" : "não")).join(", "));
+    log("S2: " + (r.ok && t.length ? "FUNCIONA" : "NÃO FUNCIONA"));
+  } catch (e) { log("S2: BLOQUEADO (" + e.name + ": " + e.message + ") -> CORS do domínio de destino ou da API"); }
+};
+</script>
