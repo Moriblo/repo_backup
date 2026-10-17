@@ -380,7 +380,7 @@ object_classes:
 
 # Menu de capabilities. As que têm `hitl_required: true` exigem GO do HITL.
 # Só uma capability com `mnemonic` e `command_workflow` gera linha no commands.log
-# (hoje, backup_repository e backup_projects).
+# (hoje, quatro: backup_repository, backup_projects, backup_issues e restore_repository).
 capabilities:
   - id: backup_repository
     name: Backup Repository
@@ -753,7 +753,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 71c110a81eed4fea00cc0c1ed1bb7e52dcaef820
+      current_sha: 3d998fa4f25f0790b5885a0e93fcd3c4ad7cf5aa
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
