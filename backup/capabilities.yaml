@@ -753,7 +753,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 711f3d803dec038caeb6aa06823a8fcd134a3c48
+      current_sha: f3349e67df0b229ba381606ffc8fd7be85438d64
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -863,7 +863,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: cbecc5932beeb4c5697614f0da5440ead911ed2f
+      current_sha: 469f2312be775be510d161cb99da228e07279fe6
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
@@ -892,7 +892,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: a659d06066aff942f93b203313d3a74495890403
+      current_sha: e4042a6fd3334df333a3054d412b6887b4b2da3a
     validation:
       status: VALIDATED
       scope: "Três runs reais completos pelo dispatcher (BKP_PROJ, destino backups/projetos no OneDrive real): (a) req-20261003-004, escopo PROJECT (Moriblo nº 13, 7 itens, classe PARTIAL por 6 issues de repositório privado ocultas); (b) req-20261003-005, escopo OWNER_PROJECT_SET (Moriblo, 8 Projects e 201 itens, 356 KB). Em todos - preflight PASS de uma só classe sem o SOURCE_READ_TOKEN, destino validado, leitura, pacote (api-projects*.json e RESTAURAR.txt) e evidência enviados com hash quickXorHash conferido (9 de 9 arquivos), COMPLETE_WITH_EXCEPTIONS, passos do SOURCE_READ_TOKEN e das issues pulados nos escopos PROJECT e OWNER_PROJECT_SET, como previsto. O OWNER_PROJECT_SET grava TODOS os Projects do dono, inclusive os não relacionados a este repositório. (c) req-20261003-008, escopo SOURCE_REPOSITORY (Moriblo/backup_teste_issues): os passos do SOURCE_READ_TOKEN e da leitura das issues rodaram (não foram pulados), 1 Project e 7 itens no pacote, o arquivo de itens com 12481 bytes (igual ao do run com a regra E do BKP_REPO), COMPLETE_WITH_EXCEPTIONS, 9 de 9 arquivos com hash conferido; o inventário (candidatos TITLE_MATCH e excluídos) não foi aberto. Não provado - preflight BLOCKED e linha de continuação sem o PROJECTS_READ_TOKEN, falha de envio, Projects de organização."
@@ -975,7 +975,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 3c8bb2799dd5a5e0e9ec087ae922dae080461e23
+      current_sha: 8da711c2a8caa033d3a5ec7b44d140c5fc606cc4
     validation:
       status: VALIDATED
       scope: "Caminho feliz (uma linha aceita e despachada, linha de continuação) e push sem mudança no log (merge de PR). Duas linhas BKP_PROJ aceitas e despachadas só para o backup-projects.yml, com o job do BKP_REPO pulado (runs 37091894311 e 37092140044). Recusas por violação só testadas localmente. Depois da mudança do dispatcher, o job do BKP_REPO rodou de verdade com a primeira linha (req-20261003-006, preflight BLOCKED) e a de continuação (req-20261003-007, 14 arquivos de pacote e 18 de evidência no OneDrive), e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008), sempre com o job do outro Mnemonic pulado. Não provado - mais de uma linha na mesma matriz e o dispatcher com duas linhas de Mnemonics diferentes no mesmo push. Linha RST_REPO aceita e despachada só para o restore-repository.yml, com os jobs BKP_REPO e BKP_PROJ pulados (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues)."
@@ -1205,7 +1205,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 712c900f0a9d353c9fd50ba2e3c09056b04ae60a
+      current_sha: 9f5124ed170b7ed38e0b4edaffa9664fff92feee
     validation:
       status: NOT_VALIDATED
     relationships:
@@ -1374,7 +1374,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 26670911c3bfdb3791eec019a6cd03327d90244e
+      current_sha: 34d1d640c52f82cb944a6ab1743e47ea8cad1f91
     validation:
       status: VALIDATED
       scope: "Run real completo pelo dispatcher (req-20261003-009, run 37137225805): restauração do backup req-20261003-007 de Moriblo/backup_teste_issues para o repositório novo Moriblo/backup_teste_issues-restaurado, criado PRIVADO pelo workflow com o RESTORE_WRITE_TOKEN (token clássico, escopos repo e workflow). Preflight PASS de uma classe, destino validado, backup baixado e conferido, 1 branch (main) enviada e conferida contra o refs.tsv (0 tags, 0 refs puladas), branch padrão main, evidência e manifest 2.0 enviados com hash conferido (6 de 6 arquivos), COMPLETE_WITH_EXCEPTIONS (classe git PRESERVED; labels, milestones, issues e Projects NÃO restaurados, declarado na limitação LIM-restore-scope). Não provado - tags, refs/pull/*, Git LFS ao GitHub, branches com .github/workflows (permissão workflow), repo-metadata.json (descrição, tópicos e branch padrão a partir dele; este backup é anterior ao arquivo), target_name, alvo já existente, preflight BLOCKED sem o token, falha no meio e repositório grande. Não foi aberto o conteúdo do repositório restaurado nem o evidence.json nesta checagem. Etapa 2 (labels e milestones) provada no run real req-20261003-014 (run 37154176501, Moriblo/backup_teste_issues-restaurado-2): preflight de três classes PASS, git PRESERVED (1 branch, commit 4f61034 idêntico ao da origem, conferido pelo HITL), labels e milestones PRESERVED-AS-EQUIVALENT-REPRESENTATION (4 labels do backup, uma delas a padrão bug atualizada com a descrição do backup, mais 9 padrão do GitHub listadas; 1 milestone, mapa 1->1), COMPLETE_WITH_EXCEPTIONS, evidence.json, manifest.json e restore-map.json lidos e conferidos com os prints do HITL (labels, milestones, descrição). Não provado nesta etapa - prazo de milestone (a origem não tem), milestone fechado, buraco na numeração, tópicos (a origem não tem), escolha da branch padrão (só existe a main), mais de 100 labels, limite de taxa, saída 48 e classe NOT-VERIFIED. Etapa 3 (issues e comentários) exercitada no run real req-20261003-017 (run 37161077470, Moriblo/backup_teste_issues-restaurado-3), que terminou FAILED por defeito da conferência e não por falha de escrita: o workflow criou as 6 issues e os comentários (restore-map 1..6, 13 escritas) e o HITL conferiu na interface o cabeçalho, as labels, o milestone, a ausência de assignees, os comentários e a neutralização (@menção, dono/repo#N e URL entre crases, bloco de código e e-mail intactos), e a issue original ficou sem nenhum evento novo; a conferência de volta por listagem viu só 3 das 6 issues (atraso da listagem do GitHub) e foi trocada por leitura direta de cada issue com repetição limitada. A versão corrigida passou no run real req-20261003-018 (run 37162323557, Moriblo/backup_teste_issues-restaurado-4): preflight de quatro classes PASS, git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION (6 issues, 6 comentários, 1 fechamento, 13 escritas, numeração sem mudança, verify_attempts 1), COMPLETE_WITH_EXCEPTIONS, com evidence.json, manifest.json, restore-map.json e restore-result.json lidos e a aba Issues e a issue 3 conferidas pelo HITL na interface (cabeçalho, labels, milestone, sem assignees, comentário com cabeçalho). Não provado em run real - repositório grande e o teto de 450 escritas, limite de taxa, numeração com buracos (a origem não tem), origem com assignees ou reações, a repetição da conferência (verify_attempts maior que 1), a saída 48 por falha de escrita, e a linha do tempo da issue original neste run (conferida só no run req-20261003-017). Etapa 3b (sub-issues e dependências, classe relations, sempre depois das issues OK) provada no run real req-20261003-019 (run 37167245637, Moriblo/backup_teste_issues-restaurado-5, backup req-20261003-016): preflight PASS, fetch com a classe relations READY (os dois arquivos de relações vieram no pacote do BKP_REPO), as quatro classes OK, COMPLETE_WITH_EXCEPTIONS (1 preservada, 4 equivalentes, 0 falhas); restore-result.json: relations OK com 2 sub-issues, 1 dependência, 3 escritas, 0 puladas e verify_attempts 1; evidence.json, manifest.json, restore-map.json e restore-result.json lidos e conferidos. O HITL conferiu na interface do alvo: a issue 5 com as sub-issues 4 (aberta) e 6 (fechada, 1 de 2), a issue 2 bloqueada pela 4 e a issue 4 com o pai 5 e marcada como bloqueando. Isso prova as rotas reais sub_issues e dependencies/blocked_by, o uso do id novo da issue e a leitura de volta pelos resumos. Não provado em run real - relação com outra ponta em outro repositório ou fora do mapa (reportada como PARTIALLY-PRESERVED), teto de escritas com relações, falha de escrita de relação (saída 48), limite de taxa, mais de 100 filhas de um mesmo pai, hierarquia de vários níveis, verify_attempts maior que 1 nas relações, e a linha do tempo da issue original neste run."
@@ -1490,7 +1490,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: ca6189f58661d30f01cac4f0c1b15bc628507b4c
+      current_sha: 12d9524f2d2df450529165216d18b448169d8075
     validation:
       status: VALIDATED
       scope: "Run real completo pelo dispatcher (req-20261003-010, run 37139570337): backup de labels, milestones e issues de Moriblo/backup_teste_issues para backups/backup_teste_issues. Preflight PASS de três classes com o SOURCE_READ_TOKEN, destino validado, leitura da API (4 labels, 1 milestone, 6 issues, comentários, eventos, repo-metadata.json), 9 arquivos do pacote e 5 de evidência enviados com hash conferido, COMPLETE_WITH_EXCEPTIONS (três objetos PRESERVED-AS-EQUIVALENT-REPRESENTATION, sem objeto git, limitações LIM-labels/milestones/issues-equivalent, capability_id backup_issues). evidence.json e manifest.json foram lidos (anexados pelo HITL) e conferem com o esperado. Não provado - repositório grande e limite de taxa da API, reações (o repositório de teste não tem; api-issue-reactions.json saiu vazio), relações entre issues, Issues desativado (410), continuação sem o token, mais de uma linha por push e linhas de Mnemonics diferentes no mesmo push. Sub-issues e dependências foram provadas em run posterior (req-20261003-011, run 37141791507; ver o leitor)."
