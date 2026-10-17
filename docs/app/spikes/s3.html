@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Spike S3: gravar no main pela API de conteúdo</title>
+<body style="font:16px system-ui;max-width:42rem;margin:2rem auto;padding:0 1rem">
+<h1>S3: PUT /contents na main protegida</h1>
+<p><b>Use um repositório de TESTE descartável</b> com a mesma proteção da main do repo_backup (check obrigatório "Registry traceability" e dono podendo contornar). Não use o <code>Moriblo/repo_backup</code>. O teste grava (e depois apaga) o arquivo <code>spike-s3.txt</code> na main do repositório informado. Token fine-grained só desse repositório com <i>Contents: Read and write</i>; fica só na memória.</p>
+<input id="repo" size="30" placeholder="dono/repo-de-teste"> <input id="tok" type="password" size="30" placeholder="token (memória)"> <button id="go">Testar</button>
+<pre id="out"></pre>
+<script>
+const out = document.getElementById("out"), log = s => out.textContent += s + "\n";
+const b64 = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+document.getElementById("go").onclick = async () => {
+  out.textContent = "";
+  const repo = document.getElementById("repo").value.trim(), h = { Authorization: "Bearer " + document.getElementById("tok").value, "X-GitHub-Api-Version": "2022-11-28", Accept: "application/vnd.github+json" };
+  const api = `https://api.github.com/repos/${repo}/contents/spike-s3.txt`;
+  try {
+    const p = await fetch(api, { method: "PUT", headers: h, body: JSON.stringify({ message: "spike S3: gravação direta na main", content: b64("spike S3\n"), branch: "main" }) });
+    const j = await p.json();
+    log("PUT: HTTP " + p.status + (p.ok ? " | commit " + j.commit.sha : " | " + (j.message || "")));
+    if (!p.ok) { log("S3: NÃO FUNCIONA (a proteção recusou ou faltou permissão)"); return; }
+    const d = await fetch(api, { method: "DELETE", headers: h, body: JSON.stringify({ message: "spike S3: limpeza", sha: j.content.sha, branch: "main" }) });
+    log("DELETE (limpeza): HTTP " + d.status);
+    log("S3: FUNCIONA");
+  } catch (e) { log("S3: erro de rede/CORS (" + e.name + ": " + e.message + ")"); }
+};
+</script>

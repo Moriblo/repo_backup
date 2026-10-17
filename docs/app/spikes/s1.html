@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Spike S1: device code da Microsoft a partir do navegador</title>
+<body style="font:16px system-ui;max-width:42rem;margin:2rem auto;padding:0 1rem">
+<h1>S1: device code (CORS)</h1>
+<p>Informe o <b>ONEDRIVE_CLIENT_ID</b> (não é segredo) e clique. Nada é gravado em lugar nenhum; o código do usuário e o link aparecem aqui só para você ver, e você <b>não precisa</b> concluir o login.</p>
+<input id="cid" size="40" placeholder="client_id do app no Entra"> <button id="go">Testar</button>
+<pre id="out"></pre>
+<script>
+const out = document.getElementById("out"), log = s => out.textContent += s + "\n";
+document.getElementById("go").onclick = async () => {
+  out.textContent = "";
+  const body = new URLSearchParams({ client_id: document.getElementById("cid").value.trim(), scope: "Files.ReadWrite.AppFolder offline_access" });
+  try {
+    const r = await fetch("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode", { method: "POST", body });
+    const j = await r.json();
+    log("devicecode: HTTP " + r.status + " | lido pelo navegador: SIM | campos: " + Object.keys(j).join(", "));
+    if (j.verification_uri) log("verification_uri: " + j.verification_uri + " | user_code: " + j.user_code);
+  } catch (e) { log("devicecode: BLOQUEADO pelo navegador (" + e.name + ": " + e.message + ") -> CORS"); }
+  try {
+    const r = await fetch("https://login.microsoftonline.com/consumers/oauth2/v2.0/token", { method: "POST", body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", client_id: "00000000-0000-0000-0000-000000000000", device_code: "x" }) });
+    log("token: HTTP " + r.status + " | lido pelo navegador: SIM");
+  } catch (e) { log("token: BLOQUEADO (" + e.name + ": " + e.message + ")"); }
+};
+</script>
