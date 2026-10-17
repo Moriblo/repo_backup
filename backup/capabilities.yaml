@@ -450,7 +450,10 @@ capabilities:
     # entram no pacote como api-*.json (representação equivalente, não restauração por git push).
     # projects é lida por backup/scripts/github_projects_read.py (GraphQL) e precisa de uma
     # credencial própria (ver `class_credentials`).
-    implemented_classes: [git, labels, milestones, issues, actions, checks, projects]
+    implemented_classes: [git, labels, milestones, issues, pull_requests, actions, checks, projects]
+    # pull_requests é lida pela API por backup/scripts/github_pulls_read.py (REST + GraphQL só de consulta) com o
+    # SOURCE_READ_TOKEN (precisa de Pull requests: Read-only). É REGISTRO: sem restauração nesta etapa (a cópia
+    # equivalente é uma etapa futura e separada). NÃO é temporal.
     # checks é TEMPORAL e é lida pela API por backup/scripts/github_checks_read.py (REST, só GET) sobre um conjunto
     # CANDIDATO de commits; precisa de Commit statuses: Read-only no SOURCE_READ_TOKEN (checks de repositório privado
     # exigem um GitHub App com Checks: Read, rota futura). É REGISTRO: sem restauração.
@@ -768,7 +771,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 98ea4d9956b9a496155790a2d8ba0c82e4f10f19
+      current_sha: 36a0cb27258632702b8345f2627afc0f402e7b6e
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -878,7 +881,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 8a9f0cbb0074b7280516d83eb36ae696d84b2acc
+      current_sha: b9ceb17edd86b297fabb692271ac471bde1d1967
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
@@ -1026,7 +1029,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: cd7f5e428fccca59a900db15fa537cbad83b8078
+      current_sha: 064174f3786b83c1acc3ed56f6daedee8faa7e94
     validation:
       status: VALIDATED
       scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. (e) com CAPABILITY_ID=backup_projects (BKP_PROJ), em dois runs reais (PROJECT nº 13, e OWNER_PROJECT_SET com 8 Projects e 201 itens): preflight de uma só classe sem exigir o SOURCE_READ_TOKEN, evidência e manifest 2.0 com o escopo no lugar do repositório e só o objeto projects (PARTIALLY-PRESERVED), COMPLETE_WITH_EXCEPTIONS. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura. (f) regressão do BKP_REPO depois da generalização por CAPABILITY_ID, em dois runs reais no repositório de teste de issues - req-20261003-006 (preflight BLOCKED com as mesmas 13 restrições, sem exigir mudança) e req-20261003-007 (continuação, COMPLETE_WITH_EXCEPTIONS - git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION, projects PARTIALLY-PRESERVED, 13 NOT-VERIFIED, 14 arquivos de pacote e 18 de evidência com hash conferido); e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008, 1 Project e 7 itens). validate-inputs e preflight de uma classe (git) com CAPABILITY_ID=restore_repository, sem exigir o SOURCE_READ_TOKEN, e destino validado em run real (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues). Não provado - preflight BLOCKED da restauração sem o RESTORE_WRITE_TOKEN."
@@ -1242,7 +1245,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 9f5b5e01fe9955876db163cef35ed24cab6d21f6
+      current_sha: 501ce3acd83870f07ba73fd6f1f8ad628bd87514
     validation:
       status: VALIDATED
       scope: "Run real completo (req-20261002-001, Moriblo/backup_teste_issues): 4 etiquetas, 1 marco, 6 issues (pull requests fora) e 5 comentários lidos pela API, com as conferências aprovadas; api-*.json enviados ao OneDrive com hash por quickXorHash; api-issues.json conferido pelo HITL contra o repositório (textos e acentos, etiquetas, marco, issue editada e issue fechada). Não provado - repositórios grandes (paginação real e limite de taxa), reações (o repositório de teste não tem), pull requests, relações entre issues (campos zerados no teste) e restauração pela API. Sub-issues e dependências (api-issue-sub-issues.json, api-issue-dependencies.json) acrescentadas depois deste run e provadas em outro, req-20261003-011 (run 37141791507): pai #5 com filhas #4 (aberta) e #6 (fechada) e bloqueio #2 bloqueada por #4, conferidos pelo HITL nos dois arquivos, com as conferências de contagem, vínculo ao pai e simetria aprovadas. Não provado nas relações - filho ou bloqueador de outro repositório, resumo ausente, 403/404 nas rotas dedicadas e páginas além da primeira."
@@ -1310,7 +1313,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: bd8ef95056d24022e70d074b070c82e943039f42
+      current_sha: 6fcf9551f4ec4d756846f9862c35ea60d8a4088b
     validation:
       status: NOT_VALIDATED
       scope: Executado localmente e no CI dos pull requests. Não roda contra o GitHub real.
@@ -1352,7 +1355,47 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: cbb0e85d0e65b853d4ea0ba0317e577c3ad44f15
+      current_sha: 6604eaf7dfb77b9f60b926760aba938b97cec8ea
+    validation:
+      status: NOT_VALIDATED
+      scope: Executado localmente e no CI dos pull requests. Não roda contra o GitHub real.
+    relationships:
+      - {capability_id: backup_repository, relationship: VALIDATES}
+
+  # ---------------------------------------------------------------------------
+  # Leitor da classe pull_requests (só registro): PRs, commits, arquivos, reviews, comentários, threads (GraphQL),
+  # eventos e relações. Grava package/api-pull*.json e evidence/api-pulls-status.json.
+  # ---------------------------------------------------------------------------
+  - artifact_id: github_pulls_reader_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/github_pulls_read.py
+    purpose: Read-only reader of the pull_requests object class (pull requests, commits, changed files, reviews, review comments, review threads through GraphQL queries, conversation comments, events and relations) with caps, reconciliation checks, declared API limits (250 commits, 3000 files) and a public log limited to counts and sizes.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: c340cbd557ce7b7d636783d4b17d12b45d88531c
+    validation:
+      status: NOT_VALIDATED
+      scope: "Só teste local contra uma API simulada (REST e GraphQL); ainda não rodou em run real. Não provado - as rotas reais de pulls, a permissão Pull requests: Read-only do SOURCE_READ_TOKEN, as consultas GraphQL de threads e de referências de fechamento, PR de fork, limites de 250 commits e 3000 arquivos, e volume."
+    relationships:
+      - {capability_id: backup_repository, relationship: EXECUTES}
+
+  - artifact_id: github_pulls_reader_test
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/tests/test_github_pulls_read.py
+    purpose: Local test of the pull requests reader against a simulated GitHub REST and GraphQL API (all states, threads with paginated comments, relations, caps, API limits, mismatch handling, GET-only and query-only, token and names not leaked to the public log) and of the evidence built by bkp_repo.py.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 27792449366bc53c786e00bc06061f39f034af43
     validation:
       status: NOT_VALIDATED
       scope: Executado localmente e no CI dos pull requests. Não roda contra o GitHub real.
@@ -1449,7 +1492,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 1cf6394764e6f5509d4eb84d9a5b0dc26a277283
+      current_sha: 1e1ae37f5ac38a54a13ee1f8cd362b5028029282
     validation:
       status: NOT_VALIDATED
       scope: "Executado localmente e no CI dos pull requests (12 testes, mais verificação de mutação). Não roda no Actions real nem contra o OneDrive."

@@ -492,7 +492,7 @@ class EvidenceTest(unittest.TestCase):
         res = json.loads([l for l in pf.stdout.splitlines() if l.startswith("BKP_RESULT ")][-1][len("BKP_RESULT "):])
         classes = {r["object_class"] for r in res["required_restrictions"]}
         self.assertNotIn("checks", classes)                                   # checks deixou de ser restrição
-        self.assertEqual(len(classes), 12)                                     # 11 classes + projects (sem PROJECTS_TOKEN_OUTCOME)
+        self.assertEqual(len(classes), 11)                                     # 10 classes + projects (sem PROJECTS_TOKEN_OUTCOME)
         self.assertIn("projects", classes)
         d = json.dumps({"previous_request_id": "req-prev-0001", "hitl_decision": "CONTINUE_WITH_RESTRICTIONS",
                         "accepted_restrictions": res["required_restrictions"]})
@@ -510,6 +510,8 @@ class EvidenceTest(unittest.TestCase):
     def minimal_other_classes(self, actions=True):
         (self.root / "evidence" / "api-status.json").write_text(json.dumps({"classes": {
             k: {"status": "OK", "count": 0, "files": [], "checks": []} for k in ("labels", "milestones", "issues")}}))
+        (self.root / "evidence" / "api-pulls-status.json").write_text(json.dumps({"classes": {"pull_requests": {
+            "status": "OK", "count": 0, "files": [], "checks": []}}}))
         if actions:
             (self.root / "evidence" / "api-actions-status.json").write_text(json.dumps({"classes": {"actions": {
                 "status": "OK", "count": 0, "files": [], "checks": [],

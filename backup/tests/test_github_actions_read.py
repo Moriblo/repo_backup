@@ -498,6 +498,8 @@ class EvidenceTest(unittest.TestCase):
             c: {"status": "OK", "count": 0, "files": [], "checks": []} for c in ("labels", "milestones", "issues")}}))
         (self.root / "evidence" / "api-checks-status.json").write_text(json.dumps({"classes": {"checks": {
             "status": "OK", "count": 0, "files": [], "checks": [], "extra": {"temporal_counts": {"AVAILABLE": 1}}}}}))
+        (self.root / "evidence" / "api-pulls-status.json").write_text(json.dumps({"classes": {"pull_requests": {
+            "status": "OK", "count": 0, "files": [], "checks": []}}}))
         entries = [{"remote_path": f"backups/x/req-test-0001/package/{p.name}", "sha256": "0" * 64, "bytes": 1}
                    for p in sorted((self.root / "package").iterdir())]
         (self.root / "evidence" / "onedrive-package.json").write_text(json.dumps(entries))

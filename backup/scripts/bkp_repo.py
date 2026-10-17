@@ -79,15 +79,17 @@ GAP_ACCESS = "ACCESS_PERMISSION_GAP"
 GAP_EXEC = "EXECUTION_CAPABILITY_GAP"
 
 # Classes lidas pela API: labels, milestones e issues por github_api_read.py (REST), actions por
-# github_actions_read.py e checks por github_checks_read.py (REST, classes temporais) e projects por
+# github_actions_read.py e checks por github_checks_read.py (REST, classes temporais), pull_requests por
+# github_pulls_read.py (REST + GraphQL de consulta, só registro) e projects por
 # github_projects_read.py (GraphQL).
 # Só valem se estiverem em `implemented_classes`.
-API_CLASSES = ("labels", "milestones", "issues", "actions", "checks", "projects")
+API_CLASSES = ("labels", "milestones", "issues", "pull_requests", "actions", "checks", "projects")
 # Arquivos de evidência de cada classe de API (além dos arquivos de dados, listados no status).
 API_EVIDENCE = {c: ["api-status.json", "api-inventory.json"] for c in ("labels", "milestones", "issues")}
 API_EVIDENCE["projects"] = ["api-projects-status.json", "api-projects-inventory.json"]
 API_EVIDENCE["actions"] = ["api-actions-status.json", "api-actions-inventory.json"]
 API_EVIDENCE["checks"] = ["api-checks-status.json", "api-checks-inventory.json"]
+API_EVIDENCE["pull_requests"] = ["api-pulls-status.json", "api-pulls-inventory.json"]
 # Alerta de retenção quando o item disponível mais antigo vence em até tantos dias (ou já há item expirado).
 RETENTION_ALERT_DAYS = 30
 # O que cada classe de API NÃO devolve idêntico (vai para as limitações do manifest).
@@ -96,6 +98,7 @@ API_LIMITATION = {
     "milestones": "Milestones are preserved as API JSON (equivalent representation); restoring them requires recreating them through the API.",
     "issues": "Issues, comments, events and reactions are preserved as API JSON (equivalent representation): original numbers, authors and dates cannot be restored identically; relationships are limited to fields in the issue JSON; pull requests are not included.",
     "actions": "Actions (workflows, runs, attempts, jobs, logs and artifacts) are preserved as a record only (API JSON plus log and artifact ZIPs): they cannot be restored to GitHub; items already expired before the capture are recorded as such, and at most 5 GiB of logs and artifacts is downloaded in total per backup (the oldest first).",
+    "pull_requests": "Pull requests (the pull request, commits, changed files, reviews, review comments, review threads, conversation comments, events, labels and relations) are preserved as a record only (API JSON): they cannot be restored to GitHub in this version. The API lists at most 250 commits and 3000 files per pull request (above that the pull request is LIMITED and the commits stay in the git bundle), a changed file without a patch is a registered limitation, reactions are out of scope, and at most 2000 pull requests and 256 MiB are read.",
     "checks": "Check suites, check runs, annotations and commit statuses are preserved as a record only (API JSON), for a candidate set of commits (branch and tag tips, refs/pull/*/head and the head commits of the workflow runs; at most 500 commits and 256 MiB): they cannot be restored to GitHub. A commit with no data is reported NO_DATA_FOUND (the API cannot tell never-had from expired), and checks of other commits are not discovered. Checks of a private repository need a GitHub App with Checks: Read.",
     "projects": "Projects are preserved as GraphQL JSON (equivalent representation): fields, views, workflows, status updates and items with field values; recreating a board requires the API and is not part of this backup.",
 }
@@ -510,8 +513,8 @@ def cmd_build_evidence():
       git            PRESERVED; PARTIALLY-PRESERVED se há submódulos (só os gitlinks
                      são registrados); FAILED se nenhuma ref foi enumerada ou se nenhum
                      pacote foi enviado ao OneDrive (evidence/onedrive-package.json).
-      labels, milestones, issues, actions, projects
-                     lidas pela API (evidence/api-status.json, api-actions-status.json e api-projects-status.json):
+      labels, milestones, issues, pull_requests, actions, checks, projects
+                     lidas pela API (evidence/api-status.json, api-pulls-status.json, api-actions-status.json, api-checks-status.json e api-projects-status.json):
                      PRESERVED-AS-EQUIVALENT-REPRESENTATION se a leitura passou nas
                      conferências; PARTIALLY-PRESERVED se parte do conteúdo ficou oculta para
                      o token (projects com itens ocultos); PRESERVED (sem objetos) se o recurso
@@ -577,7 +580,7 @@ def cmd_build_evidence():
     # api-projects-status.json (projects). Os dois têm o formato {"classes": {classe: {...}}}.
     api_status = {}
     temporal_infos = []
-    for status_name in ("api-status.json", "api-actions-status.json", "api-checks-status.json", "api-projects-status.json"):
+    for status_name in ("api-status.json", "api-pulls-status.json", "api-actions-status.json", "api-checks-status.json", "api-projects-status.json"):
         status_file = EVIDENCE / status_name
         if status_file.exists():
             api_status.update(json.loads(status_file.read_text())["classes"])
