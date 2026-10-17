@@ -461,7 +461,7 @@ capabilities:
     class_credentials:
       projects: {secret: PROJECTS_READ_TOKEN, outcome_env: PROJECTS_TOKEN_OUTCOME}
     # Retenção OBSERVADA das classes temporais, por repositório de origem. Não é lida pela API (exigiria
-    # Administration: Read) e nunca é inferida de um padrão do produto: é o que o HITL conferiu à mão na tela
+    # Administration: Read) e nunca é inferida de um padrão do produto: é o que a sessão do projeto conferiu à mão na tela
     # de configurações. O bkp_repo.py usa o menor valor entre isto e o expires_at dos artifacts como MRBI e CRR.
     temporal_observations:
       actions:
@@ -761,7 +761,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 5993955c2ab81b7d59a8d2fe50f449b574ac48d1
+      current_sha: 520093acbd49eb7e638790d02a54bca1a1b67776
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -1019,7 +1019,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: a44a27cb26f358cc8fbd905e2c14eb4dafe24da0
+      current_sha: ba6d4245fc9bc866dc780b9dcccbde27d1922211
     validation:
       status: VALIDATED
       scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. (e) com CAPABILITY_ID=backup_projects (BKP_PROJ), em dois runs reais (PROJECT nº 13, e OWNER_PROJECT_SET com 8 Projects e 201 itens): preflight de uma só classe sem exigir o SOURCE_READ_TOKEN, evidência e manifest 2.0 com o escopo no lugar do repositório e só o objeto projects (PARTIALLY-PRESERVED), COMPLETE_WITH_EXCEPTIONS. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura. (f) regressão do BKP_REPO depois da generalização por CAPABILITY_ID, em dois runs reais no repositório de teste de issues - req-20261003-006 (preflight BLOCKED com as mesmas 13 restrições, sem exigir mudança) e req-20261003-007 (continuação, COMPLETE_WITH_EXCEPTIONS - git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION, projects PARTIALLY-PRESERVED, 13 NOT-VERIFIED, 14 arquivos de pacote e 18 de evidência com hash conferido); e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008, 1 Project e 7 itens). validate-inputs e preflight de uma classe (git) com CAPABILITY_ID=restore_repository, sem exigir o SOURCE_READ_TOKEN, e destino validado em run real (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues). Não provado - preflight BLOCKED da restauração sem o RESTORE_WRITE_TOKEN."
@@ -1285,8 +1285,10 @@ implementation_artifacts:
       sha_policy: TRACKED
       current_sha: 59a9da45fd4dc7b9ea091bd823d19c4e6e987c82
     validation:
-      status: NOT_VALIDATED
-      scope: "Só teste local contra uma API simulada; ainda não rodou em run real. Não provado - a rota de logs e de artifacts do GitHub real (redirecionamento para o armazenamento), a permissão Actions: Read do SOURCE_READ_TOKEN, o código HTTP de log expirado, o campo digest dos artifacts, repositórios com muitos runs e o teto de 5 GiB."
+      status: VALIDATED
+      scope: "Run real completo (req-20261017-003, BKP_REPO de Moriblo/MIT): 11 runs, 11 tentativas, 11 jobs e 11/11 logs (63087 bytes) lidos pela API com as 8 conferências aprovadas, 0 artifacts, temporal_state AVAILABLE; permissão Actions: Read do SOURCE_READ_TOKEN suficiente; redirecionamento dos logs ao armazenamento sem o token; actions-logs.tar com 11 ZIPs íntegros e SHA-256 igual ao do status; MRBI e CRR de 90 dias observados (conferência manual); log público só com contagens. Conferido pela sessão do projeto no log e no OneDrive. Não provado - artifacts reais (o MIT não tem), campo digest, código HTTP de log expirado (410 contra 404), repositórios com muitos runs e o teto de 5 GiB."
+      evidence:
+        - {run: "https://github.com/Moriblo/repo_backup/actions/runs/39005928880", commit: 3ba9c2a8ae418b3bda899c5079edeacf8dba98c1}
     relationships:
       - {capability_id: backup_repository, relationship: EXECUTES}
 
