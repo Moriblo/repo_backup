@@ -57,7 +57,7 @@ on:
         type: string
       # Repositório a copiar, no formato dono/nome. Nunca é alterado (READ-ONLY).
       source_repository:
-        description: "GitHub source repository in owner/name form, pattern ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ (required; READ-ONLY)"
+        description: "GitHub source repository in owner/name form, pattern ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ (required; READ-ONLY). Known restriction: GitHub Actions logs and artifacts are saved up to 5 GiB in total (oldest first); the rest is listed as SKIPPED_OVER_CAP and the actions class becomes PARTIALLY-PRESERVED"
         required: true
         type: string
       # Pasta de destino DENTRO do AppFolder do OneDrive (não é um caminho absoluto).
@@ -388,6 +388,24 @@ jobs:
           set -euo pipefail
           mkdir -p package "$EVIDENCE_DIR"
           python3 backup/scripts/github_api_read.py read
+
+      # Lê pela API REST a classe `actions` (TEMPORAL): workflows, runs, tentativas, jobs e passos, o ZIP
+      # de logs de cada tentativa e o conteúdo dos artifacts, até 5 GiB (ACTIONS_MAX_BYTES), os mais
+      # antigos primeiro. Grava package/api-actions-*.json, actions-logs.tar, actions-artifacts.tar e
+      # evidence/api-actions-status.json. É REGISTRO (sem restauração). O token precisa de Actions: Read.
+      # O log público traz só contagens e tamanhos. Como os outros passos de API, NÃO derruba o job: o
+      # build-evidence decide a disposição (PRESERVED-AS-EQUIVALENT-REPRESENTATION, PARTIALLY-PRESERVED
+      # se há itens expirados ou acima do teto, FAILED se faltou permissão ou uma conferência reprovou).
+      - name: Read Actions (runs, jobs, logs, artifacts)
+        # Rede de segurança: sem api-actions-status.json o build-evidence marca a classe FAILED.
+        continue-on-error: true
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p package "$EVIDENCE_DIR"
+          python3 backup/scripts/github_actions_read.py read
 
       # Lê pela API GraphQL os Projects (v2) LIGADOS ao repositório de origem (escopo
       # SOURCE_REPOSITORY) e grava package/api-projects*.json e evidence/api-projects-status.json.
