@@ -99,7 +99,7 @@ jobs:
 
     steps:
       - name: Checkout execution repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
@@ -154,10 +154,10 @@ jobs:
       # OPCIONAL: App Writer para a rotação do refresh token do OneDrive (ver backup-repository.yml).
       - name: Issue secrets-writer token (GitHub App Writer)
         id: writer
-        if: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_APP_ID != '' }}
-        uses: actions/create-github-app-token@v3
+        if: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_CLIENT_ID != '' }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_APP_ID }}
+          client-id: ${{ vars.REPOSITORY_PRESERVATION_SECRETS_CLIENT_ID }}
           private-key: ${{ secrets.REPOSITORY_PRESERVATION_SECRETS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}

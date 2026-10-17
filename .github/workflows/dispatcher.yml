@@ -87,7 +87,7 @@ jobs:
       # Histórico completo (fetch-depth: 0): o script compara o commit anterior do
       # push com o novo, e o anterior pode estar fora de um clone raso.
       - name: Checkout with full history
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
