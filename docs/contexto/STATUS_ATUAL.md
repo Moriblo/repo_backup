@@ -1,7 +1,7 @@
 # Repo_Backup — Status atual (documento vivo)
 
-**Última atualização:** 17/10/2026, 18h35 (horário de Brasília). Instruções do projeto vigentes: **v2.0**.
-**Estado do `main` nesta data:** commit `c4a48ea` (linha `req-20261017-007`, prova de `pull_requests`; antes, `4269f01` linha `-006` e `d31023b` merge do PR #76). Nenhum PR aberto; issues abertas: #5 e #70.
+**Última atualização:** 17/10/2026, 19h40 (horário de Brasília). Instruções do projeto vigentes: **v2.0**.
+**Estado do `main` nesta data:** commit `ff67a32` (merge do PR #78, registro da prova de `CHECKS_DENIED` e da nota de `projects` em repositório privado). Nenhum PR aberto; issues abertas: #5 e #70.
 **Engine ativo:** a sessão do Claude Code "Engine de backup de repositórios" (criada em 16/10, sem memória, só com o prompt da I.0 e o repositório). A `01YHH` e as sessões antigas do projeto foram arquivadas pelo HITL. A sessão ligada ao projeto não opera: mantém os documentos do projeto, revisa PRs e confere resultados no OneDrive e no navegador.
 **Quem atualiza:** o engine (Claude), ao fim de cada sessão em que algo mudou. O ritual está em `claude/INSTRUCOES_DO_PROJETO.md`.
 
@@ -30,15 +30,15 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 
 | Capability | Mnemonic | Workflow | Estado |
 |---|---|---|---|
-| `backup_repository` | `BKP_REPO` | `backup-repository.yml` | **Provado em run real.** Git (bundle, LFS, submódulo só gitlink, arquivo ~25 MiB), labels, milestones, issues com sub-issues e dependências, Projects (parcial, com regra E). |
+| `backup_repository` | `BKP_REPO` | `backup-repository.yml` | **Provado em run real.** Git (bundle, LFS, submódulo só gitlink, arquivo ~25 MiB), labels, milestones, issues com sub-issues e dependências, Projects (parcial, com regra E), `actions` e `checks` (`req-20261017-003`/`-005`) e `pull_requests` (`req-20261017-007`), os três só como registro. |
 | `backup_projects` | `BKP_PROJ` | `backup-projects.yml` | **Provado** nos escopos `PROJECT`, `OWNER_PROJECT_SET` e `SOURCE_REPOSITORY`. Atenção: `OWNER_PROJECT_SET` grava **todos** os Projects do dono; avisar no ECR. |
 | `backup_issues` | `BKP_ISSUES` | `backup-issues.yml` | **Provado**, inclusive relações. Um repositório por linha. |
 | `restore_repository` | `RST_REPO` | `restore-repository.yml` | Etapas 1 (git), 2 (labels e milestones), 3 (issues e comentários), 3b (sub-issues e dependências) e **4 (Projects)** **provadas em run real** (a 4 no `req-20261014-002`). **Ressalva:** o tratamento dos workflows padrão do Project novo (4b: item "já existe" por Auto-add sub-issues, reposicionamento, Done retido em issue aberta, extras aceitos) tem prova **só em teste local**; no `-002` o `workflow_effects` veio vazio. Sempre cria repositório novo e privado. |
 | `list_capabilities`, `show_status`, `validate_evidence`, `help` | — | — | Informativas, respondidas na conversa. |
 
-**Classes:** 7 de 18 implementadas no `BKP_REPO` (`git`, `labels`, `milestones`, `issues`, `projects`, `actions`, `checks`). As 11 restantes entram em cada execução como restrições aceitas (`NOT-VERIFIED`): `pull_requests`, `actions_caches`, `environments`, `variables`, `secret_metadata`, `deployments`, `rules_and_branch_protection`, `collaborators`, `webhooks`, `codespaces_repository_state_delta`, `other_discovered_state`.
+**Classes:** 8 de 18 implementadas no `BKP_REPO` (`git`, `labels`, `milestones`, `issues`, `pull_requests`, `actions`, `checks`, `projects`; `actions`, `checks` e `pull_requests` são só registro). As 10 restantes entram em cada execução como restrições aceitas (`NOT-VERIFIED`): `environments`, `variables`, `secret_metadata`, `deployments`, `rules_and_branch_protection`, `collaborators`, `webhooks`, `actions_caches`, `codespaces_repository_state_delta`, `other_discovered_state`.
 
-**Ainda não provado em run real (lista principal):** repositórios grandes e limite de taxa, conteúdo de submódulos, nomes com acento no OneDrive, reações, pull requests, Projects de organização, recusas do `RST_REPO` (alvo existente, token inválido), saída 48 por falha de escrita. A lista completa por capability está na seção I.14 do `BACKUP_REPOSITORY.md`.
+**Ainda não provado em run real (lista principal):** repositórios grandes e limite de taxa, conteúdo de submódulos, nomes com acento no OneDrive (o `destination` com acento é recusado pelo schema), reações, reviews e threads de PR com conteúdo, PR de fork, checks de repositório privado, Projects de organização, recusas do `RST_REPO` (alvo existente, token inválido), saída 48 por falha de escrita. A lista completa por capability está na seção I.14 do `BACKUP_REPOSITORY.md`.
 
 ## 4. Repositórios, pastas e execuções de referência
 
@@ -53,50 +53,51 @@ Backup de repositórios do GitHub (conta `Moriblo`) para o OneDrive pessoal. Os 
 | Último backup completo | `req-20261004-006`, `backups/backup_teste_issues/req-20261004-006`, run `37184520042`, todos os passos com sucesso |
 | Última restauração provada | `req-20261016-003` (MIT, validação do PR #64, 16/10), run `38836929546`, alvo `Moriblo/MIT_restore` (privado), Projects nº 21, 22 e 23; conferida pelo navegador. Antes: `req-20261016-002` (alvo e Projects 18–20 apagados) |
 | Restauração que falhou (causa conhecida) | `req-20261014-001`, run `38507996550`, alvo `-restaurado-6`, Project nº 15: `RstAddIssueItem` "Content already exists in this project" (corrigido no PR #58) |
-| Próximo `request_id` livre | `req-20261017-008` em diante (ou `req-20261018-001` após 00:00 UTC) (data UTC; 17/10 UTC começa às 21h de Brasília de 16/10), conforme a data UTC do GO (confirme no `commands.log` do `main`) |
+| Próximo `request_id` livre | `req-20261017-010` em diante (ou `req-20261018-001` após 00:00 UTC) (data UTC; 17/10 UTC começa às 21h de Brasília de 16/10), conforme a data UTC do GO (confirme no `commands.log` do `main`) |
 | Repositório-alvo original das Fases 0 e 1 | `Moriblo/MIT`: **primeiro backup real concluído em 16/10** (`req-20261016-001`, `backups/MIT/req-20261016-001/`) |
 
-## 5. Pendências (consolidadas em 17/10/2026, 18h30)
+## 5. Pendências (consolidadas em 17/10/2026, 19h40)
 
-As pendências de 16/10 (grupos A a E) estão todas encerradas; o histórico está no registro de decisões (seção 6). Lista atual, por prioridade. "Quem": HITL, Engine (sessão que opera) ou Sessão (esta, do projeto).
+As pendências de 16/10 (grupos A a E) estão todas encerradas; o histórico está no registro de decisões (seção 6). Itens resolvidos ficam na lista, marcados **Feito**. "Quem": HITL, Engine (sessão que opera) ou Sessão (esta, do projeto). **Ordem decidida pelo HITL em 17/10:** P21, P6, P7, depois P8.
 
 ### 1. Com prazo
-| # | Pendência | Tratamento | Quem | Prazo |
+| # | Pendência | Situação | Quem | Prazo |
 |---|---|---|---|---|
-| P1 | (**feito em 17/10**) Prova de `pull_requests` (`req-20261017-007`) conferida no OneDrive | — | Sessão | — |
-| P2 | Registro da prova (PR #77 aberto e revisado; falta anexar os 3 arquivos e mergear) | PR da Engine: leitor `VALIDATED`, issue #70 atualizada, cópia `docs/contexto/` sincronizada (corrige "sem LFS nem submódulos") | Engine (PR), HITL (merge) | depois de P1 |
-| P3 | **Standards** (privado): 2 runs de 29/07 vencem em **27/10** sem backup | HITL confere se o `SOURCE_READ_TOKEN` inclui o Standards; depois `BKP_REPO` em 2 linhas com GO. Checks sairão `CHECKS_DENIED` (privado) | HITL, Engine | **27/10** |
-| P4 | Codespace **"obscure robot"** (`agentification-lab`, `main`) expira em ~21/10; mudanças não commitadas NOT-VERIFIED | HITL decide se verificamos (mesmo roteiro do MIT_Bot) | HITL | **~21/10** |
-| P5 | MIT: check mais antigo (07/08) vence em **05/11**; ele está no `-007` | Backup final pelo app antes disso, ou manter o `-007`. O `-005` ficou redundante (o `-007` contém tudo dele e mais) e pode ser apagado pelo HITL | HITL | 05/11 |
-| P6 | discord-migrator: 1 run de 02/09 | `BKP_REPO` (2 linhas, GO) | HITL, Engine | 01/12 |
-| P7 | Minha_Caixinha_de_Saude: 7 runs de 17–18/09 (backup de 29/09 é anterior à classe `actions`) | `BKP_REPO` (2 linhas, GO) | HITL, Engine | 16/12 |
+| P1 | Conferir a prova de `pull_requests` (`req-20261017-007`) | **Feito** (17/10): 6/6 PRs, 13 conferências ok, GraphQL ok | Sessão | — |
+| P2 | PR de registro da prova de `pull_requests` | **Feito** (17/10): PR #77 mergeado (`6e28fb7`) | Engine, HITL | — |
+| P3 | Standards: 2 runs de 29/07 sem backup | **Feito** (17/10): `req-20261017-009`, 2 runs e 2/2 logs salvos; registro no PR #78 (`ff67a32`) | HITL, Engine | 27/10 |
+| P4 | Codespace "obscure robot" (`agentification-lab`) expirando | **Feito** (17/10): nada só nele; apagado pelo HITL | Sessão, HITL | ~21/10 |
+| P5 | MIT: check mais antigo (07/08) vence em 05/11 | **Coberto**: está no `-007` (o `-005` foi apagado). Manter o `-007` até o backup final | HITL | 05/11 |
+| P6 | discord-migrator: 1 run de 02/09 | **Pendente** (próximo depois de P21): `BKP_REPO`, 2 linhas e 2 GO | HITL, Engine | 01/12 |
+| P7 | Minha_Caixinha_de_Saude: 7 runs de 17–18/09 (o backup de 29/09 é anterior à classe `actions`) | **Pendente**: `BKP_REPO`, 2 linhas e 2 GO | HITL, Engine | 16/12 |
 
 ### 2. Classes restantes do `BKP_REPO` (10 restrições; issue #70)
-| # | Grupo | Classes | Observação |
+| # | Grupo | Classes | Situação |
 |---|---|---|---|
-| P8 | (a) | `environments`, `variables`, `secret_metadata`, `deployments` | MIT tem `avalbot-vm-ops` (1 regra, 3 secrets só nomes, 2 variáveis) e 5 deployments |
-| P9 | (b) | `rules_and_branch_protection`, `collaborators`, `webhooks` | No MIT, collaborators e webhooks ficaram NOT-VERIFIED pela tela |
-| P10 | (c) | `actions_caches`, `codespaces_repository_state_delta`, `other_discovered_state` | Inclui deploy keys e GitHub Apps instalados |
+| P8 | (a) | `environments`, `variables`, `secret_metadata`, `deployments` | **Pendente**, próximo grupo (decisão de 17/10). MIT tem `avalbot-vm-ops` (1 regra, 3 secrets só nomes, 2 variáveis) e 5 deployments |
+| P9 | (b) | `rules_and_branch_protection`, `collaborators`, `webhooks` | **Pendente**. No MIT, collaborators e webhooks ficaram NOT-VERIFIED pela tela |
+| P10 | (c) | `actions_caches`, `codespaces_repository_state_delta`, `other_discovered_state` | **Pendente**. Inclui deploy keys e GitHub Apps instalados |
 
 Cada grupo: desenho da Engine, aprovação do HITL, PR revisado pela Sessão, prova com 2 GO.
 
-### 3. Aplicativo (pausado)
-| # | Pendência | Tratamento | Quem |
+### 3. Aplicativo (pausado por decisão do HITL)
+| # | Pendência | Situação | Quem |
 |---|---|---|---|
-| P11 | Token do app | Fine-grained só para o `repo_backup`: *Contents: Read and write*, *Actions: Read-only* | HITL |
-| P12 | Spikes S2 (parcial) e S3 (não testado) | No próprio `repo_backup` (decisão de 17/10): S2 com runs existentes; S3 com uma **linha real e GO** (ex.: `BKP_ISSUES` do `backup_teste_issues`), nunca arquivo de teste no `main`. Atualizar o SPEC | Engine, HITL (GO) |
-| P13 | Issue #5 (autorização de engine) | Decidir entre as opções A, B e C | HITL |
-| P14 | PR B (só leitura) e PR C (gravação com GO digitado e acompanhamento) | Depois de P11–P13 | Engine, HITL |
-| P15 | Backup final full do MIT pelo app | Conferência pela Sessão; só então apagar backups antigos do MIT no OneDrive | HITL, Engine, Sessão |
+| P11 | Token do app: fine-grained só para o `repo_backup` (*Contents: Read and write*, *Actions: Read-only*) | **Pendente** | HITL |
+| P12 | Spikes S2 (parcial) e S3 (não testado), no próprio `repo_backup`; S3 com uma linha real e GO, nunca arquivo de teste no `main`; atualizar o SPEC | **Pendente** | Engine, HITL |
+| P13 | Issue #5 (autorização de engine): opções A, B ou C | **Pendente**; entra na pauta com o app (decisão de 17/10) | HITL |
+| P14 | PR B (só leitura) e PR C (gravação com GO digitado e acompanhamento) | **Pendente**, depois de P11–P13 | Engine, HITL |
+| P15 | Backup final full do MIT pelo app; depois apagar backups antigos do MIT | **Pendente** | HITL, Engine, Sessão |
 
 ### 4. Menores
-| # | Pendência | Quem |
-|---|---|---|
-| P16 | `mybot_v4.py` (MIT, fora do repo_backup): restringir ou pedir confirmação no `$clear_all all` antes do Azure (#23/#24) | HITL |
-| P17 | Codespace MIT_Bot: parar ou apagar (nada mais a salvar) | HITL |
-| P18 | `APIs`, `Sprint3_Disc1`, `Sprint3_Disc2_Aula2.1`, `Sprint3_Disc2_Aula2.2`: página do Actions em 404 (NOT-VERIFIED) | Sessão |
-| P19 | Checks de repositório privado exigem GitHub App Reader com *Checks: Read* (rota futura) | Engine (desenho), HITL |
-| P20 | Menu clicável da I.0 ainda sem prova numa sessão nova | Engine |
+| # | Pendência | Situação | Quem |
+|---|---|---|---|
+| P16 | `mybot_v4.py` (MIT): restringir ou confirmar o `$clear_all all` antes do Azure (#23/#24) | **Pendente** (fora do repo_backup) | HITL |
+| P17 | Codespace MIT_Bot: parar ou apagar (nada mais a salvar) | **Pendente** | HITL |
+| P18 | `APIs`, `Sprint3_Disc1`, `Sprint3_Disc2_Aula2.1`, `Sprint3_Disc2_Aula2.2`: página do Actions em 404 | **Pendente** (NOT-VERIFIED) | Sessão |
+| P19 | Checks de repositório privado exigem GitHub App Reader com *Checks: Read* | **Pendente** (rota futura). Limite **provado** no Standards (`CHECKS_DENIED` 3/3, `checks=read`) | Engine, HITL |
+| P20 | Menu clicável da I.0 sem prova numa sessão nova | **Pendente** | Engine |
+| P21 | Cópia `docs/contexto/STATUS_ATUAL.md` sem o backup do Standards e o PR #78 | **Pendente**: STATUS reenviado ao HITL em 17/10; PR só de documentação da Engine | HITL, Engine, Sessão |
 
 ## 6. Registro de decisões do HITL
 
@@ -172,6 +173,12 @@ Cada grupo: desenho da Engine, aprovação do HITL, PR revisado pela Sessão, pr
 | 17/10 | **Varredura de prazos em todos os 44 repositórios do Moriblo** (sessão do projeto, navegador logado, só leitura), a pedido do HITL. Runs do Actions só em 5: `repo_backup` (199, executor), `MIT` (11, já no `-005`), `Minha_Caixinha_de_Saude` (7, de 17–18/09, vencem ~16/12), `discord-migrator` (1, de 02/09, vence ~01/12) e **`Standards` (2, de 29/07, vencem ~27/10: URGENTE)**; retenção lida = 90 dias nos quatro. Os outros 35 sem runs; `APIs`, `Sprint3_Disc1`, `Sprint3_Disc2_Aula2.1` e `Sprint3_Disc2_Aula2.2` com a página do Actions em 404 (NOT-VERIFIED). Codespaces: `MIT_Bot` (salvo, PR #25) e **`obscure robot` do `agentification-lab` expirando em 4 dias (~21/10), mudanças não commitadas NOT-VERIFIED**. Pendente de decisão do HITL. Sobre o app: S2 e S3 podem ser testados no próprio `repo_backup` (S3 com uma linha real e GO, nunca arquivo de teste no `main`). |
 | 17/10 | **Classe `pull_requests` provada em run real:** `BKP_REPO` do MIT linha 2 `req-20261017-007` (GO do HITL), commit `c4a48ea`, run `39070120535`, sucesso em ~5,5 min. Conferido pela sessão do projeto na evidência do OneDrive: `pull_requests` **PRESERVED-AS-EQUIVALENT-REPRESENTATION** (status OK), **6/6 PRs** (#4–#8, #25), 6 commits, 6 arquivos (0 sem patch), 0 reviews, 0 comentários de review, 1 comentário de conversa, 23 eventos, 0 threads; **13 conferências ok**, inclusive a lista estrita contra o leitor de issues e o cruzamento `head.sha` × `refs.tsv` (6/6 iguais); **GraphQL funcionou** (threads e fechamento disponíveis nos 6, sem LIMITED); **token com *Pull requests: Read-only* bastou**. Git com 6 `refs/pull/*` e `main` em `35ac496` (com o `mybot_v4.py`) e a branch `mybot-v4`. Demais classes: git e projects parciais (limites conhecidos), labels 10, issues 19, actions 11 runs, checks 37 suites/11 runs/26 anotações (mais antigo 07/08), 10 NOT-VERIFIED. O `-007` contém tudo do `-005`. Não provados: threads e reviews reais (MIT não tem), PR de fork, limites de 250/3000, repositório privado, volume. |
 | 17/10 | **PR #77** (registro da prova de `pull_requests`) revisado pela sessão do projeto: só 3 arquivos (`BACKUP_REPOSITORY.md` I.14 e passo 12f, `capabilities.yaml` com o leitor `VALIDATED` e escopo do não provado, `docs/contexto/STATUS_ATUAL.md` com a linha do `dbot` corrigida); check verde; sem `commands.log`. Issue #70 atualizada pela Engine (10 classes restantes). Para sincronizar `docs/contexto/`, a sessão entregou ao HITL as versões atuais de `STATUS_ATUAL.md`, `INSTRUCOES_DO_PROJETO.md` e `ISSUES_ABERTAS_repo_backup.md` (esta regerada do GitHub). |
+| 17/10 | **PR #77 mergeado pelo HITL** (`6e28fb7`): leitor de `pull_requests` `VALIDATED`, I.14 com a prova `req-20261017-007`, `docs/contexto/` sincronizado com as versões do projeto. Classe `pull_requests` encerrada. A correção da seção 3 do STATUS (8 de 18 classes) vai na próxima sincronização. |
+| 17/10 | **Codespace "obscure robot" (`agentification-lab`) verificado** pela sessão do projeto a pedido do HITL (terminal do codespace, só leitura; a confiança na pasta foi recusada, modo restrito): `main` em `222b249` (20/09), **0 commits à frente**, 446 atrás do GitHub, **nenhum arquivo alterado, não rastreado ou ignorado**, nenhum stash, só a branch `main`. Nada existe só nele. Ao abrir, o prazo de expiração foi reiniciado. **Decisões do HITL:** depois do Standards, a próxima classe é o grupo (a) (`environments`, `variables`, `secret_metadata`, `deployments`); a issue #5 entra na pauta junto com o aplicativo. |
+| 17/10 | **Standards, linha 1 `req-20261017-008`** (GO do HITL), commit `5e67c4b`, run `39073931397`: `BLOCKED` (exit 10) com as **10 restrições**, conferido pela sessão do projeto no log; ECR 2 `req-20261017-009` conferido (mesmas 10, aponta para o `-008`). Codespace "obscure robot" **apagado** pelo HITL. **Limpeza do OneDrive avaliada** (a pedido do HITL): `backups/projetos/` (5 `BKP_PROJ` de teste dos Projects nº 13/14, de 03–04/10; o `OWNER_PROJECT_SET` já não está lá) pode ser apagada inteira; em `backups/backup_teste_issues/` podem sair 8 das 9 pastas, mantendo **`req-20261004-006`** (base e evidência das provas do `RST_REPO`, com `restores/`). |
+| 17/10 | **Limpeza do OneDrive feita pelo HITL e conferida** pela sessão do projeto: `backups/projetos/` removida; em `backups/backup_teste_issues/` só resta `req-20261004-006` (com `restores/` das provas de 14/10); em `backups/MIT/` restam `req-20261016-001` (evidência e `restores/` das provas de 16/10) e `req-20261017-007` (backup atual; o `-005` foi removido). |
+| 17/10 | **Primeiro backup do `Moriblo/Standards`** (privado): linha 2 `req-20261017-009` (GO do HITL), commit `8b999f1`, run `39074261755`, `COMPLETE_WITH_EXCEPTIONS` em ~3,5 min. Conferido pela sessão do projeto na evidência do OneDrive: **`actions` OK com os 2 runs de 29/07 e 2/2 logs** (vencimento de 27/10 resolvido); git preservado; labels 12, milestones 6, issues 2; `pull_requests` OK (1 PR, lista estrita e `head.sha` 1/1); **`checks` PARTIAL com `CHECKS_DENIED` em 3/3 commits, cabeçalho `X-Accepted-GitHub-Permissions: checks=read` registrado** (primeira prova real do limite de repositório privado; rota futura P19); `projects` PARTIAL (1 Project, 1 item; motivos: views `visibleFields` indisponível e o aviso de que vínculo com repositório privado fica oculto para o token, então lista vazia não prova ausência); 10 NOT-VERIFIED; 0 falhas. O token alcançou o Standards. |
+| 17/10 | **PR #78 mergeado pelo HITL** (`ff67a32`): I.14 e `capabilities.yaml` com a primeira prova real de `CHECKS_DENIED` (`req-20261017-009`, Standards) e a nota de `projects` em repositório privado. `docs/contexto/STATUS_ATUAL.md` ainda sem o backup do Standards: a sessão reenviou o STATUS ao HITL para um PR só de documentação. |
 
 ## 7. Sessões do Claude que operaram o projeto
 
