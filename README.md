@@ -15,3 +15,15 @@ O engine apresenta o menu, o HITL escolhe e dá o GO, o engine grava uma linha n
 - Mudanças de código só por pull request.
 - Escrita direta no `main` somente no `commands.log` e somente após GO.
 - Acompanhamento dos ajustes em andamento: issue #7.
+
+## Limites conhecidos
+Para quem for usar o projeto. O detalhe técnico está em `BACKUP_REPOSITORY.md` (seção I.14).
+
+- **Nome do destino:** o `destination` aceita só letras sem acento, números e os caracteres `_ . - /` (relativo à pasta do app no OneDrive, sem `/` inicial e sem `..`). O schema recusa acento (decisão de 17/10/2026).
+- **Repositórios muito grandes:** o job do `BKP_REPO` e o da restauração têm limite de 120 minutos (os do `BKP_PROJ` e do `BKP_ISSUES`, 60), e o disco do runner é finito. O comportamento com repositórios grandes não foi medido.
+- **Submódulos:** só o gitlink é preservado, não o conteúdo do submódulo.
+- **Reações em issues e Projects de organização:** não provados em run real.
+- **Projects:** as colunas visíveis das views podem não ser lidas (erro interno do GitHub, reproduzido em 16 e 17/10/2026 nos Projects do MIT); itens, campos e valores são preservados.
+- **Restauração:** as refs `refs/pull/*` não voltam (o GitHub não aceita enviá-las); número, autor e datas originais das issues não voltam; as regras dos workflows dos Projects precisam ser refeitas à mão (a API não as expõe).
+- **Repositório executor público no plano Free:** nesse plano os segredos de environment só funcionam em repositório público. O log do Actions e o `commands.log` mostram nomes de repositórios e branches, nunca conteúdo, títulos ou segredos.
+- **Acesso ao OneDrive:** expira com cerca de 90 dias sem nenhum run. Para renovar, rode `backup/scripts/onedrive_authorize.py`.
