@@ -57,7 +57,7 @@ on:
         type: string
       # Repositório a copiar, no formato dono/nome. Nunca é alterado (READ-ONLY).
       source_repository:
-        description: "GitHub source repository in owner/name form, pattern ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ (required; READ-ONLY). Known restriction: GitHub Actions logs and artifacts are saved up to 5 GiB in total (oldest first); the rest is listed as SKIPPED_OVER_CAP and the actions class becomes PARTIALLY-PRESERVED"
+        description: "GitHub source repository in owner/name form, pattern ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ (required; READ-ONLY). Known restriction: GitHub Actions logs and artifacts are saved up to 5 GiB in total (oldest first); the rest is listed as SKIPPED_OVER_CAP and the actions class becomes PARTIALLY-PRESERVED. Checks and commit statuses are read for at most 500 candidate commits (branch and tag tips, refs/pull/*/head, run head commits) and 256 MiB; the rest is listed as SKIPPED_OVER_CAP and the checks class becomes PARTIALLY-PRESERVED. Check suites and runs of a private repository need a GitHub App with Checks: Read, so they are listed as CHECKS_DENIED and the checks class becomes PARTIALLY-PRESERVED"
         required: true
         type: string
       # Pasta de destino DENTRO do AppFolder do OneDrive (não é um caminho absoluto).
@@ -406,6 +406,22 @@ jobs:
           set -euo pipefail
           mkdir -p package "$EVIDENCE_DIR"
           python3 backup/scripts/github_actions_read.py read
+
+      # Lê pela API REST a classe `checks` (TEMPORAL): check suites, check runs, anotações e commit statuses de um
+      # conjunto CANDIDATO de commits (pontas de branches e tags, refs/pull/*/head e head_sha dos runs lidos pelo
+      # passo anterior), até 500 commits e 256 MiB. Grava package/api-checks-*.json, api-commit-statuses.json e
+      # evidence/api-checks-status.json. É REGISTRO (sem restauração). O token precisa de Commit statuses: Read-only;
+      # checks de repositório privado exigem um GitHub App (rota futura). O log público traz só contagens e tamanhos.
+      - name: Read Checks and commit statuses
+        # Rede de segurança: sem api-checks-status.json o build-evidence marca a classe FAILED.
+        continue-on-error: true
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p package "$EVIDENCE_DIR"
+          python3 backup/scripts/github_checks_read.py read
 
       # Lê pela API GraphQL os Projects (v2) LIGADOS ao repositório de origem (escopo
       # SOURCE_REPOSITORY) e grava package/api-projects*.json e evidence/api-projects-status.json.

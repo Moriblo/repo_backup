@@ -79,13 +79,15 @@ GAP_ACCESS = "ACCESS_PERMISSION_GAP"
 GAP_EXEC = "EXECUTION_CAPABILITY_GAP"
 
 # Classes lidas pela API: labels, milestones e issues por github_api_read.py (REST), actions por
-# github_actions_read.py (REST, classe temporal) e projects por github_projects_read.py (GraphQL).
+# github_actions_read.py e checks por github_checks_read.py (REST, classes temporais) e projects por
+# github_projects_read.py (GraphQL).
 # Só valem se estiverem em `implemented_classes`.
-API_CLASSES = ("labels", "milestones", "issues", "actions", "projects")
+API_CLASSES = ("labels", "milestones", "issues", "actions", "checks", "projects")
 # Arquivos de evidência de cada classe de API (além dos arquivos de dados, listados no status).
 API_EVIDENCE = {c: ["api-status.json", "api-inventory.json"] for c in ("labels", "milestones", "issues")}
 API_EVIDENCE["projects"] = ["api-projects-status.json", "api-projects-inventory.json"]
 API_EVIDENCE["actions"] = ["api-actions-status.json", "api-actions-inventory.json"]
+API_EVIDENCE["checks"] = ["api-checks-status.json", "api-checks-inventory.json"]
 # Alerta de retenção quando o item disponível mais antigo vence em até tantos dias (ou já há item expirado).
 RETENTION_ALERT_DAYS = 30
 # O que cada classe de API NÃO devolve idêntico (vai para as limitações do manifest).
@@ -94,6 +96,7 @@ API_LIMITATION = {
     "milestones": "Milestones are preserved as API JSON (equivalent representation); restoring them requires recreating them through the API.",
     "issues": "Issues, comments, events and reactions are preserved as API JSON (equivalent representation): original numbers, authors and dates cannot be restored identically; relationships are limited to fields in the issue JSON; pull requests are not included.",
     "actions": "Actions (workflows, runs, attempts, jobs, logs and artifacts) are preserved as a record only (API JSON plus log and artifact ZIPs): they cannot be restored to GitHub; items already expired before the capture are recorded as such, and at most 5 GiB of logs and artifacts is downloaded in total per backup (the oldest first).",
+    "checks": "Check suites, check runs, annotations and commit statuses are preserved as a record only (API JSON), for a candidate set of commits (branch and tag tips, refs/pull/*/head and the head commits of the workflow runs; at most 500 commits and 256 MiB): they cannot be restored to GitHub. A commit with no data is reported NO_DATA_FOUND (the API cannot tell never-had from expired), and checks of other commits are not discovered. Checks of a private repository need a GitHub App with Checks: Read.",
     "projects": "Projects are preserved as GraphQL JSON (equivalent representation): fields, views, workflows, status updates and items with field values; recreating a board requires the API and is not part of this backup.",
 }
 
@@ -433,12 +436,12 @@ def sha256(path):
     return h.hexdigest()
 
 
-def temporal_summary(st, source, cap, disposition):
-    """Estado temporal, alertas, MRBI e CRR da classe `actions` a partir do que o leitor observou.
+def temporal_summary(st, source, cap, disposition, cls="actions"):
+    """Estado temporal, alertas, MRBI e CRR de uma classe temporal (`actions` ou `checks`) a partir do que o leitor observou.
 
     A retenção é OBSERVADA, nunca lida da configuração pela API nem inferida de um padrão do produto:
-    vem (a) do `expires_at - created_at` dos artifacts e (b) de uma conferência manual da sessão do projeto registrada em
-    `temporal_observations` no capabilities.yaml. O menor valor vale como MRBI."""
+    vem (a) do `expires_at - created_at` dos artifacts (só `actions`) e (b) de uma conferência manual da sessão do projeto
+    registrada em `temporal_observations` (por classe) no capabilities.yaml. O menor valor vale como MRBI."""
     extra = (st or {}).get("extra", {})
     counts = extra.get("temporal_counts", {})
     notes, sources, days = [], [], []
@@ -446,7 +449,7 @@ def temporal_summary(st, source, cap, disposition):
     if api_days:
         days.append(min(api_days))
         sources.append("observed from artifact expires_at minus created_at")
-    manual = next((o for o in cap.get("temporal_observations", {}).get("actions", [])
+    manual = next((o for o in cap.get("temporal_observations", {}).get(cls, [])
                    if o.get("repository", "").lower() == str(source).lower()), None)
     if manual:
         days.append(int(manual["retention_days"]))
@@ -455,11 +458,15 @@ def temporal_summary(st, source, cap, disposition):
     crr = f"{retention} days (observed: {'; '.join(sources)})" if retention is not None else None
     mrbi = f"{retention} days" if retention is not None else None
     if retention is None:
-        notes.append("Retention of Actions logs and artifacts could not be observed: neither an artifact expiry nor a manual check is recorded for this repository.")
+        what = "Actions logs and artifacts" if cls == "actions" else "checks and commit statuses"
+        notes.append(f"Retention of {what} could not be observed: neither an artifact expiry nor a manual check is recorded for this repository.")
     else:
         notes.append("Retention is observed, not read from the repository settings through the API.")
     if disposition == "FAILED":
         state = "NOT_VERIFIED"
+    elif cls == "checks":
+        # Sem nenhum commit com dados capturados não há o que afirmar sobre o estado temporal.
+        state = "AVAILABLE" if counts.get("AVAILABLE") else "NOT_VERIFIED"
     elif counts.get("EXPIRED"):
         state = "EXPIRED"
     elif counts.get("DELETED_UNAVAILABLE"):
@@ -477,7 +484,19 @@ def temporal_summary(st, source, cap, disposition):
     if alert:
         notes.append("RETENTION_ALERT: items already expired, or the oldest available item expires within "
                      f"{RETENTION_ALERT_DAYS} days.")
-    return {"state": state, "alerts": ["RETENTION_ALERT"] if alert else [], "mrbi": mrbi, "crr": crr, "notes": notes}
+    return {"state": state, "alerts": ["RETENTION_ALERT"] if alert else [], "mrbi": mrbi, "crr": crr, "notes": notes,
+            "days": retention}
+
+
+def merge_temporal(infos):
+    """MRBI/CRR da execução quando há mais de uma classe temporal: vale a MENOR retenção observada."""
+    with_days = [i for i in infos if i["days"] is not None]
+    best = min(with_days, key=lambda i: i["days"]) if with_days else None
+    notes = []
+    for i in infos:
+        notes += [n for n in i["notes"] if n not in notes]
+    alerts = sorted({a for i in infos for a in i["alerts"]})
+    return {"mrbi": best["mrbi"] if best else None, "crr": best["crr"] if best else None, "notes": notes, "alerts": alerts}
 
 
 def cmd_build_evidence():
@@ -557,8 +576,8 @@ def cmd_build_evidence():
     # Resultado de cada leitor: api-status.json (labels, milestones, issues) e
     # api-projects-status.json (projects). Os dois têm o formato {"classes": {classe: {...}}}.
     api_status = {}
-    temporal_info = None
-    for status_name in ("api-status.json", "api-actions-status.json", "api-projects-status.json"):
+    temporal_infos = []
+    for status_name in ("api-status.json", "api-actions-status.json", "api-checks-status.json", "api-projects-status.json"):
         status_file = EVIDENCE / status_name
         if status_file.exists():
             api_status.update(json.loads(status_file.read_text())["classes"])
@@ -581,10 +600,10 @@ def cmd_build_evidence():
             disp, lim = "FAILED", st.get("detail", "The API read failed.")
         obj = {"object_class": cls, "object_id": f"{source}#{cls}", "disposition": disp,
                "evidence": api_files, "limitation": lim}
-        if cls == "actions":
-            temporal = temporal_summary(st, source, cap, disp)
+        if cls in ("actions", "checks"):
+            temporal = temporal_summary(st, source, cap, disp, cls)
             obj["temporal_state"], obj["alerts"] = temporal["state"], temporal["alerts"]
-            temporal_info = temporal
+            temporal_infos.append(temporal)
         objects.append(obj)
         if lim and disp != "FAILED":
             limitations.append({"limitation_id": f"LIM-{cls}-{'partial' if disp == 'PARTIALLY-PRESERVED' else 'equivalent'}",
@@ -604,6 +623,8 @@ def cmd_build_evidence():
              "gaps": [{k: g[k] for k in ("object_class", "gap_classification", "limitation", "preservation_impact", "resulting_restriction")} for g in pf["gaps"]],
              "factual_inventory_pending": [{"object_class": p["object_class"], "pending_fact": p["pending_fact"]} for p in pf["factual_inventory_pending"]],
              "hitl_decision": pf["hitl_decision"], "accepted_restrictions": pf["accepted_restrictions"]}
+    # MRBI/CRR/alertas da execução, das classes temporais lidas (actions, checks); None se nenhuma foi lida.
+    temporal_info = merge_temporal(temporal_infos) if temporal_infos else None
     # Corpo do evidence.json (schema 2.0).
     evidence = {
         "schema_version": "2.0", "request_id": request_id, "capability_id": CAPABILITY_ID,

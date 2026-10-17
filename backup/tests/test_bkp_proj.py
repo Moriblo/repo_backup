@@ -10,7 +10,7 @@ O QUE PROVA
     - evidência e manifest (schemas 2.0): capability_id backup_projects, escopo no lugar do repositório,
       só o objeto `projects`, sem objeto git, pacote do OneDrive listado no manifest;
     - os 3 escopos, vínculo oculto confirmado pelos títulos (SOURCE_TITLES_DIR) e classe sem token NOT-VERIFIED;
-    - REGRESSÃO do BKP_REPO: mesmas 12 restrições (a classe actions deixou de ser restrição), objeto git presente, capability_id backup_repository.
+    - REGRESSÃO do BKP_REPO: mesmas 11 restrições (actions e checks deixaram de ser restrição), objeto git presente, capability_id backup_repository.
     NÃO prova nada contra o GitHub nem o OneDrive reais: isso só um run real prova.
 
 COMO RODAR
@@ -235,10 +235,10 @@ class BkpTest(unittest.TestCase):
         blocked = self.bkp("preflight", TOKEN_OUTCOME="success", PROJECTS_TOKEN_OUTCOME="success")
         self.assertEqual(blocked.returncode, 10)
         classes = sorted(r["object_class"] for r in self.result(blocked)["required_restrictions"])
-        self.assertEqual(len(classes), 12)
-        for implemented in ("git", "labels", "milestones", "issues", "actions", "projects"):
+        self.assertEqual(len(classes), 11)
+        for implemented in ("git", "labels", "milestones", "issues", "actions", "checks", "projects"):
             self.assertNotIn(implemented, classes)
-        # Sem o token da origem, as 6 classes implementadas também viram lacuna (o BKP_REPO continua exigindo o token).
+        # Sem o token da origem, as 7 classes implementadas também viram lacuna (o BKP_REPO continua exigindo o token).
         no_token = self.bkp("preflight", TOKEN_OUTCOME="failure", PROJECTS_TOKEN_OUTCOME="success")
         self.assertEqual(len(self.result(no_token)["required_restrictions"]), 18)
         # Evidência completa do BKP_REPO.
@@ -253,6 +253,8 @@ class BkpTest(unittest.TestCase):
         # A classe actions tem leitor próprio (testado em test_github_actions_read.py): aqui entra o resultado mínimo aprovado.
         (self.root / "evidence" / "api-actions-status.json").write_text(json.dumps({"classes": {"actions": {
             "status": "OK", "count": 0, "files": [], "checks": [], "extra": {"temporal_counts": {}, "observed_artifact_retention_days": []}}}}))
+        (self.root / "evidence" / "api-checks-status.json").write_text(json.dumps({"classes": {"checks": {
+            "status": "OK", "count": 0, "files": [], "checks": [], "extra": {"temporal_counts": {"AVAILABLE": 1}}}}}))
         (self.root / "evidence" / "refs.tsv").write_text("refs/heads/main\tabc\tcommit\n")
         (self.root / "evidence" / "onedrive-package.json").write_text(json.dumps([{"remote_path": "p/source.bundle", "sha256": "0" * 64, "bytes": 1}]))
         proc = self.bkp("build-evidence")
@@ -262,7 +264,7 @@ class BkpTest(unittest.TestCase):
         self.assertEqual(ev["source_scope"], {"source_repository": ta.REPO, "destination": "backups/x"})
         disp = {o["object_class"]: o["disposition"] for o in ev["objects"]}
         self.assertEqual(disp["git"], "PRESERVED")
-        for cls in ("labels", "milestones", "issues", "actions", "projects"):
+        for cls in ("labels", "milestones", "issues", "actions", "checks", "projects"):
             self.assertIn(disp[cls], ("PRESERVED-AS-EQUIVALENT-REPRESENTATION", "PARTIALLY-PRESERVED"), cls)
         self.assertEqual(len(disp), 18)
 
