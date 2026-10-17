@@ -753,7 +753,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: f3349e67df0b229ba381606ffc8fd7be85438d64
+      current_sha: 58f37dc670df49d771c9e547efcc87e4033add71
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
