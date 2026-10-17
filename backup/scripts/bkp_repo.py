@@ -78,17 +78,22 @@ GAP_ACCESS = "ACCESS_PERMISSION_GAP"
 # EXECUTION_CAPABILITY_GAP: a arquitetura existe, mas esta execução não tem rota operacional.
 GAP_EXEC = "EXECUTION_CAPABILITY_GAP"
 
-# Classes lidas pela API: labels, milestones e issues por github_api_read.py (REST) e projects por
-# github_projects_read.py (GraphQL). Só valem se estiverem em `implemented_classes`.
-API_CLASSES = ("labels", "milestones", "issues", "projects")
+# Classes lidas pela API: labels, milestones e issues por github_api_read.py (REST), actions por
+# github_actions_read.py (REST, classe temporal) e projects por github_projects_read.py (GraphQL).
+# Só valem se estiverem em `implemented_classes`.
+API_CLASSES = ("labels", "milestones", "issues", "actions", "projects")
 # Arquivos de evidência de cada classe de API (além dos arquivos de dados, listados no status).
 API_EVIDENCE = {c: ["api-status.json", "api-inventory.json"] for c in ("labels", "milestones", "issues")}
 API_EVIDENCE["projects"] = ["api-projects-status.json", "api-projects-inventory.json"]
+API_EVIDENCE["actions"] = ["api-actions-status.json", "api-actions-inventory.json"]
+# Alerta de retenção quando o item disponível mais antigo vence em até tantos dias (ou já há item expirado).
+RETENTION_ALERT_DAYS = 30
 # O que cada classe de API NÃO devolve idêntico (vai para as limitações do manifest).
 API_LIMITATION = {
     "labels": "Labels are preserved as API JSON (equivalent representation); restoring them requires recreating them through the API.",
     "milestones": "Milestones are preserved as API JSON (equivalent representation); restoring them requires recreating them through the API.",
     "issues": "Issues, comments, events and reactions are preserved as API JSON (equivalent representation): original numbers, authors and dates cannot be restored identically; relationships are limited to fields in the issue JSON; pull requests are not included.",
+    "actions": "Actions (workflows, runs, attempts, jobs, logs and artifacts) are preserved as a record only (API JSON plus log and artifact ZIPs): they cannot be restored to GitHub; items already expired before the capture are recorded as such, and at most 5 GiB of logs and artifacts is downloaded per run (the oldest first).",
     "projects": "Projects are preserved as GraphQL JSON (equivalent representation): fields, views, workflows, status updates and items with field values; recreating a board requires the API and is not part of this backup.",
 }
 
@@ -428,6 +433,53 @@ def sha256(path):
     return h.hexdigest()
 
 
+def temporal_summary(st, source, cap, disposition):
+    """Estado temporal, alertas, MRBI e CRR da classe `actions` a partir do que o leitor observou.
+
+    A retenção é OBSERVADA, nunca lida da configuração pela API nem inferida de um padrão do produto:
+    vem (a) do `expires_at - created_at` dos artifacts e (b) de uma conferência manual do HITL registrada em
+    `temporal_observations` no capabilities.yaml. O menor valor vale como MRBI."""
+    extra = (st or {}).get("extra", {})
+    counts = extra.get("temporal_counts", {})
+    notes, sources, days = [], [], []
+    api_days = extra.get("observed_artifact_retention_days") or []
+    if api_days:
+        days.append(min(api_days))
+        sources.append("observed from artifact expires_at minus created_at")
+    manual = next((o for o in cap.get("temporal_observations", {}).get("actions", [])
+                   if o.get("repository", "").lower() == str(source).lower()), None)
+    if manual:
+        days.append(int(manual["retention_days"]))
+        sources.append(f"manual check of the repository Actions settings on {manual['checked_on']}, not read through the API")
+    retention = min(days) if days else None
+    crr = f"{retention} days (observed: {'; '.join(sources)})" if retention is not None else None
+    mrbi = f"{retention} days" if retention is not None else None
+    if retention is None:
+        notes.append("Retention of Actions logs and artifacts could not be observed: neither an artifact expiry nor a manual check is recorded for this repository.")
+    else:
+        notes.append("Retention is observed, not read from the repository settings through the API.")
+    if disposition == "FAILED":
+        state = "NOT_VERIFIED"
+    elif counts.get("EXPIRED"):
+        state = "EXPIRED"
+    elif counts.get("DELETED_UNAVAILABLE"):
+        state = "DELETED_UNAVAILABLE"
+    else:
+        state = "AVAILABLE"
+    alert = bool(counts.get("EXPIRED") or counts.get("DELETED_UNAVAILABLE"))
+    oldest = extra.get("oldest_available_created_at")
+    if retention is not None and oldest:
+        expiry = (datetime.datetime.strptime(oldest, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+                  + datetime.timedelta(days=retention))
+        remaining = (expiry - datetime.datetime.now(datetime.timezone.utc)).days
+        notes.append(f"The oldest item in the package expires on {expiry.date().isoformat()} ({remaining} days from the capture) under the observed retention.")
+        alert = alert or remaining <= RETENTION_ALERT_DAYS
+    if alert:
+        notes.append("RETENTION_ALERT: items already expired, or the oldest available item expires within "
+                     f"{RETENTION_ALERT_DAYS} days.")
+    return {"state": state, "alerts": ["RETENTION_ALERT"] if alert else [], "mrbi": mrbi, "crr": crr, "notes": notes}
+
+
 def cmd_build_evidence():
     """Monta evidence.json e manifest.json (schemas 2.0) e valida ambos.
 
@@ -439,13 +491,14 @@ def cmd_build_evidence():
       git            PRESERVED; PARTIALLY-PRESERVED se há submódulos (só os gitlinks
                      são registrados); FAILED se nenhuma ref foi enumerada ou se nenhum
                      pacote foi enviado ao OneDrive (evidence/onedrive-package.json).
-      labels, milestones, issues, projects
-                     lidas pela API (evidence/api-status.json e api-projects-status.json):
+      labels, milestones, issues, actions, projects
+                     lidas pela API (evidence/api-status.json, api-actions-status.json e api-projects-status.json):
                      PRESERVED-AS-EQUIVALENT-REPRESENTATION se a leitura passou nas
                      conferências; PARTIALLY-PRESERVED se parte do conteúdo ficou oculta para
                      o token (projects com itens ocultos); PRESERVED (sem objetos) se o recurso
                      está desativado na origem; FAILED se a leitura falhou ou alguma conferência
-                     reprovou. Classe com restrição aceita (ex.: projects sem token) é NOT-VERIFIED.
+                     reprovou. `actions` (classe temporal) leva também temporal_state e RETENTION_ALERT, e preenche MRBI/CRR
+                     da execução com a retenção OBSERVADA. Classe com restrição aceita (ex.: projects sem token) é NOT-VERIFIED.
       demais classes NOT-VERIFIED, ligadas ao restriction_id aceito pelo HITL.
     Status final: COMPLETE só sem restrições, limitações ou falhas; senão
     COMPLETE_WITH_EXCEPTIONS (ou FAILED).
@@ -504,7 +557,8 @@ def cmd_build_evidence():
     # Resultado de cada leitor: api-status.json (labels, milestones, issues) e
     # api-projects-status.json (projects). Os dois têm o formato {"classes": {classe: {...}}}.
     api_status = {}
-    for status_name in ("api-status.json", "api-projects-status.json"):
+    temporal_info = None
+    for status_name in ("api-status.json", "api-actions-status.json", "api-projects-status.json"):
         status_file = EVIDENCE / status_name
         if status_file.exists():
             api_status.update(json.loads(status_file.read_text())["classes"])
@@ -525,8 +579,13 @@ def cmd_build_evidence():
             disp, lim = "PRESERVED", None
         else:
             disp, lim = "FAILED", st.get("detail", "The API read failed.")
-        objects.append({"object_class": cls, "object_id": f"{source}#{cls}", "disposition": disp,
-                        "evidence": api_files, "limitation": lim})
+        obj = {"object_class": cls, "object_id": f"{source}#{cls}", "disposition": disp,
+               "evidence": api_files, "limitation": lim}
+        if cls == "actions":
+            temporal = temporal_summary(st, source, cap, disp)
+            obj["temporal_state"], obj["alerts"] = temporal["state"], temporal["alerts"]
+            temporal_info = temporal
+        objects.append(obj)
         if lim and disp != "FAILED":
             limitations.append({"limitation_id": f"LIM-{cls}-{'partial' if disp == 'PARTIALLY-PRESERVED' else 'equivalent'}",
                                 "description": lim, "restriction_id": None, "object_class": cls})
@@ -552,10 +611,13 @@ def cmd_build_evidence():
         "captured_at": now(), "capability_preflight": pf_ev, "objects": objects,
         "execution": {"source_repository_mode": "READ_ONLY", "destination_validated": True,
                       "authorization_request_id": request_id, "restrictions_reconciled": True,
-                      # MRBI/CRR ficam nulos: este executor ainda não lê classes temporais
-                      # (nunca inferir CRR a partir de valor padrão do produto).
-                      "temporal_preservation": {"mrbi": None, "crr": None,
-                                                "notes": ["Temporal classes are not read by this executor version."]}},
+                      # MRBI/CRR só deixam de ser nulos quando a classe temporal `actions` foi lida
+                      # (nunca inferir a retenção de um valor padrão do produto).
+                      "temporal_preservation": ({"mrbi": temporal_info["mrbi"], "crr": temporal_info["crr"], "notes": temporal_info["notes"]}
+                                                if temporal_info else
+                                                {"mrbi": None, "crr": None,
+                                                 "notes": ["Temporal classes are not read by this executor version."]}),
+                      **({"alerts": temporal_info["alerts"]} if temporal_info and temporal_info["alerts"] else {})},
     }
     # Valida ANTES de gravar: evidência fora do schema derruba a etapa (não existe 'sucesso' sem evidência válida).
     jsonschema.validate(evidence, load("backup/schemas/evidence.schema.yaml"))
