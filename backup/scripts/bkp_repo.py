@@ -93,7 +93,7 @@ API_LIMITATION = {
     "labels": "Labels are preserved as API JSON (equivalent representation); restoring them requires recreating them through the API.",
     "milestones": "Milestones are preserved as API JSON (equivalent representation); restoring them requires recreating them through the API.",
     "issues": "Issues, comments, events and reactions are preserved as API JSON (equivalent representation): original numbers, authors and dates cannot be restored identically; relationships are limited to fields in the issue JSON; pull requests are not included.",
-    "actions": "Actions (workflows, runs, attempts, jobs, logs and artifacts) are preserved as a record only (API JSON plus log and artifact ZIPs): they cannot be restored to GitHub; items already expired before the capture are recorded as such, and at most 5 GiB of logs and artifacts is downloaded per run (the oldest first).",
+    "actions": "Actions (workflows, runs, attempts, jobs, logs and artifacts) are preserved as a record only (API JSON plus log and artifact ZIPs): they cannot be restored to GitHub; items already expired before the capture are recorded as such, and at most 5 GiB of logs and artifacts is downloaded in total per backup (the oldest first).",
     "projects": "Projects are preserved as GraphQL JSON (equivalent representation): fields, views, workflows, status updates and items with field values; recreating a board requires the API and is not part of this backup.",
 }
 
@@ -437,7 +437,7 @@ def temporal_summary(st, source, cap, disposition):
     """Estado temporal, alertas, MRBI e CRR da classe `actions` a partir do que o leitor observou.
 
     A retenção é OBSERVADA, nunca lida da configuração pela API nem inferida de um padrão do produto:
-    vem (a) do `expires_at - created_at` dos artifacts e (b) de uma conferência manual do HITL registrada em
+    vem (a) do `expires_at - created_at` dos artifacts e (b) de uma conferência manual da sessão do projeto registrada em
     `temporal_observations` no capabilities.yaml. O menor valor vale como MRBI."""
     extra = (st or {}).get("extra", {})
     counts = extra.get("temporal_counts", {})
