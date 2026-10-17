@@ -496,6 +496,8 @@ class EvidenceTest(unittest.TestCase):
         # As outras classes de API (labels, milestones, issues) já foram lidas por outro passo: resultado mínimo aprovado.
         (self.root / "evidence" / "api-status.json").write_text(json.dumps({"classes": {
             c: {"status": "OK", "count": 0, "files": [], "checks": []} for c in ("labels", "milestones", "issues")}}))
+        (self.root / "evidence" / "api-checks-status.json").write_text(json.dumps({"classes": {"checks": {
+            "status": "OK", "count": 0, "files": [], "checks": [], "extra": {"temporal_counts": {"AVAILABLE": 1}}}}}))
         entries = [{"remote_path": f"backups/x/req-test-0001/package/{p.name}", "sha256": "0" * 64, "bytes": 1}
                    for p in sorted((self.root / "package").iterdir())]
         (self.root / "evidence" / "onedrive-package.json").write_text(json.dumps(entries))

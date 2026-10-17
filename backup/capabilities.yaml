@@ -450,7 +450,10 @@ capabilities:
     # entram no pacote como api-*.json (representação equivalente, não restauração por git push).
     # projects é lida por backup/scripts/github_projects_read.py (GraphQL) e precisa de uma
     # credencial própria (ver `class_credentials`).
-    implemented_classes: [git, labels, milestones, issues, actions, projects]
+    implemented_classes: [git, labels, milestones, issues, actions, checks, projects]
+    # checks é TEMPORAL e é lida pela API por backup/scripts/github_checks_read.py (REST, só GET) sobre um conjunto
+    # CANDIDATO de commits; precisa de Commit statuses: Read-only no SOURCE_READ_TOKEN (checks de repositório privado
+    # exigem um GitHub App com Checks: Read, rota futura). É REGISTRO: sem restauração.
     # actions é TEMPORAL e é lida pela API por backup/scripts/github_actions_read.py (REST, só GET) com o
     # SOURCE_READ_TOKEN (precisa de Actions: Read). É REGISTRO: sem restauração.
     # Classes que, além do SOURCE_READ_TOKEN, exigem uma credencial PRÓPRIA. `secret` é o nome do
@@ -466,6 +469,10 @@ capabilities:
     temporal_observations:
       actions:
         - {repository: Moriblo/MIT, retention_days: 90, source: MANUAL_SETTINGS_CHECK, checked_on: "2026-10-17", scope: [runs, logs, artifacts], read_via_api: false}
+      # Mesmo campo de configuração ("Check, workflow run, status, artifact and log retention days"): vale também para
+      # check suites, check runs e commit statuses. Conferido pela sessão do projeto em 17/10/2026.
+      checks:
+        - {repository: Moriblo/MIT, retention_days: 90, source: MANUAL_SETTINGS_CHECK, checked_on: "2026-10-17", scope: [checks, statuses], read_via_api: false}
     # Destino OneDrive pessoal (OAuth delegado, sem OIDC). Nada aqui é segredo: os valores
     # sensíveis ficam em secrets/variáveis do repositório (nomes abaixo).
     onedrive:
@@ -761,7 +768,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 520093acbd49eb7e638790d02a54bca1a1b67776
+      current_sha: 507480d5168f79bff0eb586d723fd5f20e0fab13
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -871,7 +878,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: a4aa536e9eff0a97332e0180db173c969f1bb7c4
+      current_sha: 8a9f0cbb0074b7280516d83eb36ae696d84b2acc
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
@@ -1019,7 +1026,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: ba6d4245fc9bc866dc780b9dcccbde27d1922211
+      current_sha: cd7f5e428fccca59a900db15fa537cbad83b8078
     validation:
       status: VALIDATED
       scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. (e) com CAPABILITY_ID=backup_projects (BKP_PROJ), em dois runs reais (PROJECT nº 13, e OWNER_PROJECT_SET com 8 Projects e 201 itens): preflight de uma só classe sem exigir o SOURCE_READ_TOKEN, evidência e manifest 2.0 com o escopo no lugar do repositório e só o objeto projects (PARTIALLY-PRESERVED), COMPLETE_WITH_EXCEPTIONS. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura. (f) regressão do BKP_REPO depois da generalização por CAPABILITY_ID, em dois runs reais no repositório de teste de issues - req-20261003-006 (preflight BLOCKED com as mesmas 13 restrições, sem exigir mudança) e req-20261003-007 (continuação, COMPLETE_WITH_EXCEPTIONS - git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION, projects PARTIALLY-PRESERVED, 13 NOT-VERIFIED, 14 arquivos de pacote e 18 de evidência com hash conferido); e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008, 1 Project e 7 itens). validate-inputs e preflight de uma classe (git) com CAPABILITY_ID=restore_repository, sem exigir o SOURCE_READ_TOKEN, e destino validado em run real (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues). Não provado - preflight BLOCKED da restauração sem o RESTORE_WRITE_TOKEN."
@@ -1303,7 +1310,47 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 6a1870dab6e02547f14357967f28fb33b9d17764
+      current_sha: bd8ef95056d24022e70d074b070c82e943039f42
+    validation:
+      status: NOT_VALIDATED
+      scope: Executado localmente e no CI dos pull requests. Não roda contra o GitHub real.
+    relationships:
+      - {capability_id: backup_repository, relationship: VALIDATES}
+
+  # ---------------------------------------------------------------------------
+  # Leitor da classe checks (temporal): check suites, check runs, anotações e commit statuses de um conjunto candidato
+  # de commits, só GET. Grava package/api-checks-*.json e api-commit-statuses.json, e evidence/api-checks-status.json.
+  # ---------------------------------------------------------------------------
+  - artifact_id: github_checks_reader_script
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/scripts/github_checks_read.py
+    purpose: Read-only reader of the checks object class (check suites, check runs, annotations and commit statuses) through the GitHub REST API for a candidate set of commits, with caps, reconciliation checks, NO_DATA_FOUND semantics, denied-permission headers recorded and a public log limited to counts and sizes.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: 87ee0379e82974592adebb48ac5d49feb6aa5157
+    validation:
+      status: NOT_VALIDATED
+      scope: "Só teste local contra uma API simulada; ainda não rodou em run real. Não provado - as rotas reais de check suites, check runs, anotações e statuses, o comportamento sem a permissão de Checks em repositório público e privado, o cabeçalho X-Accepted-GitHub-Permissions, a tag anotada, refs/pull/*/head no GitHub real e o volume."
+    relationships:
+      - {capability_id: backup_repository, relationship: EXECUTES}
+
+  - artifact_id: github_checks_reader_test
+    artifact_type: SCRIPT
+    location:
+      repository: Moriblo/repo_backup
+      path: backup/tests/test_github_checks_read.py
+    purpose: Local test of the checks reader against a simulated GitHub API (candidate commits, annotated tags, reconciliation checks, denied checks, NO_DATA_FOUND, caps, failures, GET-only, token and names not leaked to the public log) and of the temporal evidence built by bkp_repo.py.
+    materialization:
+      status: MATERIALIZED
+    integrity:
+      tracking: GIT_BLOB_SHA
+      sha_policy: TRACKED
+      current_sha: cbb0e85d0e65b853d4ea0ba0317e577c3ad44f15
     validation:
       status: NOT_VALIDATED
       scope: Executado localmente e no CI dos pull requests. Não roda contra o GitHub real.
@@ -1400,7 +1447,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: d8292ffb80a6ff60dfaa8e1852807302bcbada5f
+      current_sha: 1cf6394764e6f5509d4eb84d9a5b0dc26a277283
     validation:
       status: NOT_VALIDATED
       scope: "Executado localmente e no CI dos pull requests (12 testes, mais verificação de mutação). Não roda no Actions real nem contra o OneDrive."
