@@ -407,17 +407,42 @@ jobs:
           mkdir -p package "$EVIDENCE_DIR"
           python3 backup/scripts/github_actions_read.py read
 
+      # OPCIONAL. Emite o token de instalação do GitHub App "Repository Preservation Reader" (somente leitura), com UMA
+      # permissão (Checks: read) e só para o repositório de ORIGEM, para o passo seguinte ler check suites, check runs e
+      # anotações de repositório PRIVADO. Fica logo antes do passo de checks para o token (válido por 1 hora) estar
+      # fresco; é revogado no fim do job. Só roda se a variável REPOSITORY_PRESERVATION_READER_CLIENT_ID existir.
+      # `continue-on-error: true`: se o App não estiver instalado no repositório de origem, ou sem a permissão, o backup
+      # NÃO cai aqui; o leitor volta ao SOURCE_READ_TOKEN e registra na evidência o estado do token do App (ISSUED,
+      # NOT_CONFIGURED ou FAILED). Diferente do Writer (que falha fechado), o Reader nunca derruba um backup.
+      # Dependências: variável REPOSITORY_PRESERVATION_READER_CLIENT_ID e secret REPOSITORY_PRESERVATION_APP_PRIVATE_KEY.
+      - name: Issue checks-reader token (GitHub App Reader)
+        id: reader
+        if: ${{ vars.REPOSITORY_PRESERVATION_READER_CLIENT_ID != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.REPOSITORY_PRESERVATION_READER_CLIENT_ID }}
+          private-key: ${{ secrets.REPOSITORY_PRESERVATION_APP_PRIVATE_KEY }}
+          owner: ${{ steps.src.outputs.owner }}
+          repositories: ${{ steps.src.outputs.name }}
+          permission-checks: read
+
       # Lê pela API REST a classe `checks` (TEMPORAL): check suites, check runs, anotações e commit statuses de um
       # conjunto CANDIDATO de commits (pontas de branches e tags, refs/pull/*/head e head_sha dos runs lidos pelo
       # passo anterior), até 500 commits e 256 MiB. Grava package/api-checks-*.json, api-commit-statuses.json e
-      # evidence/api-checks-status.json. É REGISTRO (sem restauração). O token precisa de Commit statuses: Read-only;
-      # checks de repositório privado exigem um GitHub App (rota futura). O log público traz só contagens e tamanhos.
+      # evidence/api-checks-status.json. É REGISTRO (sem restauração). O SOURCE_READ_TOKEN precisa de Commit statuses:
+      # Read-only e lê commits e statuses. As três rotas de checks (suites, runs e anotações) usam o token do GitHub App
+      # "Repository Preservation Reader" (passo anterior), se ele foi emitido; sem ele, usam o SOURCE_READ_TOKEN, que só
+      # as lê em repositório público. O log público traz só contagens e tamanhos.
       - name: Read Checks and commit statuses
         # Rede de segurança: sem api-checks-status.json o build-evidence marca a classe FAILED.
         continue-on-error: true
         shell: bash
         env:
           SOURCE_TOKEN: ${{ steps.token.outputs.token }}
+          # Só este passo recebe o token do App. Vazio/pulado = o leitor usa o SOURCE_TOKEN nas rotas de checks.
+          CHECKS_APP_TOKEN: ${{ steps.reader.outputs.token }}
+          CHECKS_APP_STATUS: ${{ steps.reader.outcome }}
         run: |
           set -euo pipefail
           mkdir -p package "$EVIDENCE_DIR"

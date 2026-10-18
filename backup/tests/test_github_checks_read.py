@@ -12,6 +12,10 @@ O QUE PROVA
       X-Accepted-GitHub-Permissions vai para o status de evidência; statuses continuam sendo lidos;
     - sem a permissão de statuses (403) a classe é FAILED com a dica;
     - tetos de commits e de bytes (os PRs saem primeiro), repetição em 500 e em limite de taxa, só GET;
+    - ESCOLHA DO TOKEN (GitHub App Reader): com CHECKS_APP_TOKEN, as três rotas de checks (suites, runs e anotações)
+      usam o token do App e todo o resto (commits, statuses) usa o SOURCE_TOKEN; sem cascata; sem o token do App tudo
+      volta ao comportamento anterior (CHECKS_DENIED em repositório privado) com o estado NOT_CONFIGURED ou FAILED;
+      repositório privado simulado: o SOURCE_TOKEN é negado nas rotas de checks e o do App é aceito;
     - o token, nomes de check, contexto, app, branch, tag, URLs e SHAs/refs nas rotas NUNCA aparecem na saída pública;
     - evidência (bkp_repo.py): objeto checks com temporal_state, RETENTION_ALERT, MRBI e CRR observados; MRBI da
       execução = menor retenção entre as classes temporais.
@@ -42,6 +46,7 @@ import github_api_read as g  # noqa: E402
 import github_checks_read as c  # noqa: E402
 
 TOKEN = "ghp_SEGREDO_DE_TESTE_123"
+APP_TOKEN = "ghs_SEGREDO_DO_APP_456"
 REPO = "dono/teste"
 SECRETS = ["CHECK_SEGREDO_NOME", "CONTEXTO_SEGREDO", "TOKEN_SEGREDO_URL", "BRANCH_SEGREDA", "TAG_SEGREDA", "APP_SEGREDO",
            "TEXTO_SEGREDO_DA_ANOTACAO"]
@@ -99,6 +104,8 @@ class Fake(http.server.BaseHTTPRequestHandler):
     statuses_dup = False
     methods = []
     seen_routes = []
+    deny_token = None    # token (Bearer) negado (403 + cabeçalho) nas rotas de checks: simula repositório privado
+    auth_seen = []       # (rota, token Bearer) de cada requisição
 
     def log_message(self, *args):
         pass
@@ -129,6 +136,9 @@ class Fake(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         route, q = urllib.parse.unquote(parsed.path), urllib.parse.parse_qs(parsed.query)
         cls.seen_routes.append(route)
+        bearer = (self.headers.get("Authorization") or "").replace("Bearer ", "", 1)
+        cls.auth_seen.append((route, bearer))
+        denied_here = bool(cls.deny_token) and bearer == cls.deny_token
         if route in cls.fail:
             return self._send(cls.fail[route], {"message": "x"})
         if cls.flaky.get(route, 0) > 0:
@@ -149,8 +159,8 @@ class Fake(http.server.BaseHTTPRequestHandler):
             sha, what = rest[1], rest[2]
             if sha not in d["statuses"]:
                 return self._send(422 if sha == S7 else 404, {"message": "No commit found"})
-            if what in ("check-suites", "check-runs", ) and cls.deny_checks:
-                return self._send(cls.deny_checks, {"message": "denied"}, {"X-Accepted-GitHub-Permissions": "checks=read"})
+            if what in ("check-suites", "check-runs", ) and (cls.deny_checks or denied_here):
+                return self._send(cls.deny_checks or 403, {"message": "denied"}, {"X-Accepted-GitHub-Permissions": "checks=read"})
             if what == "statuses":
                 items = list(d["statuses"][sha])
                 if cls.statuses_dup and items:
@@ -178,11 +188,75 @@ class Fake(http.server.BaseHTTPRequestHandler):
             if what == "check-runs":
                 return self._paged("check_runs", d["runs"][sha], q, len(d["runs"][sha]) + cls.runs_total_extra)
         if rest[:1] == ["check-runs"] and len(rest) == 3 and rest[2] == "annotations":
-            if cls.deny_checks:
-                return self._send(cls.deny_checks, {"message": "denied"}, {"X-Accepted-GitHub-Permissions": "checks=read"})
+            if cls.deny_checks or denied_here:
+                return self._send(cls.deny_checks or 403, {"message": "denied"}, {"X-Accepted-GitHub-Permissions": "checks=read"})
             items = d["annotations"].get(int(rest[1]), [])
             return self._paged(None, items[:-1] if cls.ann_short else items, q)
         return self._send(404, {"message": "nf"})
+
+
+class WorkflowWiringTest(unittest.TestCase):
+    """O passo que emite o token do GitHub App Reader no backup-repository.yml (leitura estática do YAML)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import yaml
+        wf = yaml.safe_load((ROOT / ".github" / "workflows" / "backup-repository.yml").read_text())
+        cls.steps = [st for job in wf["jobs"].values() for st in job["steps"]]
+        cls.reader = next(st for st in cls.steps if st.get("id") == "reader")
+        cls.checks = next(st for st in cls.steps if st.get("name") == "Read Checks and commit statuses")
+
+    def test_o_token_so_tem_a_permissao_checks_read_e_so_o_repositorio_de_origem(self):
+        w = self.reader["with"]
+        perms = {k: v for k, v in w.items() if k.startswith("permission-")}
+        self.assertEqual(perms, {"permission-checks": "read"})
+        self.assertEqual(w["repositories"], "${{ steps.src.outputs.name }}")
+        self.assertEqual(w["owner"], "${{ steps.src.outputs.owner }}")
+        self.assertEqual(w["client-id"], "${{ vars.REPOSITORY_PRESERVATION_READER_CLIENT_ID }}")
+        self.assertEqual(w["private-key"], "${{ secrets.REPOSITORY_PRESERVATION_APP_PRIVATE_KEY }}")
+        self.assertNotIn("app-id", w)
+
+    def test_action_fixada_por_sha_e_falha_branda(self):
+        self.assertRegex(self.reader["uses"], r"^actions/create-github-app-token@[0-9a-f]{40}$")
+        self.assertIs(self.reader["continue-on-error"], True)             # o Reader nunca derruba um backup
+        self.assertIn("REPOSITORY_PRESERVATION_READER_CLIENT_ID != ''", self.reader["if"])
+
+    def test_o_token_so_vai_ao_passo_de_checks_e_logo_antes_dele(self):
+        holders = [st.get("name") for st in self.steps if "steps.reader.outputs.token" in json.dumps(st)]
+        self.assertEqual(holders, ["Read Checks and commit statuses"])
+        self.assertEqual(self.steps.index(self.checks) - self.steps.index(self.reader), 1)
+        self.assertEqual(self.checks["env"]["CHECKS_APP_TOKEN"], "${{ steps.reader.outputs.token }}")
+        self.assertEqual(self.checks["env"]["CHECKS_APP_STATUS"], "${{ steps.reader.outcome }}")
+        self.assertEqual(self.checks["env"]["SOURCE_TOKEN"], "${{ steps.token.outputs.token }}")
+        self.assertNotIn("skip-token-revoke", self.reader["with"])        # o token é revogado no fim do job
+
+
+class RegistryObservationsTest(unittest.TestCase):
+    def test_retencao_observada_dos_repositorios_privados_e_publicos_de_17_10(self):
+        import yaml
+        data = yaml.safe_load((ROOT / "backup" / "capabilities.yaml").read_text())
+
+        def find(node):
+            if isinstance(node, dict):
+                if "temporal_observations" in node:
+                    return node["temporal_observations"]
+                for v in node.values():
+                    r = find(v)
+                    if r:
+                        return r
+            if isinstance(node, list):
+                for v in node:
+                    r = find(v)
+                    if r:
+                        return r
+            return None
+        obs = find(data)
+        for cls in ("actions", "checks"):
+            repos = {o["repository"]: o for o in obs[cls]}
+            for repo in ("Moriblo/MIT", "Moriblo/Standards", "Moriblo/discord-migrator", "Moriblo/Minha_Caixinha_de_Saude"):
+                self.assertEqual(repos[repo]["retention_days"], 90, (cls, repo))
+                self.assertEqual(repos[repo]["checked_on"], "2026-10-17")
+                self.assertIs(repos[repo]["read_via_api"], False)
 
 
 class ReaderTest(unittest.TestCase):
@@ -200,7 +274,7 @@ class ReaderTest(unittest.TestCase):
         Fake.data = make_data()
         Fake.fail, Fake.flaky, Fake.ratelimit, Fake.deny_checks = {}, {}, {}, None
         Fake.combined_bad, Fake.runs_total_extra, Fake.ann_short, Fake.statuses_dup = False, 0, False, False
-        Fake.methods, Fake.seen_routes = [], []
+        Fake.methods, Fake.seen_routes, Fake.deny_token, Fake.auth_seen = [], [], None, []
         self.tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.tmp.name)
         write_inputs(self.root)
@@ -228,6 +302,7 @@ class ReaderTest(unittest.TestCase):
         self.assertNotIn(TOKEN, text)
         for secret in SECRETS:
             self.assertNotIn(secret, text)
+        self.assertNotIn(APP_TOKEN, text)
         for sha in (S1, S2, S3, S4, S5, S6, S7, TAGOBJ):
             self.assertNotIn(sha, text)
 
@@ -270,6 +345,7 @@ class ReaderTest(unittest.TestCase):
         lines = [l for l in out.splitlines() if l.strip()]
         self.assertEqual(len(lines), 1, lines)
         self.assertTrue(lines[0].startswith("API_READ checks: OK commits=6/6 suites=3 runs=3 annotations=2 statuses=3 no_data=2 bytes="), lines[0])
+        self.assertTrue(lines[0].endswith("gaps=none token=source"), lines[0])
         self.clean(out)
         self.assertIn("CHECK_SEGREDO_NOME", json.dumps(json.loads((self.root / "package" / "api-checks-runs.json").read_text())))
 
@@ -316,6 +392,107 @@ class ReaderTest(unittest.TestCase):
             self.assertEqual(st["extra"]["statuses"], 3)               # statuses continuam sendo lidos
             self.assertTrue(all(x["ok"] for x in st["checks"]))
             self.clean(out)
+
+    # ---- escolha do token: GitHub App Reader ----
+    CHECK_PARTS = ("/check-suites", "/check-runs")
+
+    def tokens_by_route(self):
+        """{'check': tokens usados nas três rotas de checks, 'other': tokens usados no resto}."""
+        check = {t for r, t in Fake.auth_seen if any(x in r for x in self.CHECK_PARTS)}
+        other = {t for r, t in Fake.auth_seen if not any(x in r for x in self.CHECK_PARTS)}
+        return check, other
+
+    def test_repositorio_privado_com_o_app_le_os_checks_sem_negacao(self):
+        Fake.deny_token = TOKEN                                   # privado: o SOURCE_TOKEN é negado nas rotas de checks
+        out, st, inv = self.run_read(CHECKS_APP_TOKEN=APP_TOKEN, CHECKS_APP_STATUS="success")
+        self.assertEqual(st["status"], "OK", st)
+        e = st["extra"]
+        self.assertEqual((e["check_suites"], e["check_runs"], e["annotations"], e["statuses"]), (3, 3, 2, 3))
+        self.assertEqual(e["denied_permission_headers"], [])
+        self.assertNotIn("CHECKS_DENIED", e["temporal_counts"])
+        self.assertEqual(e["checks_token"]["app_token"], "ISSUED")
+        self.assertEqual(e["checks_token"]["route_token"], "app")
+        self.assertEqual(e["checks_token"]["check_denied"], {"app": 0, "source": 0})
+        self.assertEqual(e["checks_token"]["check_requests"]["source"], 0)
+        self.assertGreater(e["checks_token"]["check_requests"]["app"], 0)
+        check, other = self.tokens_by_route()
+        self.assertEqual(check, {APP_TOKEN})                      # suites, runs e anotações: SÓ o token do App
+        self.assertEqual(other, {TOKEN})                          # commits e statuses: SÓ o SOURCE_TOKEN
+        self.assertTrue(any("/annotations" in r for r, t in Fake.auth_seen if t == APP_TOKEN))
+        self.assertTrue(all(x["ok"] for x in st["checks"]))
+        lines = [l for l in out.splitlines() if l.strip()]
+        self.assertTrue(lines[0].startswith("API_READ checks: OK commits=6/6 suites=3 runs=3 annotations=2 statuses=3"), lines[0])
+        self.assertTrue(lines[0].endswith("gaps=none token=app"), lines[0])
+        self.assertEqual(set(Fake.methods), {"GET"})
+        self.clean(out)                                           # o log PÚBLICO: sem tokens, nomes, SHAs
+        private = json.dumps(st) + json.dumps(inv) + "".join((self.root / "package" / n).read_text() for n in self.package_names()) \
+            + "".join((self.root / "evidence" / n).read_text() for n in os.listdir(self.root / "evidence"))
+        for tok in (TOKEN, APP_TOKEN):                            # nenhum token vai a pacote nem a evidência
+            self.assertNotIn(tok, private)
+
+    def test_repositorio_privado_sem_o_app_continua_negado_e_diz_que_nao_esta_configurado(self):
+        Fake.deny_token = TOKEN
+        for status in ("skipped", ""):
+            out, st, inv = self.run_read(CHECKS_APP_STATUS=status)
+            self.assertEqual(st["status"], "PARTIAL", st)
+            self.assertEqual(st["extra"]["checks_token"]["app_token"], "NOT_CONFIGURED")
+            self.assertEqual(st["extra"]["checks_token"]["route_token"], "source")
+            self.assertIn("GitHub App with Checks: Read", st["detail"])
+            self.assertIn("REPOSITORY_PRESERVATION_READER_CLIENT_ID", st["detail"])
+            self.assertTrue(set(i["state"] for i in inv["items"]) <= {"CHECKS_DENIED"})
+            self.assertTrue([l for l in out.splitlines() if l.strip()][0].endswith("token=source"))
+            self.assertNotIn(APP_TOKEN, {t for r, t in Fake.auth_seen})
+            Fake.auth_seen = []
+            self.clean(out)
+
+    def test_passo_do_app_que_falhou_e_registrado_como_failed(self):
+        Fake.deny_token = TOKEN
+        for status in ("failure", "cancelled", "success"):           # 'success' sem token também é falha
+            out, st, inv = self.run_read(CHECKS_APP_STATUS=status, CHECKS_APP_TOKEN="")
+            self.assertEqual(st["status"], "PARTIAL")
+            self.assertEqual(st["extra"]["checks_token"]["app_token"], "FAILED")
+            self.assertIn("could not be issued", st["detail"])
+            self.assertIn("GitHub App with Checks: Read", st["detail"])
+            self.clean(out)
+
+    def test_app_negado_vira_checks_denied_sem_cascata(self):
+        Fake.deny_token = APP_TOKEN                               # o App não está instalado neste repositório
+        out, st, inv = self.run_read(CHECKS_APP_TOKEN=APP_TOKEN, CHECKS_APP_STATUS="success")
+        self.assertEqual(st["status"], "PARTIAL", st)
+        self.assertTrue(set(i["state"] for i in inv["items"] if i["sha"]) <= {"CHECKS_DENIED", "NO_DATA_FOUND", "AVAILABLE"})
+        self.assertGreater(st["extra"]["temporal_counts"]["CHECKS_DENIED"], 0)
+        info = st["extra"]["checks_token"]
+        self.assertGreater(info["check_denied"]["app"], 0)
+        self.assertEqual(info["check_denied"]["source"], 0)
+        self.assertEqual(info["check_requests"]["source"], 0)     # sem cascata: o SOURCE_TOKEN não foi tentado nas rotas de checks
+        self.assertEqual(st["extra"]["denied_permission_headers"], ["checks=read"])
+        self.assertIn("Repository Preservation Reader is installed", st["detail"])
+        check, other = self.tokens_by_route()
+        self.assertEqual(check, {APP_TOKEN})
+        self.assertEqual(other, {TOKEN})
+        self.clean(out)
+        self.assertNotIn(APP_TOKEN, json.dumps(st))
+
+    def test_repositorio_publico_com_o_app_usa_o_app_nas_rotas_de_checks(self):
+        out, st, inv = self.run_read(CHECKS_APP_TOKEN=APP_TOKEN, CHECKS_APP_STATUS="success")
+        self.assertEqual(st["status"], "OK", st)
+        check, other = self.tokens_by_route()
+        self.assertEqual((check, other), ({APP_TOKEN}, {TOKEN}))
+
+    def test_app_rejeitado_401_e_fatal_com_a_dica_do_app(self):
+        Fake.fail = {f"/repos/{REPO}/commits/{S1}/check-suites": 401}
+        out, st, inv = self.run_read(CHECKS_APP_TOKEN=APP_TOKEN, CHECKS_APP_STATUS="success")
+        self.assertEqual(st["status"], "FAILED")
+        self.assertIn("GitHub App token was rejected", st["detail"])
+        self.clean(out)
+        self.assertNotIn(APP_TOKEN, json.dumps(st))
+
+    def test_estado_do_app_e_sempre_registrado(self):
+        out, st, inv = self.run_read()
+        self.assertEqual(st["extra"]["checks_token"], {"app_token": "NOT_CONFIGURED", "route_token": "source",
+                                                       "check_requests": {"app": 0, "source": st["extra"]["checks_token"]["check_requests"]["source"]},
+                                                       "check_denied": {"app": 0, "source": 0}})
+        self.assertGreater(st["extra"]["checks_token"]["check_requests"]["source"], 0)
 
     def test_statuses_negados_sao_fatais_com_a_dica(self):
         Fake.fail = {f"/repos/{REPO}/commits/{S1}/statuses": 403}

@@ -26,13 +26,19 @@ COMMIT SEM DADOS
 CLASSE SEM RESTAURAÇÃO
     É REGISTRO: os arquivos preservam o que a API devolveu.
 
-PERMISSÕES (SOURCE_TOKEN = SOURCE_READ_TOKEN)
-    - Commit statuses: Read-only (fine-grained). Sem ela, a classe é FAILED com a dica.
-    - Check suites, check runs e anotações: o token fine-grained NÃO tem permissão de Checks (só GitHub App).
-      Em repositório PÚBLICO a API libera essas rotas sem ela. Em repositório PRIVADO, 403/404 nelas NÃO
-      derruba a classe: o commit vira CHECKS_DENIED, a classe fica PARTIAL e o cabeçalho
-      X-Accepted-GitHub-Permissions das respostas negadas vai para o status de evidência. Rota futura:
-      GitHub App "Repository Preservation Reader" com Checks: Read.
+PERMISSÕES E ESCOLHA DO TOKEN (SOURCE_TOKEN = SOURCE_READ_TOKEN; CHECKS_APP_TOKEN = token do App Reader)
+    - Commit statuses: Read-only (fine-grained). Sem ela, a classe é FAILED com a dica. Statuses, commits e o
+      resto SEMPRE usam o SOURCE_TOKEN.
+    - Check suites, check runs e anotações (as TRÊS rotas de checks): o token fine-grained NÃO tem permissão de
+      Checks (só GitHub App). Se CHECKS_APP_TOKEN existir (token de instalação do GitHub App "Repository
+      Preservation Reader", só com Checks: Read e só para o repositório de origem), essas três rotas usam ELE.
+      Sem ele, usam o SOURCE_TOKEN: em repositório PÚBLICO a API libera as rotas sem a permissão; em
+      repositório PRIVADO, 403/404 NÃO derrubam a classe: o commit vira CHECKS_DENIED, a classe fica PARTIAL e o
+      cabeçalho X-Accepted-GitHub-Permissions das respostas negadas vai para o status de evidência.
+    - SEM cascata: negado com um token, o commit vira CHECKS_DENIED; o outro token não é tentado.
+    - CHECKS_APP_STATUS (resultado do passo que emite o token: success, failure, cancelled ou skipped) permite
+      distinguir "App não configurado" (NOT_CONFIGURED) de "App falhou" (FAILED); a evidência registra o estado
+      do token (ISSUED, NOT_CONFIGURED ou FAILED) e quantas requisições de checks usaram cada token.
 
 REGRAS QUE ESTE SCRIPT NUNCA QUEBRA
     - A origem é somente leitura: só faz requisições GET.
@@ -49,7 +55,7 @@ COMO USAR (o workflow já faz isto)
 
 VARIÁVEIS DE AMBIENTE
     SOURCE_TOKEN, SOURCE_REPOSITORY, EVIDENCE_DIR (padrão evidence), PACKAGE_DIR (padrão package),
-    CHECKS_MAX_COMMITS (padrão 500), CHECKS_MAX_BYTES (padrão 256 MiB), GITHUB_API_URL (teste local).
+    CHECKS_APP_TOKEN (opcional), CHECKS_APP_STATUS (opcional), CHECKS_MAX_COMMITS (padrão 500), CHECKS_MAX_BYTES (padrão 256 MiB), GITHUB_API_URL (teste local).
 
 ARQUIVOS GERADOS
     package/api-checks-commits.json       commits candidatos: origem, estado e contagens
@@ -91,11 +97,16 @@ CHECKS_DENIED = "CHECKS_DENIED"              # checks negados ao token (reposit�
 FAILED_ITEM = "FAILED"                       # leitura falhou (a classe vira FAILED)
 GAP_STATES = (SKIPPED_OVER_CAP, COMMIT_NOT_RESOLVABLE, CHECKS_DENIED)
 
+# As três rotas de checks (suites, runs e anotações; as anotações ficam sob /check-runs/{id}/annotations).
+CHECK_ROUTE = re.compile(r"/check-(?:suites|runs)(?:[/?]|$)")
+# Estado do token do App Reader neste run.
+APP_ISSUED, APP_NOT_CONFIGURED, APP_FAILED = "ISSUED", "NOT_CONFIGURED", "FAILED"
+
 LIMITATIONS = [
     "Checks and commit statuses are preserved as a record (API JSON); they cannot be restored to GitHub.",
     "Only a candidate set of commits is read: branch and tag tips, refs/pull/*/head and the head commits of the workflow runs read by the actions class (at most CHECKS_MAX_COMMITS). Checks of any other commit are not discovered, and the merge commits of pull requests (refs/pull/*/merge) are not read.",
     "A commit with no check or status data is reported NO_DATA_FOUND: the API cannot tell a commit that never had any from one whose data expired under the repository retention. It is neither reported absent nor expired.",
-    "Check suites, check runs and annotations of a private repository need a GitHub App with Checks: Read (future route: Repository Preservation Reader); a fine-grained token has no Checks permission. Statuses are read with the Commit statuses: Read-only permission.",
+    "Check suites, check runs and annotations of a private repository need a GitHub App with Checks: Read (the Repository Preservation Reader): they are read with its installation token when one is issued for the run, otherwise with the SOURCE_READ_TOKEN, which has no Checks permission (fine-grained tokens cannot have it) and reads them only for a public repository. Statuses and commits are always read with the SOURCE_READ_TOKEN (Commit statuses: Read-only).",
     "Retention is reported as OBSERVED (a manual check of the repository settings); the setting itself is not read through the API.",
 ]
 
@@ -109,14 +120,32 @@ def mask(route):
 class ChecksClient(ar.Client):
     """Cliente do leitor de Actions com rotas mascaradas (inclusive SHAs) e captura do cabeçalho de permissão."""
 
-    def __init__(self, base, token):
+    def __init__(self, base, token, app_token=None, app_state=None):
         super().__init__(base, token)
         self.denied_headers = set()
         self._last_headers = None
+        self.app_token = app_token or None
+        self.app_state = app_state or (APP_ISSUED if self.app_token else APP_NOT_CONFIGURED)
+        # Só nas rotas de checks: quantas requisições (e quantas negações) usaram cada token.
+        self.check_requests = {"app": 0, "source": 0}
+        self.check_denied = {"app": 0, "source": 0}
+        self._last_kind = "source"
+
+    def _kind(self, route):
+        """Token da rota: o do App nas três rotas de checks, se houver; o SOURCE_READ_TOKEN em todo o resto."""
+        return "app" if (self.app_token and CHECK_ROUTE.search(route)) else "source"
 
     def _open(self, url, route):
+        kind = self._kind(route)
+        self._last_kind = kind
+        if CHECK_ROUTE.search(route):
+            self.check_requests[kind] += 1
+
         def fn():
-            request = urllib.request.Request(url, method="GET", headers=self._headers())
+            headers = self._headers()
+            if kind == "app":
+                headers["Authorization"] = f"Bearer {self.app_token}"
+            request = urllib.request.Request(url, method="GET", headers=headers)
             try:
                 with urllib.request.urlopen(request, timeout=60) as response:
                     return json.loads(response.read().decode("utf-8")), response.headers
@@ -129,6 +158,14 @@ class ChecksClient(ar.Client):
         """Guarda o X-Accepted-GitHub-Permissions da última resposta negada (documenta a permissão exigida)."""
         value = self._last_headers.get("X-Accepted-GitHub-Permissions") if self._last_headers is not None else None
         self.denied_headers.add(value if value else "(header not present)")
+        self.check_denied[self._last_kind] += 1
+
+    def token_info(self):
+        """Estado do token do App e uso de cada token nas rotas de checks (só contagens)."""
+        used = [k for k, v in self.check_requests.items() if v]
+        route_token = "none" if not used else (used[0] if len(used) == 1 else "mixed")
+        return {"app_token": self.app_state, "route_token": route_token,
+                "check_requests": dict(self.check_requests), "check_denied": dict(self.check_denied)}
 
     def get(self, route, params=None):
         query = ("?" + urllib.parse.urlencode(params)) if params else ""
@@ -377,7 +414,8 @@ def read_checks(client, repo, evidence, package, max_commits, max_bytes):
         "commits": {"candidates": len(records), "read": sum(1 for r in records if r["state"] in (AVAILABLE, NO_DATA_FOUND, CHECKS_DENIED))},
         **totals, "bytes_read": used, "max_commits": max_commits, "max_bytes": max_bytes,
         "temporal_counts": counts, "oldest_available_created_at": min(times) if times else None,
-        "denied_permission_headers": sorted(client.denied_headers), "actions_crosscheck": cross, "notes": notes,
+        "denied_permission_headers": sorted(client.denied_headers), "checks_token": client.token_info(),
+        "actions_crosscheck": cross, "notes": notes,
     }
     files = {"api-checks-commits.json": records, "api-checks-suites.json": out["suites"], "api-checks-runs.json": out["runs"],
              "api-checks-annotations.json": out["annotations"], "api-commit-statuses.json": out["statuses"]}
@@ -390,7 +428,20 @@ def summary_line(status, extra):
     gaps = ",".join(f"{k}={v}" for k, v in sorted(c.items()) if k in GAP_STATES) or "none"
     return (f"API_READ checks: {status} commits={extra['commits']['read']}/{extra['commits']['candidates']} "
             f"suites={extra['check_suites']} runs={extra['check_runs']} annotations={extra['annotations']} "
-            f"statuses={extra['statuses']} no_data={c.get(NO_DATA_FOUND, 0)} bytes={extra['bytes_read']} gaps={gaps}")
+            f"statuses={extra['statuses']} no_data={c.get(NO_DATA_FOUND, 0)} bytes={extra['bytes_read']} gaps={gaps} "
+            f"token={extra['checks_token']['route_token']}")
+
+
+def denied_hint(info):
+    """Texto do que fazer quando commits ficaram CHECKS_DENIED, conforme o token que as rotas de checks usaram."""
+    if info["check_denied"]["app"]:
+        return (" The GitHub App token was denied on the check routes: confirm that the Repository Preservation Reader "
+                "is installed on this repository and has Checks: Read.")
+    if info["app_token"] == APP_FAILED:
+        return (" Checks of a private repository need a GitHub App with Checks: Read; the Repository Preservation Reader "
+                "token could not be issued for this run (step 'Issue checks-reader token').")
+    return (" Checks of a private repository need a GitHub App with Checks: Read; the Repository Preservation Reader token "
+            "is not configured (variable REPOSITORY_PRESERVATION_READER_CLIENT_ID).")
 
 
 def cmd_read():
@@ -410,7 +461,15 @@ def cmd_read():
     package = pathlib.Path(os.environ.get("PACKAGE_DIR", "package"))
     evidence.mkdir(parents=True, exist_ok=True)
     package.mkdir(parents=True, exist_ok=True)
-    client = ChecksClient(os.environ.get("GITHUB_API_URL", "https://api.github.com"), token)
+    app_token = os.environ.get("CHECKS_APP_TOKEN", "").strip()
+    app_status = os.environ.get("CHECKS_APP_STATUS", "").strip().lower()
+    if app_token:
+        app_state = APP_ISSUED
+    elif app_status in ("success", "failure", "cancelled"):
+        app_state = APP_FAILED          # o passo rodou e não entregou token
+    else:
+        app_state = APP_NOT_CONFIGURED  # passo pulado (variável ausente) ou fora do workflow
+    client = ChecksClient(os.environ.get("GITHUB_API_URL", "https://api.github.com"), token, app_token, app_state)
 
     inventory = {"schema": "api-checks-inventory/1", "source_repository": repo, "captured_at": now(),
                  "api_base": client.base, "limitations": LIMITATIONS}
@@ -419,6 +478,8 @@ def cmd_read():
         out = read_checks(client, repo, evidence, package, max_commits, max_bytes)
     except ApiError as exc:
         hint = " (o token precisa de Commit statuses: Read-only?)" if exc.status in (401, 403) else ""
+        if exc.status == 401 and client._last_kind == "app":
+            hint = " (the GitHub App token was rejected on a check route)"
         status = {"status": "FAILED", "count": 0, "files": [], "checks": [], "detail": f"{exc}{hint}"}
         print(f"::error::API_READ checks: FAILED: {exc}{hint}")
     except Exception as exc:  # noqa: BLE001 - rede de segurança: a causa vai só como tipo, sem conteúdo
@@ -438,7 +499,7 @@ def cmd_read():
             st = "PARTIAL"
             detail = "Some commits are not fully in the package: " + ", ".join(f"{v} {k}" for k, v in sorted(gaps.items())) + "."
             if gaps.get(CHECKS_DENIED):
-                detail += " Checks of a private repository need a GitHub App with Checks: Read (future route: Repository Preservation Reader)."
+                detail += denied_hint(out["extra"]["checks_token"])
         else:
             st, detail = "OK", ""
         status = {"status": st, "count": out["count"], "files": files, "checks": out["checks"], "extra": out["extra"],
