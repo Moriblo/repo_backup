@@ -456,7 +456,7 @@ capabilities:
     # equivalente é uma etapa futura e separada). NÃO é temporal.
     # checks é TEMPORAL e é lida pela API por backup/scripts/github_checks_read.py (REST, só GET) sobre um conjunto
     # CANDIDATO de commits; precisa de Commit statuses: Read-only no SOURCE_READ_TOKEN (checks de repositório privado
-    # exigem um GitHub App com Checks: Read, rota futura). É REGISTRO: sem restauração.
+    # exigem o token do GitHub App Reader com Checks: Read, emitido por run e restrito ao repositório de origem). É REGISTRO: sem restauração.
     # actions é TEMPORAL e é lida pela API por backup/scripts/github_actions_read.py (REST, só GET) com o
     # SOURCE_READ_TOKEN (precisa de Actions: Read). É REGISTRO: sem restauração.
     # Classes que, além do SOURCE_READ_TOKEN, exigem uma credencial PRÓPRIA. `secret` é o nome do
@@ -472,10 +472,16 @@ capabilities:
     temporal_observations:
       actions:
         - {repository: Moriblo/MIT, retention_days: 90, source: MANUAL_SETTINGS_CHECK, checked_on: "2026-10-17", scope: [runs, logs, artifacts], read_via_api: false}
+        - {repository: Moriblo/Standards, retention_days: 90, source: MANUAL_SETTINGS_CHECK, checked_on: "2026-10-17", scope: [runs, logs, artifacts], read_via_api: false}
+        - {repository: Moriblo/discord-migrator, retention_days: 90, source: MANUAL_SETTINGS_CHECK, checked_on: "2026-10-17", scope: [runs, logs, artifacts], read_via_api: false}
+        - {repository: Moriblo/Minha_Caixinha_de_Saude, retention_days: 90, source: MANUAL_SETTINGS_CHECK, checked_on: "2026-10-17", scope: [runs, logs, artifacts], read_via_api: false}
       # Mesmo campo de configuração ("Check, workflow run, status, artifact and log retention days"): vale também para
       # check suites, check runs e commit statuses. Conferido pela sessão do projeto em 17/10/2026.
       checks:
         - {repository: Moriblo/MIT, retention_days: 90, source: MANUAL_SETTINGS_CHECK, checked_on: "2026-10-17", scope: [checks, statuses], read_via_api: false}
+        - {repository: Moriblo/Standards, retention_days: 90, source: MANUAL_SETTINGS_CHECK, checked_on: "2026-10-17", scope: [checks, statuses], read_via_api: false}
+        - {repository: Moriblo/discord-migrator, retention_days: 90, source: MANUAL_SETTINGS_CHECK, checked_on: "2026-10-17", scope: [checks, statuses], read_via_api: false}
+        - {repository: Moriblo/Minha_Caixinha_de_Saude, retention_days: 90, source: MANUAL_SETTINGS_CHECK, checked_on: "2026-10-17", scope: [checks, statuses], read_via_api: false}
     # Destino OneDrive pessoal (OAuth delegado, sem OIDC). Nada aqui é segredo: os valores
     # sensíveis ficam em secrets/variáveis do repositório (nomes abaixo).
     onedrive:
@@ -771,7 +777,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 9a57028111b183c5965822de322f2ebd17bf2359
+      current_sha: 9073fe42772c5827709be337245978492983812e
     validation:
       status: REVALIDATION_REQUIRED
     relationships:
@@ -881,7 +887,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: b9ceb17edd86b297fabb692271ac471bde1d1967
+      current_sha: 69d8755a37d71ecbda5f7bbda681e1a9f24e3151
       materialization_commit_sha: fbf93a9f94d583fe18b8451033739c5e4245e8b5
     validation:
       status: VALIDATED
@@ -1029,7 +1035,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 064174f3786b83c1acc3ed56f6daedee8faa7e94
+      current_sha: a579a75318e8ab6ae109a5d1c60d7b1fc9e7fc1d
     validation:
       status: VALIDATED
       scope: "Runs reais completos: (a) repositório pequeno (1 ref, sem LFS, sem submódulos), restaurado do OneDrive para um repositório novo no GitHub; (b) repositório de teste com arquivo de ~25 MiB (envio em blocos), Git LFS, submódulo, arquivo vazio, 2 branches e 2 tags (git PARTIALLY-PRESERVED, 17 classes NOT-VERIFIED), restaurado com LFS (4 refs iguais, arquivo LFS com o tamanho real). Hash conferido no destino por quickXorHash em 21 de 21 arquivos. (c) repositório de teste de issues (Moriblo/backup_teste_issues): labels, milestones e issues lidas pela API e preservadas como representação equivalente (3 classes), 14 classes NOT-VERIFIED, pacote e evidência no OneDrive. (d) mesmo repositório com a classe projects (Projects v2, token clássico read:project): PARTIALLY-PRESERVED, 1 Project confirmado pelos títulos e 2 excluídos, 13 classes NOT-VERIFIED. (e) com CAPABILITY_ID=backup_projects (BKP_PROJ), em dois runs reais (PROJECT nº 13, e OWNER_PROJECT_SET com 8 Projects e 201 itens): preflight de uma só classe sem exigir o SOURCE_READ_TOKEN, evidência e manifest 2.0 com o escopo no lugar do repositório e só o objeto projects (PARTIALLY-PRESERVED), COMPLETE_WITH_EXCEPTIONS. Não provado - repositórios muito grandes, conteúdo de submódulos (só o gitlink é preservado), nomes com acento no OneDrive, pull_requests e as demais classes ainda sem leitura. (f) regressão do BKP_REPO depois da generalização por CAPABILITY_ID, em dois runs reais no repositório de teste de issues - req-20261003-006 (preflight BLOCKED com as mesmas 13 restrições, sem exigir mudança) e req-20261003-007 (continuação, COMPLETE_WITH_EXCEPTIONS - git PRESERVED, labels, milestones e issues PRESERVED-AS-EQUIVALENT-REPRESENTATION, projects PARTIALLY-PRESERVED, 13 NOT-VERIFIED, 14 arquivos de pacote e 18 de evidência com hash conferido); e o BKP_PROJ com escopo SOURCE_REPOSITORY (req-20261003-008, 1 Project e 7 itens). validate-inputs e preflight de uma classe (git) com CAPABILITY_ID=restore_repository, sem exigir o SOURCE_READ_TOKEN, e destino validado em run real (Run real req-20261003-009 (RST_REPO, run 37137225805), restauração do backup req-20261003-007 de Moriblo/backup_teste_issues). Não provado - preflight BLOCKED da restauração sem o RESTORE_WRITE_TOKEN."
@@ -1335,10 +1341,10 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 87ee0379e82974592adebb48ac5d49feb6aa5157
+      current_sha: afb17d4ff583c015ede6fdbf78316ed006596f0e
     validation:
       status: VALIDATED
-      scope: "Run real completo (req-20261017-005, BKP_REPO de Moriblo/MIT): 12/12 commits candidatos, 35 check suites, 11 check runs, 26 anotações e 0 statuses lidos pela API com as 8 conferências aprovadas e nenhum NO_DATA_FOUND; cruzamento com a classe actions 11/11; token fine-grained sem a permissão Checks leu suites, runs e anotações de repositório público, e Commit statuses: Read-only bastou para as rotas de statuses; RETENTION_ALERT real (item mais antigo de 07/08/2026 vence em 05/11/2026 sob 90 dias observados); log público só com contagens. Conferido pela sessão do projeto no log e no OneDrive. Repositório privado (req-20261017-009, BKP_REPO de Moriblo/Standards, run 39074261755, commit 8b999f122ef2ff2687e6ae224982d57b5d305037): primeira prova real de CHECKS_DENIED - 3/3 commits candidatos negados, 0 suites, 0 runs, 0 anotações e 0 statuses, classe PARTIAL (PARTIALLY-PRESERVED) sem derrubar o job, e o cabeçalho X-Accepted-GitHub-Permissions registrado na evidência (denied_permission_headers ['checks=read'], conferido pela sessão do projeto no OneDrive); log público só com contagens (API_READ checks: PARTIAL commits=3/3 ... gaps=CHECKS_DENIED=3). Não provado - statuses reais (nem o MIT nem o Standards têm CI externo), tag anotada, a leitura de checks de repositório privado (depende do GitHub App Reader com Checks: Read, rota futura) e volume (tetos de 500 commits e 256 MiB)."
+      scope: "Run real completo (req-20261017-005, BKP_REPO de Moriblo/MIT): 12/12 commits candidatos, 35 check suites, 11 check runs, 26 anotações e 0 statuses lidos pela API com as 8 conferências aprovadas e nenhum NO_DATA_FOUND; cruzamento com a classe actions 11/11; token fine-grained sem a permissão Checks leu suites, runs e anotações de repositório público, e Commit statuses: Read-only bastou para as rotas de statuses; RETENTION_ALERT real (item mais antigo de 07/08/2026 vence em 05/11/2026 sob 90 dias observados); log público só com contagens. Conferido pela sessão do projeto no log e no OneDrive. Repositório privado (req-20261017-009, BKP_REPO de Moriblo/Standards, run 39074261755, commit 8b999f122ef2ff2687e6ae224982d57b5d305037): primeira prova real de CHECKS_DENIED - 3/3 commits candidatos negados, 0 suites, 0 runs, 0 anotações e 0 statuses, classe PARTIAL (PARTIALLY-PRESERVED) sem derrubar o job, e o cabeçalho X-Accepted-GitHub-Permissions registrado na evidência (denied_permission_headers ['checks=read'], conferido pela sessão do projeto no OneDrive); log público só com contagens (API_READ checks: PARTIAL commits=3/3 ... gaps=CHECKS_DENIED=3). Não provado - statuses reais (nem o MIT nem o Standards têm CI externo), tag anotada, a leitura de checks de repositório privado (depende do GitHub App Reader com Checks: Read, rota futura) e volume (tetos de 500 commits e 256 MiB). Rota do GitHub App Reader (P19, 18/10/2026): as três rotas de checks (suites, runs e anotações) passam a usar o token de instalação do App Repository Preservation Reader (só Checks: read, só o repositório de origem) quando o passo do workflow o emite, e o SOURCE_READ_TOKEN em todo o resto, sem cascata; a evidência registra extra.checks_token (app_token ISSUED, NOT_CONFIGURED ou FAILED, route_token e contagens por token): só teste local contra API simulada (repositório privado, App ausente, falho e negado) e leitura estática do YAML; ainda não rodou em run real. Não provado desta rota - a emissão real do token, a instalação do App em repositório privado e a leitura real de suites, runs e anotações de repositório privado."
       evidence:
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/39051142780", commit: 5fc52057d37fe28e47e317561a15e9578f0524c5}
         - {run: "https://github.com/Moriblo/repo_backup/actions/runs/39074261755", commit: 8b999f122ef2ff2687e6ae224982d57b5d305037}
@@ -1356,7 +1362,7 @@ implementation_artifacts:
     integrity:
       tracking: GIT_BLOB_SHA
       sha_policy: TRACKED
-      current_sha: 6604eaf7dfb77b9f60b926760aba938b97cec8ea
+      current_sha: a5338d180cd2e8da042e6ef2f9de655fc35a726f
     validation:
       status: NOT_VALIDATED
       scope: Executado localmente e no CI dos pull requests. Não roda contra o GitHub real.
